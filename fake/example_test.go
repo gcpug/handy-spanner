@@ -81,6 +81,9 @@ func ExampleAdminClient() {
 		Database:   dbName,
 		Statements: stmts,
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// output:
 }

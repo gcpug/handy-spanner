@@ -883,8 +883,6 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 	default:
 		return NullExpr, nil, newExprErrorf(expr, false, "unknown expression")
 	}
-
-	return NullExpr, nil, nil
 }
 
 type exprError struct {

@@ -105,8 +105,6 @@ func (d *database) ApplyDDL(ctx context.Context, ddl ast.DDL) error {
 	default:
 		return status.Errorf(codes.Unknown, "unknown DDL statement: %v", val)
 	}
-
-	return status.Errorf(codes.Unimplemented, "not implemented")
 }
 
 func (d *database) Read(ctx context.Context, tbl, idx string, cols []string, keyset *KeySet, limit int64) (RowIterator, error) {
@@ -500,8 +498,6 @@ func (d *database) Delete(ctx context.Context, tbl string, keyset *KeySet) error
 		return status.Errorf(codes.Internal, "failed to delete: %v", err)
 	}
 	return nil
-
-	return status.Error(codes.Unimplemented, "not implemented")
 }
 
 func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) error {
