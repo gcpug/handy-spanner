@@ -30,32 +30,42 @@ func TestQueryBuilder_UnnestValue_Success(t *testing.T) {
 	b := newTestQueryBuilder()
 
 	table := []struct {
-		v    interface{}
+		v    Value
 		ph   string
 		args []interface{}
 	}{
 		{
-			v:    []bool{true, false},
+			v: Value{
+				Data: []bool{true, false},
+			},
 			ph:   "VALUES (?), (?)",
 			args: []interface{}{true, false},
 		},
 		{
-			v:    []int64{(100), int64(101)},
+			v: Value{
+				Data: []int64{(100), int64(101)},
+			},
 			ph:   "VALUES (?), (?)",
 			args: []interface{}{int64(100), int64(101)},
 		},
 		{
-			v:    []float64{float64(1.1), float64(1.2)},
+			v: Value{
+				Data: []float64{float64(1.1), float64(1.2)},
+			},
 			ph:   "VALUES (?), (?)",
 			args: []interface{}{float64(1.1), float64(1.2)},
 		},
 		{
-			v:    []string{"aa", "bb", "cc"},
+			v: Value{
+				Data: []string{"aa", "bb", "cc"},
+			},
 			ph:   "VALUES (?), (?), (?)",
 			args: []interface{}{"aa", "bb", "cc"},
 		},
 		{
-			v:    [][]byte{[]byte("aa"), []byte("bb"), []byte("cc")},
+			v: Value{
+				Data: [][]byte{[]byte("aa"), []byte("bb"), []byte("cc")},
+			},
 			ph:   "VALUES (?), (?), (?)",
 			args: []interface{}{[]byte("aa"), []byte("bb"), []byte("cc")},
 		},
@@ -82,31 +92,43 @@ func TestQueryBuilder_UnnestValue_Error(t *testing.T) {
 	b := newTestQueryBuilder()
 
 	table := []struct {
-		v    interface{}
+		v    Value
 		code codes.Code
 	}{
 		{
-			v:    nil,
+			v: Value{
+				Data: nil,
+			},
 			code: codes.Unknown,
 		},
 		{
-			v:    true,
+			v: Value{
+				Data: true,
+			},
 			code: codes.InvalidArgument,
 		},
 		{
-			v:    int64(100),
+			v: Value{
+				Data: int64(100),
+			},
 			code: codes.InvalidArgument,
 		},
 		{
-			v:    float64(100),
+			v: Value{
+				Data: float64(100),
+			},
 			code: codes.InvalidArgument,
 		},
 		{
-			v:    "x",
+			v: Value{
+				Data: "x",
+			},
 			code: codes.InvalidArgument,
 		},
 		{
-			v:    []byte("x"),
+			v: Value{
+				Data: []byte("x"),
+			},
 			code: codes.InvalidArgument,
 		},
 	}

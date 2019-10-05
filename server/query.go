@@ -32,7 +32,7 @@ type QueryBuilder struct {
 	views          map[string]*TableView
 	allResultItems [][]ResultItem
 	resultItems    map[string][]ResultItem
-	params         map[string]interface{}
+	params         map[string]Value
 
 	args []interface{}
 
@@ -42,7 +42,7 @@ type QueryBuilder struct {
 	subqueryViewNum int
 }
 
-func BuildQuery(db *database, stmt *ast.Select, params map[string]interface{}) (string, []interface{}, []ResultItem, error) {
+func BuildQuery(db *database, stmt *ast.Select, params map[string]Value) (string, []interface{}, []ResultItem, error) {
 	b := &QueryBuilder{
 		db:          db,
 		stmt:        stmt,
@@ -567,9 +567,9 @@ func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr) (Expr, []interface{}, erro
 	return NullExpr, nil, fmt.Errorf("unexpected expression type for UNNEST: %T", expr)
 }
 
-func (b *QueryBuilder) unnestValue(v interface{}) (Expr, []interface{}, error) {
+func (b *QueryBuilder) unnestValue(v Value) (Expr, []interface{}, error) {
 	errMsg := "Second argument of IN UNNEST must be an array but was %s"
-	switch v.(type) {
+	switch v.Data.(type) {
 	case nil:
 		// spanner returns Unknown
 		return NullExpr, nil, status.Errorf(codes.Unknown, "failed to bind query parameter")
@@ -585,7 +585,7 @@ func (b *QueryBuilder) unnestValue(v interface{}) (Expr, []interface{}, error) {
 		return NullExpr, nil, status.Errorf(codes.InvalidArgument, errMsg, "BYTES")
 	// TODO: timestamp, date
 	case []bool, []int64, []float64, []string, [][]byte:
-		vv := reflect.ValueOf(v)
+		vv := reflect.ValueOf(v.Data)
 		n := vv.Len()
 		var placeholders string
 		if n == 1 {
@@ -598,13 +598,8 @@ func (b *QueryBuilder) unnestValue(v interface{}) (Expr, []interface{}, error) {
 			args[i] = vv.Index(i).Interface()
 		}
 		return Expr{
-			ValueType: ValueType{
-				Code: TCArray,
-				ArrayType: &ValueType{
-					Code: TCBool, // TODO
-				},
-			},
-			Raw: placeholders,
+			ValueType: v.Type, // TODO: check correct type or not
+			Raw:       placeholders,
 		}, args, nil
 	}
 
@@ -852,9 +847,9 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			return NullExpr, nil, newExprErrorf(expr, true, "params not found: %s", e.Name)
 		}
 		return Expr{
-			ValueType: ValueType{Code: TCString}, // TODO
+			ValueType: v.Type,
 			Raw:       "?",
-		}, []interface{}{v}, nil
+		}, []interface{}{v.Data}, nil
 	case *ast.Ident:
 		item, ok := b.resultItems[e.Name]
 		if !ok {
