@@ -27,7 +27,7 @@ import (
 
 type QueryBuilder struct {
 	db   *database
-	stmt *ast.Select
+	stmt ast.QueryExpr
 
 	views          map[string]*TableView
 	allResultItems [][]ResultItem
@@ -42,7 +42,7 @@ type QueryBuilder struct {
 	subqueryViewNum int
 }
 
-func BuildQuery(db *database, stmt *ast.Select, params map[string]Value) (string, []interface{}, []ResultItem, error) {
+func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value) (string, []interface{}, []ResultItem, error) {
 	b := &QueryBuilder{
 		db:          db,
 		stmt:        stmt,
@@ -62,10 +62,27 @@ func (b *QueryBuilder) close() {
 func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
 	defer b.close()
 
+	switch q := b.stmt.(type) {
+	case *ast.Select:
+		return b.buildSelectQuery(q)
+	case *ast.SubQuery:
+		return b.buildSubQuery(q)
+	case *ast.CompoundQuery:
+		return b.buildCompoundQuery(q)
+	}
+
+	return "", nil, nil, status.Errorf(codes.Unimplemented, "not unknown expression %T", b.stmt)
+}
+
+func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []interface{}, []ResultItem, error) {
+	if len(selectStmt.Results) == 0 {
+		return "", nil, nil, status.Errorf(codes.InvalidArgument, "Invalid query")
+	}
+
 	var fromClause string
 	var fromData []interface{}
-	if b.stmt.From != nil {
-		_, s, d, err := b.buildQueryTable(b.stmt.From.Source)
+	if selectStmt.From != nil {
+		_, s, d, err := b.buildQueryTable(selectStmt.From.Source)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -73,14 +90,14 @@ func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
 		fromData = d
 	}
 
-	resultItems, selectQuery, err := b.buildResultSet(b.stmt.Results)
+	resultItems, selectQuery, err := b.buildResultSet(selectStmt.Results)
 	if err != nil {
 		return "", nil, nil, err
 	}
 
 	b.args = append(b.args, fromData...)
 
-	whereClause, err := b.buildQuery(b.stmt)
+	whereClause, err := b.buildQuery(selectStmt)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -88,6 +105,112 @@ func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
 	query := fmt.Sprintf(`SELECT %s %s %s`, selectQuery, fromClause, whereClause)
 
 	return query, b.args, resultItems, nil
+}
+
+func (b *QueryBuilder) buildSubQuery(sub *ast.SubQuery) (string, []interface{}, []ResultItem, error) {
+	s, data, items, err := BuildQuery(b.db, sub.Query, b.params)
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	var orderByClause string
+	if sub.OrderBy != nil {
+		itemsMap := make(map[string][]ResultItem)
+		for _, i := range items {
+			if i.Name == "" {
+				continue
+			}
+			itemsMap[i.Name] = append(itemsMap[i.Name], i)
+		}
+		s, data, err := b.buildQueryOrderByClause(sub.OrderBy, itemsMap)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		orderByClause = fmt.Sprintf(" ORDER BY %s", s)
+		b.args = append(b.args, data...)
+	}
+
+	var limitClause string
+	if sub.Limit != nil {
+		s, data, err := b.buildQueryLimitOffset(sub.Limit)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		limitClause = fmt.Sprintf(" LIMIT %s", s)
+		b.args = append(b.args, data...)
+	}
+
+	return fmt.Sprintf("(%s%s%s)", s, limitClause, orderByClause), data, items, nil
+}
+
+func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, []interface{}, []ResultItem, error) {
+	var ss []string
+
+	s, data, items, err := BuildQuery(b.db, compound.Queries[0], b.params)
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	// sqlite does not allow to put parentheses around select statement like:
+	// (SELECT .. FROM xxx) UNION ALL (SELECT ... FROM yyy)
+	//
+	// This causes ambiguous LIMIT clause like:
+	// SELECT .. FROM xxx UNION ALL SELECT ... FROM yyy LIMIT 2
+	//
+	// This is possibly interpreted as
+	// SELECT .. FROM xxx UNION ALL (SELECT ... FROM yyy LIMIT 2)
+	// SELECT .. FROM xxx UNION ALL (SELECT ... FROM yyy) LIMIT 2
+	//
+	// So use subquery to fix the issue like this:
+	// SELECT * FROM (SELECT .. FROM xxx) UNION ALL SELECT * FROM (SELECT ... FROM yyy)
+	ss = append(ss, fmt.Sprintf("SELECT * FROM (%s)", s))
+
+	for _, query := range compound.Queries[1:] {
+		s, d, items, err := BuildQuery(b.db, query, b.params)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		_ = items
+		ss = append(ss, fmt.Sprintf("SELECT * FROM (%s)", s))
+		data = append(data, d...)
+	}
+
+	distinct := "ALL"
+	if compound.Distinct {
+		// distinct is used by default in sqlite
+		distinct = ""
+	}
+
+	var orderByClause string
+	if compound.OrderBy != nil {
+		itemsMap := make(map[string][]ResultItem)
+		for _, i := range items {
+			if i.Name == "" {
+				continue
+			}
+			itemsMap[i.Name] = append(itemsMap[i.Name], i)
+		}
+		s, data, err := b.buildQueryOrderByClause(compound.OrderBy, itemsMap)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		orderByClause = fmt.Sprintf(" ORDER BY %s", s)
+		b.args = append(b.args, data...)
+	}
+
+	var limitClause string
+	if compound.Limit != nil {
+		s, data, err := b.buildQueryLimitOffset(compound.Limit)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		limitClause = fmt.Sprintf(" LIMIT %s", s)
+		b.args = append(b.args, data...)
+	}
+
+	query := strings.Join(ss, fmt.Sprintf(" %s %s ", compound.Op, distinct))
+	query = fmt.Sprintf("%s%s%s", query, orderByClause, limitClause)
+	return query, data, items, nil
 }
 
 func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, []interface{}, error) {
@@ -377,7 +500,7 @@ func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {
 
 	var orderByClause string
 	if stmt.OrderBy != nil {
-		s, data, err := b.buildQueryOrderByClause(stmt.OrderBy)
+		s, data, err := b.buildQueryOrderByClause(stmt.OrderBy, b.resultItems)
 		if err != nil {
 			return "", err
 		}
@@ -439,15 +562,21 @@ func (b *QueryBuilder) buildQueryGroupByClause(groupby *ast.GroupBy) (string, []
 	return strings.Join(groupByClause, ", "), data, nil
 }
 
-func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy) (string, []interface{}, error) {
+func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, resultItemsMap map[string][]ResultItem) (string, []interface{}, error) {
 	var orderByClause []string
 	var data []interface{}
 
 	for _, item := range orderby.Items {
-		s, d, err := b.buildExpr(item.Expr)
-		if err != nil {
-			return "", nil, wrapExprError(err, item.Expr, "Building ORDER BY error")
+		var expr Expr
+		switch e := item.Expr.(type) {
+		case *ast.Ident:
+			i, ok := resultItemsMap[e.Name]
+			if !ok {
+				return "", nil, newExprErrorf(e, true, "Unrecognized name: %s", e.Name)
+			}
+			expr = i[0].Expr
 		}
+
 		collate := ""
 		if item.Collate != nil {
 			switch v := item.Collate.Value.(type) {
@@ -462,8 +591,7 @@ func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy) (string, []
 				collate = v.Value
 			}
 		}
-		orderByClause = append(orderByClause, fmt.Sprintf("%s %s %s", s.Raw, collate, item.Dir))
-		data = append(data, d...)
+		orderByClause = append(orderByClause, fmt.Sprintf("%s %s %s", expr.Raw, collate, item.Dir))
 	}
 
 	return strings.Join(orderByClause, ", "), data, nil
