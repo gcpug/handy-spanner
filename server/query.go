@@ -683,17 +683,36 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			vt = ValueType{
 				Code: TCBool,
 			}
-		case ast.OpBitOr, ast.OpBitXor, ast.OpBitAnd, ast.OpBitLeftShift, ast.OpBitRightShift, ast.OpAdd, ast.OpSub, ast.OpMul, ast.OpDiv:
+		case ast.OpBitOr, ast.OpBitXor, ast.OpBitAnd, ast.OpBitLeftShift, ast.OpBitRightShift:
 			vt = ValueType{
 				Code: TCInt64, // TODO
+			}
+		case ast.OpAdd, ast.OpSub, ast.OpMul:
+			fmt.Printf("left %v right %v\n", left.ValueType, right.ValueType)
+			code := TCInt64
+			if left.ValueType.Code == TCFloat64 || right.ValueType.Code == TCFloat64 {
+				code = TCFloat64
+			}
+			vt = ValueType{
+				Code: code,
+			}
+		case ast.OpDiv:
+			left.Raw = fmt.Sprintf("CAST(%s AS REAL)", left.Raw)
+			vt = ValueType{
+				Code: TCFloat64,
 			}
 		default:
 			return NullExpr, nil, fmt.Errorf("%T: unknown op %v", e, e.Op)
 		}
 
+		raw := fmt.Sprintf("%s %s %s", left.Raw, e.Op, right.Raw)
+		if e.Op == ast.OpBitXor {
+			raw = fmt.Sprintf("(%s | %s) - (%s & %s)", left.Raw, right.Raw, left.Raw, right.Raw)
+		}
+
 		return Expr{
 			ValueType: vt,
-			Raw:       fmt.Sprintf("%s %s %s", left.Raw, e.Op, right.Raw),
+			Raw:       raw,
 		}, data, nil
 
 	case *ast.InExpr:
@@ -940,7 +959,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, nil, nil
 
 	case *ast.IntLiteral:
-		n, err := strconv.ParseInt(e.Value, e.Base, 64)
+		n, err := strconv.ParseInt(e.Value, 0, 64)
 		if err != nil {
 			return NullExpr, nil, newExprErrorf(expr, false, "unexpected format %q as int64: %v", e.Value, err)
 		}
