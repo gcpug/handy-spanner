@@ -322,7 +322,7 @@ func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {
 	if stmt.Where != nil {
 		s, data, err := b.buildQueryWhereClause(stmt.Where)
 		if err != nil {
-			return "", status.Errorf(codes.Internal, "%s", err)
+			return "", err
 		}
 		whereClause = s
 		b.args = append(b.args, data...)
@@ -332,7 +332,7 @@ func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {
 	if stmt.GroupBy != nil {
 		s, data, err := b.buildQueryGroupByClause(stmt.GroupBy)
 		if err != nil {
-			return "", status.Errorf(codes.Internal, "%s", err)
+			return "", err
 		}
 		groupByClause = s
 		b.args = append(b.args, data...)
@@ -352,7 +352,7 @@ func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {
 	if stmt.OrderBy != nil {
 		s, data, err := b.buildQueryOrderByClause(stmt.OrderBy)
 		if err != nil {
-			return "", status.Errorf(codes.Internal, "%s", err)
+			return "", err
 		}
 		orderByClause = s
 		b.args = append(b.args, data...)
@@ -362,7 +362,7 @@ func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {
 	if stmt.Limit != nil {
 		s, data, err := b.buildQueryLimitOffset(stmt.Limit)
 		if err != nil {
-			return "", status.Errorf(codes.Internal, "%s", err)
+			return "", err
 		}
 		limitClause = s
 		b.args = append(b.args, data...)
@@ -508,6 +508,26 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface
 		}, data, nil
 
 	case *ast.SubQueryInCondition:
+		switch q := c.Query.(type) {
+		case *ast.Select:
+			query, data, items, err := BuildQuery(b.db, q, b.params)
+			if err != nil {
+				return NullExpr, nil, newExprErrorf(nil, false, "BuildQuery error for ScalarSubquery: %v", err)
+			}
+			if len(items) != 1 {
+				return NullExpr, nil, newExprErrorf(nil, true, "Subquery of type IN must have only one output column")
+			}
+			return Expr{
+				ValueType: items[0].ValueType, // inherit ValueType from result item
+				Raw:       fmt.Sprintf("(%s)", query),
+			}, data, nil
+
+		case *ast.SubQuery:
+			return NullExpr, nil, newExprErrorf(nil, false, "SubQuery for %T not supported yet", c)
+		case *ast.CompoundQuery:
+			return NullExpr, nil, newExprErrorf(nil, false, "CompoundQuery for %T not supported yet", c)
+		}
+
 		return NullExpr, nil, fmt.Errorf("Sub Query is not supported yet")
 	case *ast.UnnestInCondition:
 		s, d, err := b.buildUnnestExpr(c.Expr)
@@ -813,12 +833,49 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.ScalarSubQuery:
+		switch q := e.Query.(type) {
+		case *ast.Select:
+			query, data, items, err := BuildQuery(b.db, q, b.params)
+			if err != nil {
+				return NullExpr, nil, newExprErrorf(expr, false, "BuildQuery error for ScalarSubquery: %v", err)
+			}
+			if len(items) != 1 {
+				return NullExpr, nil, newExprErrorf(expr, true, "Scalar subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
+			}
+			return Expr{
+				ValueType: items[0].ValueType, // inherit ValueType from result item
+				Raw:       fmt.Sprintf("(%s)", query),
+			}, data, nil
+
+		case *ast.SubQuery:
+			return NullExpr, nil, newExprErrorf(expr, false, "SubQuery for ScalarSubquery not supported yet")
+		case *ast.CompoundQuery:
+			return NullExpr, nil, newExprErrorf(expr, false, "CompoundQuery for ScalarSubquery not supported yet")
+		}
 		return NullExpr, nil, newExprErrorf(expr, false, "ScalarSubquery not supported yet")
 
 	case *ast.ArraySubQuery:
 		return NullExpr, nil, newExprErrorf(expr, false, "ArraySubquery not supported yet")
 
 	case *ast.ExistsSubQuery:
+		switch q := e.Query.(type) {
+		case *ast.Select:
+			query, data, _, err := BuildQuery(b.db, q, b.params)
+			if err != nil {
+				return NullExpr, nil, newExprErrorf(expr, false, "BuildQuery error for %T: %v", err, e)
+			}
+			return Expr{
+				ValueType: ValueType{
+					Code: TCBool,
+				},
+				Raw: fmt.Sprintf("EXISTS(%s)", query),
+			}, data, nil
+
+		case *ast.SubQuery:
+			return NullExpr, nil, newExprErrorf(expr, false, "SubQuery for ScalarSubquery not supported yet")
+		case *ast.CompoundQuery:
+			return NullExpr, nil, newExprErrorf(expr, false, "CompoundQuery for ScalarSubquery not supported yet")
+		}
 		return NullExpr, nil, newExprErrorf(expr, false, "ExistsSubquery not supported yet")
 
 	case *ast.ArrayLiteral:
