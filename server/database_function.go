@@ -24,11 +24,12 @@ import (
 func init() {
 	sql.Register("sqlite3_spanner", &sqlite.SQLiteDriver{
 		ConnectHook: func(conn *sqlite.SQLiteConn) error {
-			for _, fn := range customFunctions {
+			for name, fn := range customFunctions {
+				name = strings.ToLower(name)
 				if fn.Func == nil {
 					continue
 				}
-				if err := conn.RegisterFunc(fn.Name, fn.Func, true); err != nil {
+				if err := conn.RegisterFunc(name, fn.Func, true); err != nil {
 					return err
 				}
 			}
@@ -38,39 +39,167 @@ func init() {
 }
 
 type CustomFunction struct {
-	Name  string
-	Func  interface{}
-	NArgs int
-	Args  []interface{}
-	Ret   ValueType
+	Name       string
+	Func       interface{}
+	NArgs      int
+	ArgTypes   func([]ValueType) bool
+	ReturnType func([]ValueType) ValueType
 }
 
-var customFunctions []CustomFunction = []CustomFunction{
-	{
-		Name:  "sign",
+func exactMatchArgumentTypes(vts ...ValueType) func([]ValueType) bool {
+	return func(vts2 []ValueType) bool {
+		if len(vts) != len(vts2) {
+			return false
+		}
+		for i := range vts {
+			ok := compareValueType(vts[i], vts2[i])
+			if !ok {
+				return false
+			}
+		}
+
+		return true
+	}
+}
+
+func staticReturnType(vt ValueType) func([]ValueType) ValueType {
+	return func([]ValueType) ValueType {
+		return vt
+	}
+}
+
+// customFunctions is functions for spanner.
+//
+// sqlite cannot register function which returns interface{}.
+// If spanner function may return different type value, we need to register multiple functions
+// for each returned type.
+var customFunctions map[string]CustomFunction = map[string]CustomFunction{
+	"SIGN": {
 		Func:  sqlite3FnSign,
 		NArgs: 1,
-		Args:  []interface{}{int64(0)},
-		Ret: ValueType{
+		ArgTypes: exactMatchArgumentTypes(
+			ValueType{Code: TCInt64},
+		),
+		ReturnType: staticReturnType(ValueType{
 			Code: TCInt64,
-		},
+		}),
 	},
-	{
-		Name:  "starts_with",
+	"STARTS_WITH": {
 		Func:  sqlite3FnStartsWith,
 		NArgs: 2,
-		Args:  []interface{}{"", ""},
-		Ret: ValueType{
+		ArgTypes: exactMatchArgumentTypes(
+			ValueType{Code: TCString},
+			ValueType{Code: TCString},
+		),
+		ReturnType: staticReturnType(ValueType{
 			Code: TCBool,
+		}),
+	},
+	"ENDS_WITH": {
+		Func:  sqlite3FnEndsWith,
+		NArgs: 2,
+		ArgTypes: exactMatchArgumentTypes(
+			ValueType{Code: TCString},
+			ValueType{Code: TCString},
+		),
+		ReturnType: staticReturnType(ValueType{
+			Code: TCBool,
+		}),
+	},
+	"CONCAT": {
+		Func:  sqlite3FnConcat,
+		NArgs: -1,
+		ArgTypes: func(vts []ValueType) bool {
+			if len(vts) == 0 {
+				return false
+			}
+			vt := vts[0]
+			for i := range vts {
+				if !compareValueType(vt, vts[i]) {
+					return false
+				}
+			}
+			if vt.Code != TCString && vt.Code != TCBytes {
+				return false
+			}
+			return true
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return vts[0]
 		},
 	},
-	{
-		Name:  "count",
+
+	"COUNT": {
 		Func:  nil,
 		NArgs: 1,
-		Args:  []interface{}{""},
-		Ret: ValueType{
+		ArgTypes: func(vts []ValueType) bool {
+			return true
+		},
+		ReturnType: staticReturnType(ValueType{
 			Code: TCInt64,
+		}),
+	},
+	"MAX": {
+		Func:  nil,
+		NArgs: 1,
+		ArgTypes: func(vts []ValueType) bool {
+			code := vts[0].Code
+			if code == TCArray || code == TCStruct {
+				return false
+			}
+			return true
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return vts[0]
+		},
+	},
+	"MIN": {
+		Func:  nil,
+		NArgs: 1,
+		ArgTypes: func(vts []ValueType) bool {
+			code := vts[0].Code
+			if code == TCArray || code == TCStruct {
+				return false
+			}
+			return true
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return vts[0]
+		},
+	},
+	"AVG": {
+		Func:  nil,
+		NArgs: -1,
+		ArgTypes: func(vts []ValueType) bool {
+			for _, vt := range vts {
+				if vt.Code != TCInt64 && vt.Code == TCFloat64 {
+					return false
+				}
+			}
+			return true
+		},
+		ReturnType: staticReturnType(ValueType{
+			Code: TCFloat64,
+		}),
+	},
+	"SUM": {
+		Func:  nil,
+		NArgs: -1,
+		ArgTypes: func(vts []ValueType) bool {
+			for _, vt := range vts {
+				if vt.Code != TCInt64 && vt.Code == TCFloat64 {
+					return false
+				}
+			}
+			return true
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			for _, vt := range vts {
+				if vt.Code == TCFloat64 {
+					return ValueType{Code: TCFloat64}
+				}
+			}
+			return ValueType{Code: TCInt64}
 		},
 	},
 }
@@ -87,4 +216,12 @@ func sqlite3FnSign(x int64) int64 {
 
 func sqlite3FnStartsWith(a, b string) bool {
 	return strings.HasPrefix(a, b)
+}
+
+func sqlite3FnEndsWith(a, b string) bool {
+	return strings.HasSuffix(a, b)
+}
+
+func sqlite3FnConcat(xs ...string) string {
+	return strings.Join(xs, "")
 }

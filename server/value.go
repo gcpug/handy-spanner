@@ -60,6 +60,10 @@ func (t ValueType) IsStruct() bool {
 	return t.Code == TCStruct
 }
 
+func compareValueType(a, b ValueType) bool {
+	return a == b
+}
+
 type StructType struct {
 	FieldNames []string
 	FieldTypes map[string]*ValueType
