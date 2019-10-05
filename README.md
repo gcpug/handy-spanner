@@ -72,6 +72,7 @@ Note that it becomes specific implementations for a fake server, which means you
    * Subquery
    * UNNEST (partially)
    * Functions (partially)
+   * Arithmetic operations
 * Mutation
    * All mutation types: Insert, Update, InsertOrUpdate, Replace, Delete
    * Commit timestamp
@@ -91,7 +92,6 @@ Note that it becomes specific implementations for a fake server, which means you
 * Data Types
    * Array and Struct type
 * Query
-   * Arithmetic operations
    * Strict type checking
    * More functions
    * UNION, INTERSECT, EXCEPT

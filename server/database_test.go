@@ -1371,6 +1371,103 @@ func TestQuery(t *testing.T) {
 			expected: nil,
 		},
 
+		"Arithmetic_Add": {
+			sql: `SELECT 1 + 2`,
+			expected: [][]interface{}{
+				[]interface{}{int64(3)},
+			},
+		},
+		"Arithmetic_Add_Float": {
+			sql: `SELECT 1.5 + 2.5`,
+			expected: [][]interface{}{
+				[]interface{}{float64(4)},
+			},
+		},
+		"Arithmetic_Sub": {
+			sql: `SELECT 1 - 2`,
+			expected: [][]interface{}{
+				[]interface{}{int64(-1)},
+			},
+		},
+		"Arithmetic_Sub_Float": {
+			sql: `SELECT 1.5 - 2`,
+			expected: [][]interface{}{
+				[]interface{}{float64(-0.5)},
+			},
+		},
+		"Arithmetic_Mult": {
+			sql: `SELECT 2 * 2`,
+			expected: [][]interface{}{
+				[]interface{}{int64(4)},
+			},
+		},
+		"Arithmetic_Mult_Float": {
+			sql: `SELECT 2.5 * 2`,
+			expected: [][]interface{}{
+				[]interface{}{float64(5)},
+			},
+		},
+		"Arithmetic_Div": {
+			sql: `SELECT 3 / 2`,
+			expected: [][]interface{}{
+				[]interface{}{float64(1.5)},
+			},
+		},
+		"Arithmetic_BitOr": {
+			sql: `SELECT 0x11 | 0x04`,
+			expected: [][]interface{}{
+				[]interface{}{int64(0x15)},
+			},
+		},
+		"Arithmetic_BitXor": {
+			sql: `SELECT 0x11 ^ 0x01`,
+			expected: [][]interface{}{
+				[]interface{}{int64(0x10)},
+			},
+		},
+		"Arithmetic_BitAnd": {
+			sql: `SELECT 0x13 & 0x01`,
+			expected: [][]interface{}{
+				[]interface{}{int64(0x01)},
+			},
+		},
+		"Arithmetic_BitLeftShift": {
+			sql: `SELECT 0x3 << 3`,
+			expected: [][]interface{}{
+				[]interface{}{int64(24)},
+			},
+		},
+		"Arithmetic_BitRightShift": {
+			sql: `SELECT 0xf0 >> 2`,
+			expected: [][]interface{}{
+				[]interface{}{int64(60)},
+			},
+		},
+		"Unary_Int": {
+			sql: `SELECT - -1`,
+			expected: [][]interface{}{
+				[]interface{}{int64(1)},
+			},
+		},
+		"Unary_Float": {
+			sql: `SELECT - -0.1`,
+			expected: [][]interface{}{
+				[]interface{}{float64(0.1)},
+			},
+		},
+		"Unary_BitNot": {
+			sql: `SELECT ~ -3`,
+			expected: [][]interface{}{
+				[]interface{}{int64(2)},
+			},
+		},
+		"Unary_Not": {
+			sql: `SELECT NOT true`,
+			expected: [][]interface{}{
+				[]interface{}{false},
+			},
+		},
+
 		"Function_Count": {
 			sql: `SELECT COUNT(1) FROM Simple`,
 			expected: [][]interface{}{
