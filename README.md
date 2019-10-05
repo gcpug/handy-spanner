@@ -68,7 +68,7 @@ Note that it becomes specific implementations for a fake server, which means you
    * LIMIT OFFSET
    * SELECT alias
    * Query Parameters
-   * JOINs (partially)
+   * JOINs
    * Subquery
    * UNNEST (partially)
    * Functions (partially)
