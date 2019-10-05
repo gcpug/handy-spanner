@@ -1202,6 +1202,24 @@ func TestQuery(t *testing.T) {
 				[]interface{}{"foo"},
 			},
 		},
+		"NoTable_Params_Int": {
+			sql: `SELECT @foo`,
+			params: map[string]Value{
+				"foo": makeTestValue(int64(100)),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+		"NoTable_Params_String": {
+			sql: `SELECT @foo`,
+			params: map[string]Value{
+				"foo": makeTestValue("xxx"),
+			},
+			expected: [][]interface{}{
+				[]interface{}{"xxx"},
+			},
+		},
 
 		"From_Unnest_Lietral_String": {
 			sql: `SELECT * FROM UNNEST (["xxx", "yyy"])`,
@@ -1290,6 +1308,46 @@ func TestQuery(t *testing.T) {
 			expected: [][]interface{}{
 				[]interface{}{int64(100)},
 			},
+		},
+
+		"SubQuery_Scalar_Simple": {
+			sql: `SELECT Id FROM Simple WHERE 1 = (SELECT 1)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+			},
+		},
+		"SubQuery_Scalar_Table": {
+			sql: `SELECT Id FROM Simple WHERE Id = (SELECT Id From Simple WHERE Id = 100)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+		"SubQuery_In": {
+			sql: `SELECT Id FROM Simple WHERE Id IN (SELECT Id From Simple WHERE Id > 100)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+			},
+		},
+		"SubQuery_NotIn": {
+			sql: `SELECT Id FROM Simple WHERE Id NOT IN (SELECT Id From Simple WHERE Id > 100)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+		"SubQuery_EXISTS": {
+			sql: `SELECT Id FROM Simple WHERE EXISTS(SELECT 1, "xx")`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+			},
+		},
+		"SubQuery_EXISTS_NoMatch": {
+			sql:      `SELECT Id FROM Simple WHERE EXISTS(SELECT * FROM Simple WHERE Id = 1000)`,
+			expected: nil,
 		},
 
 		"Function_Count": {
@@ -1417,6 +1475,16 @@ func TestQueryError(t *testing.T) {
 		}
 	}
 
+	for _, query := range []string{
+		`INSERT INTO Simple VALUES(100, "xxx")`,
+		`INSERT INTO Simple VALUES(200, "yyy")`,
+		`INSERT INTO Simple VALUES(300, "zzz")`,
+	} {
+		if _, err := db.db.ExecContext(ctx, query); err != nil {
+			t.Fatalf("Insert failed: %v", err)
+		}
+	}
+
 	table := map[string]struct {
 		sql    string
 		params map[string]Value
@@ -1450,6 +1518,24 @@ func TestQueryError(t *testing.T) {
 		// 	code: codes.InvalidArgument,
 		// 	 msg:  regexp.MustCompile(`Query parameters cannot be used in place of table names`),
 		// },
+
+		"ScalarQueryWithMultiColumns": {
+			sql:  `SELECT 1 WHERE 1 = (SELECT 1, "abc")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Scalar subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values`),
+		},
+		"SubqueryForInConditionWithMultiColumns": {
+			sql:  `SELECT 1 WHERE 1 IN (SELECT 1, "abc")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Subquery of type IN must have only one output column`),
+		},
+
+		// TODO: sqlite implicitly extract 1 row if subquery returns multi rows
+		// "ScalarQueryReturnedMultiRows": {
+		// 	sql:  "SELECT 1 FROM Simple WHERE 1 = (SELECT 1 FROM Simple)",
+		// 	code: codes.InvalidArgument,
+		// 	msg:  regexp.MustCompile(`A scalar subquery returned more than one row.`),
+		// },
 	}
 
 	for name, tc := range table {
@@ -1469,7 +1555,7 @@ func TestQueryError(t *testing.T) {
 				t.Errorf("expect code to be %v but got %v", tc.code, st.Code())
 			}
 			if !tc.msg.MatchString(st.Message()) {
-				t.Errorf("unexpected error message: %v", st.Message())
+				t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tc.msg)
 			}
 		})
 	}

@@ -69,7 +69,7 @@ Note that it becomes specific implementations for a fake server, which means you
    * SELECT alias
    * Query Parameters
    * JOINs (partially)
-   * Subquery (partially)
+   * Subquery
    * UNNEST (partially)
    * Functions (partially)
 * Mutation
