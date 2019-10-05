@@ -1410,7 +1410,6 @@ func TestQuery(t *testing.T) {
 				[]interface{}{int64(3)},
 			},
 		},
-
 		"Function_Sign": {
 			sql: `SELECT SIGN(1)`,
 			expected: [][]interface{}{
@@ -1449,6 +1448,56 @@ func TestQuery(t *testing.T) {
 			},
 			expected: [][]interface{}{
 				[]interface{}{true},
+			},
+		},
+		"Function_Max_Int": {
+			sql: `SELECT MAX(Id) FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{int64(300)},
+			},
+		},
+		"Function_Max_String": {
+			sql: `SELECT MAX(Value) FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{"zzz"},
+			},
+		},
+		"Function_Min_Int": {
+			sql: `SELECT MIN(Id) FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+		"Function_Min_String": {
+			sql: `SELECT MIN(Value) FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{"xxx"},
+			},
+		},
+		"Function_Avg": {
+			sql: `SELECT AVG(Id) as avg FROM Simple`, // TODO: use unnest
+			expected: [][]interface{}{
+				[]interface{}{float64(200)},
+			},
+		},
+		"Function_Avg_Distinct": {
+			sql: `SELECT AVG(DISTINCT Id) as avg FROM Simple`, // TODO: use unnest
+			expected: [][]interface{}{
+				[]interface{}{float64(200)},
+			},
+		},
+		"Function_Sum": {
+			sql: `SELECT SUM(Id) as avg FROM Simple`, // TODO: use unnest
+			expected: [][]interface{}{
+				[]interface{}{int64(600)},
+			},
+		},
+		// TODO: SUM with float
+
+		"Function_Concat": {
+			sql: `SELECT CONCAT("xx", "yy")`,
+			expected: [][]interface{}{
+				[]interface{}{"xxyy"},
 			},
 		},
 	}

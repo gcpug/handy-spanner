@@ -798,40 +798,44 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.CallExpr:
-		var function *CustomFunction
-		var name string
-		for _, fn := range customFunctions {
-			name = strings.ToUpper(fn.Name)
-			if name != strings.ToUpper(e.Func.Name) {
-				continue
-			}
-			function = &fn
-			break
-		}
-		if function != nil {
-			if function.NArgs != len(e.Args) {
-				return NullExpr, nil, newExprErrorf(expr, true, "%s requires %d arguments", name, function.NArgs)
-			}
-
-			var data []interface{}
-			var ss []string
-			for i := range e.Args {
-				s, d, err := b.buildExpr(e.Args[i].Expr)
-				if err != nil {
-					return NullExpr, nil, wrapExprError(err, expr, "Args")
-				}
-
-				data = append(data, d...)
-				ss = append(ss, s.Raw)
-			}
-
-			return Expr{
-				ValueType: function.Ret,
-				Raw:       fmt.Sprintf(`%s(%s)`, name, strings.Join(ss, ", ")),
-			}, data, nil
+		name := strings.ToUpper(e.Func.Name)
+		fn, ok := customFunctions[name]
+		if !ok {
+			return NullExpr, nil, newExprErrorf(expr, false, "unsupported CALL function: %s", name)
 		}
 
-		return NullExpr, nil, newExprErrorf(expr, false, "unsupported CALL function: %s", e.Func.Name)
+		// when fn.NArgs < 0, args is variadic
+		if fn.NArgs >= 0 && fn.NArgs != len(e.Args) {
+			return NullExpr, nil, newExprErrorf(expr, true, "%s requires %d arguments", name, fn.NArgs)
+		}
+
+		var data []interface{}
+		var ss []string
+		var vts []ValueType
+		for i := range e.Args {
+			s, d, err := b.buildExpr(e.Args[i].Expr)
+			if err != nil {
+				return NullExpr, nil, wrapExprError(err, expr, "Args")
+			}
+
+			data = append(data, d...)
+			ss = append(ss, s.Raw)
+			vts = append(vts, s.ValueType)
+		}
+
+		if ok := fn.ArgTypes(vts); !ok {
+			return NullExpr, nil, newExprErrorf(expr, true, "arguments does not match for %s", name)
+		}
+
+		var distinct string
+		if e.Distinct {
+			distinct = "DISTINCT "
+		}
+
+		return Expr{
+			ValueType: fn.ReturnType(vts),
+			Raw:       fmt.Sprintf(`%s(%s%s)`, name, distinct, strings.Join(ss, ", ")),
+		}, data, nil
 
 	case *ast.CountStarExpr:
 		return Expr{
