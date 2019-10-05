@@ -109,7 +109,7 @@ func (s *Server) ApplyDDL(ctx context.Context, databaseName string, ddl []ast.DD
 func (s *Server) ParseAndApplyDDL(ctx context.Context, databaseName string, r io.Reader) error {
 	b, err := ioutil.ReadAll(r)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	ddl, err := (&parser.Parser{

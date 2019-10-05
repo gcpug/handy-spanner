@@ -64,7 +64,7 @@ type server struct {
 func (s *server) ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL) error {
 	db, err := s.getOrCreateDatabase(databaseName)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	return db.ApplyDDL(ctx, stmt)
@@ -225,14 +225,14 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 	}
 
 	fields := req.GetParams().GetFields()
-	params := make(map[string]interface{}, len(fields))
+	params := make(map[string]Value, len(fields))
 	for key, val := range fields {
 		paramType, ok := req.ParamTypes[key]
 		if !ok {
 			return status.Error(codes.InvalidArgument, "Invalid ExecuteStreamingSql request")
 		}
 
-		v, err := spannerValue2NativeValueByType(val, paramType)
+		v, err := makeValueFromSpannerValue(val, paramType)
 		if err != nil {
 			// TODO: check InvalidArgument or Unimplemented
 			return err
@@ -299,7 +299,7 @@ func sendResult(stream spannerpb.Spanner_StreamingReadServer, iter RowIterator) 
 	for i, item := range iter.ResultSet() {
 		fields[i] = &spannerpb.StructType_Field{
 			Name: item.Name,
-			Type: makeValueTypeFromSpannerType(item.ValueType),
+			Type: makeSpannerTypeFromValueType(item.ValueType),
 		}
 	}
 	metadata := &spannerpb.ResultSetMetadata{
@@ -450,7 +450,7 @@ func (s *server) PartitionRead(ctx context.Context, req *spannerpb.PartitionRead
 	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: PartitionRead")
 }
 
-func makeValueTypeFromSpannerType(typ ValueType) *spannerpb.Type {
+func makeSpannerTypeFromValueType(typ ValueType) *spannerpb.Type {
 	var code spannerpb.TypeCode
 	switch typ.Code {
 	case TCBool:
@@ -477,13 +477,64 @@ func makeValueTypeFromSpannerType(typ ValueType) *spannerpb.Type {
 	if code == spannerpb.TypeCode_ARRAY {
 		st = &spannerpb.Type{
 			Code:             code,
-			ArrayElementType: makeValueTypeFromSpannerType(*typ.ArrayType),
+			ArrayElementType: makeSpannerTypeFromValueType(*typ.ArrayType),
 		}
 	}
 	if code == spannerpb.TypeCode_STRUCT {
 		panic("struct type not supported")
 	}
 	return st
+}
+
+func makeValueTypeFromSpannerType(typ *spannerpb.Type) (ValueType, error) {
+	switch typ.Code {
+	case spannerpb.TypeCode_BOOL:
+		return ValueType{
+			Code: TCBool,
+		}, nil
+	case spannerpb.TypeCode_INT64:
+		return ValueType{
+			Code: TCInt64,
+		}, nil
+	case spannerpb.TypeCode_FLOAT64:
+		return ValueType{
+			Code: TCFloat64,
+		}, nil
+	case spannerpb.TypeCode_TIMESTAMP:
+		return ValueType{
+			Code: TCTimestamp,
+		}, nil
+	case spannerpb.TypeCode_DATE:
+		return ValueType{
+			Code: TCDate,
+		}, nil
+	case spannerpb.TypeCode_STRING:
+		return ValueType{
+			Code: TCString,
+		}, nil
+	case spannerpb.TypeCode_BYTES:
+		return ValueType{
+			Code: TCBytes,
+		}, nil
+	case spannerpb.TypeCode_ARRAY:
+		var array *ValueType
+		if typ.ArrayElementType != nil {
+			vt, err := makeValueTypeFromSpannerType(typ.ArrayElementType)
+			if err != nil {
+				return ValueType{}, err
+			}
+			array = &vt
+		}
+		return ValueType{
+			Code:      TCArray,
+			ArrayType: array,
+		}, nil
+	case spannerpb.TypeCode_STRUCT:
+		//code = TCStruct
+		return ValueType{}, fmt.Errorf("Struct for spanner.Type is not supported")
+	}
+
+	return ValueType{}, fmt.Errorf("unknown code for spanner.Type: %v", typ.Code)
 }
 
 func spannerValueFromValue(x interface{}) (*structpb.Value, error) {
@@ -519,14 +570,14 @@ func spannerValueFromValue(x interface{}) (*structpb.Value, error) {
 	}
 }
 
-func spannerValue2NativeValueByType(v *structpb.Value, typ *spannerpb.Type) (interface{}, error) {
+func makeDataFromSpannerValue(v *structpb.Value, typ *spannerpb.Type) (interface{}, error) {
 	if typ.StructType != nil {
 		return nil, fmt.Errorf("Struct type is not supported yet")
 	}
 
-	if typ.ArrayElementType != nil {
-		if typ.Code != spannerpb.TypeCode_ARRAY {
-			return nil, fmt.Errorf("TODO: Code should be Array")
+	if typ.Code == spannerpb.TypeCode_ARRAY {
+		if typ.ArrayElementType == nil {
+			return nil, fmt.Errorf("TODO: ArrayElementType should not be nil in Array")
 		}
 
 		if _, ok := v.Kind.(*structpb.Value_NullValue); ok {
@@ -558,7 +609,7 @@ func spannerValue2NativeValueByType(v *structpb.Value, typ *spannerpb.Type) (int
 		case spannerpb.TypeCode_BOOL:
 			ret := make([]bool, n)
 			for i, vv := range vv.ListValue.Values {
-				vvv, err := spannerValue2NativeValueByType(vv, typ.ArrayElementType)
+				vvv, err := makeDataFromSpannerValue(vv, typ.ArrayElementType)
 				if err != nil {
 					return nil, err
 				}
@@ -572,7 +623,7 @@ func spannerValue2NativeValueByType(v *structpb.Value, typ *spannerpb.Type) (int
 		case spannerpb.TypeCode_INT64:
 			ret := make([]int64, n)
 			for i, vv := range vv.ListValue.Values {
-				vvv, err := spannerValue2NativeValueByType(vv, typ.ArrayElementType)
+				vvv, err := makeDataFromSpannerValue(vv, typ.ArrayElementType)
 				if err != nil {
 					return nil, err
 				}
@@ -586,7 +637,7 @@ func spannerValue2NativeValueByType(v *structpb.Value, typ *spannerpb.Type) (int
 		case spannerpb.TypeCode_FLOAT64:
 			ret := make([]float64, n)
 			for i, vv := range vv.ListValue.Values {
-				vvv, err := spannerValue2NativeValueByType(vv, typ.ArrayElementType)
+				vvv, err := makeDataFromSpannerValue(vv, typ.ArrayElementType)
 				if err != nil {
 					return nil, err
 				}
@@ -600,7 +651,7 @@ func spannerValue2NativeValueByType(v *structpb.Value, typ *spannerpb.Type) (int
 		case spannerpb.TypeCode_TIMESTAMP, spannerpb.TypeCode_DATE, spannerpb.TypeCode_STRING:
 			ret := make([]string, n)
 			for i, vv := range vv.ListValue.Values {
-				vvv, err := spannerValue2NativeValueByType(vv, typ.ArrayElementType)
+				vvv, err := makeDataFromSpannerValue(vv, typ.ArrayElementType)
 				if err != nil {
 					return nil, err
 				}
@@ -614,7 +665,7 @@ func spannerValue2NativeValueByType(v *structpb.Value, typ *spannerpb.Type) (int
 		case spannerpb.TypeCode_BYTES:
 			ret := make([][]byte, n)
 			for i, vv := range vv.ListValue.Values {
-				vvv, err := spannerValue2NativeValueByType(vv, typ.ArrayElementType)
+				vvv, err := makeDataFromSpannerValue(vv, typ.ArrayElementType)
 				if err != nil {
 					return nil, err
 				}
@@ -697,4 +748,21 @@ func spannerValue2NativeValueByType(v *structpb.Value, typ *spannerpb.Type) (int
 	}
 
 	return nil, fmt.Errorf("unexpected value %T and type %d", v.Kind, typ.Code)
+}
+
+func makeValueFromSpannerValue(v *structpb.Value, typ *spannerpb.Type) (Value, error) {
+	vt, err := makeValueTypeFromSpannerType(typ)
+	if err != nil {
+		return Value{}, nil
+	}
+
+	data, err := makeDataFromSpannerValue(v, typ)
+	if err != nil {
+		return Value{}, nil
+	}
+
+	return Value{
+		Data: data,
+		Type: vt,
+	}, nil
 }

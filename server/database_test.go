@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -212,6 +213,44 @@ func makeListValue(vs ...*structpb.Value) *structpb.ListValue {
 
 func makeListValueAsValue(v *structpb.ListValue) *structpb.Value {
 	return &structpb.Value{Kind: &structpb.Value_ListValue{ListValue: v}}
+}
+
+func makeTestValue(v interface{}) Value {
+	switch vv := v.(type) {
+	case string:
+		return Value{
+			Data: v,
+			Type: ValueType{Code: TCString},
+		}
+	case []string:
+		return Value{
+			Data: v,
+			Type: ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCString},
+			},
+		}
+	case int64:
+		return Value{
+			Data: v,
+			Type: ValueType{Code: TCInt64},
+		}
+	case int:
+		return Value{
+			Data: int64(vv),
+			Type: ValueType{Code: TCInt64},
+		}
+	case []int64:
+		return Value{
+			Data: v,
+			Type: ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCString},
+			},
+		}
+	default:
+		panic(fmt.Sprintf("fix makeTestValue to be able to convert interface{} to Value: %T", v))
+	}
 }
 
 func parseDDL(t *testing.T, s string) []ast.DDL {
@@ -848,7 +887,7 @@ func TestQuery(t *testing.T) {
 
 	table := map[string]struct {
 		sql      string
-		params   map[string]interface{}
+		params   map[string]Value
 		expected [][]interface{}
 	}{
 		"Simple_Star": {
@@ -913,8 +952,8 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_Where_Param": {
 			sql: `SELECT Id, Value FROM Simple WHERE Id = @id`,
-			params: map[string]interface{}{
-				"id": 100,
+			params: map[string]Value{
+				"id": makeTestValue(100),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
@@ -922,9 +961,9 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_Where_AND": {
 			sql: `SELECT Id, Value FROM Simple WHERE Id > @id AND Value = @val`,
-			params: map[string]interface{}{
-				"id":  100,
-				"val": "zzz",
+			params: map[string]Value{
+				"id":  makeTestValue(100),
+				"val": makeTestValue("zzz"),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(300), "zzz"},
@@ -932,10 +971,10 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_Where_Paren": {
 			sql: `SELECT Id, Value FROM Simple WHERE Id >= @id AND (Value = @val1 OR Value = @val2)`,
-			params: map[string]interface{}{
-				"id":   100,
-				"val1": "zzz",
-				"val2": "xxx",
+			params: map[string]Value{
+				"id":   makeTestValue(100),
+				"val1": makeTestValue("zzz"),
+				"val2": makeTestValue("xxx"),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
@@ -944,14 +983,14 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_Where_LIKE": {
 			sql:    `SELECT Id, Value FROM Simple WHERE Value LIKE "x%"`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 			},
 		},
 		"Simple_Where_NOT_LIKE": {
 			sql:    `SELECT Id, Value FROM Simple WHERE Value NOT LIKE "x%"`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
 				[]interface{}{int64(300), "zzz"},
@@ -959,7 +998,7 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_Where_IN": {
 			sql:    `SELECT Id, Value FROM Simple WHERE Id IN (100, 300)`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 				[]interface{}{int64(300), "zzz"},
@@ -967,19 +1006,19 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_Where_NOT_IN": {
 			sql:    `SELECT Id, Value FROM Simple WHERE Id NOT IN (100, 300)`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
 			},
 		},
 		"Simple_Where_IS_NULL": {
 			sql:      `SELECT Id, Value FROM Simple WHERE Value IS NULL`,
-			params:   map[string]interface{}{},
+			params:   map[string]Value{},
 			expected: nil,
 		},
 		"Simple_Where_IS_NOT_NULL": {
 			sql:    `SELECT Id, Value FROM Simple WHERE Value IS NOT NULL`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 				[]interface{}{int64(200), "yyy"},
@@ -988,12 +1027,12 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_Where_IS_BOOL": {
 			sql:      `SELECT Id, Value FROM Simple WHERE Id IS TRUE`,
-			params:   map[string]interface{}{},
+			params:   map[string]Value{},
 			expected: nil,
 		},
 		"Simple_Where_IS_NOT_BOOL": {
 			sql:    `SELECT Id, Value FROM Simple WHERE Id IS NOT TRUE`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 				[]interface{}{int64(200), "yyy"},
@@ -1002,7 +1041,7 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_Where_BETWEEN": {
 			sql:    `SELECT Id, Value FROM Simple WHERE Id BETWEEN 200 AND 300`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
 				[]interface{}{int64(300), "zzz"},
@@ -1010,7 +1049,7 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_Where_NOT_BETWEEN": {
 			sql:    `SELECT Id, Value FROM Simple WHERE Id NOT BETWEEN 200 AND 300`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 			},
@@ -1018,15 +1057,15 @@ func TestQuery(t *testing.T) {
 
 		"Simple_Where_STARTS_WITH": {
 			sql:    `SELECT Id, Value FROM Simple WHERE STARTS_WITH(Value, "x")`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 			},
 		},
 		"Simple_Where_STARTS_WITH_PARAM": {
 			sql: `SELECT Id, Value FROM Simple WHERE STARTS_WITH(Value, @x)`,
-			params: map[string]interface{}{
-				"x": "xx",
+			params: map[string]Value{
+				"x": makeTestValue("xx"),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
@@ -1035,7 +1074,7 @@ func TestQuery(t *testing.T) {
 
 		"Simple_GROUP": {
 			sql:    `SELECT Id, Value FROM Simple GROUP BY Value`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 				[]interface{}{int64(200), "yyy"},
@@ -1044,7 +1083,7 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_GROUP_HAVING": {
 			sql:    `SELECT Id, Value FROM Simple GROUP BY Value HAVING Value > "xxx"`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
 				[]interface{}{int64(300), "zzz"},
@@ -1053,15 +1092,15 @@ func TestQuery(t *testing.T) {
 
 		"Simple_LIMIT": {
 			sql:    `SELECT Id, Value FROM Simple LIMIT 1`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 			},
 		},
 		"Simple_LIMIT_Param": {
 			sql: `SELECT Id, Value FROM Simple LIMIT @limit`,
-			params: map[string]interface{}{
-				"limit": 2,
+			params: map[string]Value{
+				"limit": makeTestValue(2),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
@@ -1070,16 +1109,16 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_LIMIT_OFFSET": {
 			sql:    `SELECT Id, Value FROM Simple LIMIT 1 OFFSET 1`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
 			},
 		},
 		"Simple_LIMIT_OFFSET_Param": {
 			sql: `SELECT Id, Value FROM Simple LIMIT @limit OFFSET @offset`,
-			params: map[string]interface{}{
-				"limit":  1,
-				"offset": 1,
+			params: map[string]Value{
+				"limit":  makeTestValue(1),
+				"offset": makeTestValue(1),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
@@ -1087,7 +1126,7 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_ORDER": {
 			sql:    `SELECT Id, Value FROM Simple ORDER BY Id DESC`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(300), "zzz"},
 				[]interface{}{int64(200), "yyy"},
@@ -1096,7 +1135,7 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_ORDER2": {
 			sql:    `SELECT Id, Value FROM Simple ORDER BY Id DESC, Value`,
-			params: map[string]interface{}{},
+			params: map[string]Value{},
 			expected: [][]interface{}{
 				[]interface{}{int64(300), "zzz"},
 				[]interface{}{int64(200), "yyy"},
@@ -1106,8 +1145,8 @@ func TestQuery(t *testing.T) {
 
 		"Simple_UNNEST_Bind": {
 			sql: `SELECT Id, Value FROM Simple WHERE Id IN UNNEST (@foo)`,
-			params: map[string]interface{}{
-				"foo": []int64{100, 200},
+			params: map[string]Value{
+				"foo": makeTestValue([]int64{100, 200}),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
@@ -1116,15 +1155,15 @@ func TestQuery(t *testing.T) {
 		},
 		"Simple_UNNEST_Bind2": {
 			sql: `SELECT Id, Value FROM Simple WHERE Id IN UNNEST (@foo)`,
-			params: map[string]interface{}{
-				"foo": []int64{},
+			params: map[string]Value{
+				"foo": makeTestValue([]int64{}),
 			},
 			expected: nil,
 		},
 		"Simple_UNNEST_Bind3": {
 			sql: `SELECT Id, Value FROM Simple WHERE Value IN UNNEST (@foo)`,
-			params: map[string]interface{}{
-				"foo": []string{"yyy"},
+			params: map[string]Value{
+				"foo": makeTestValue([]string{"yyy"}),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
@@ -1181,19 +1220,15 @@ func TestQuery(t *testing.T) {
 		},
 		"From_Unnest_Literal_Params": {
 			sql: `SELECT * FROM UNNEST ([ @a, @b, @c])`,
-			params: map[string]interface{}{
-				"a": 1,
-				"b": 2,
-				"c": 3,
+			params: map[string]Value{
+				"a": makeTestValue(1),
+				"b": makeTestValue(2),
+				"c": makeTestValue(3),
 			},
 			expected: [][]interface{}{
-				[]interface{}{"1"},
-				[]interface{}{"2"},
-				[]interface{}{"3"},
-				// TODO
-				// []interface{}{int64(1)},
-				// []interface{}{int64(2)},
-				// []interface{}{int64(3)},
+				[]interface{}{int64(1)},
+				[]interface{}{int64(2)},
+				[]interface{}{int64(3)},
 			},
 		},
 		"From_Unnest_Literal_As": {
@@ -1227,8 +1262,8 @@ func TestQuery(t *testing.T) {
 		},
 		"From_Join2": {
 			sql: `SELECT a.* FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE a.Id = @id`,
-			params: map[string]interface{}{
-				"id": 200,
+			params: map[string]Value{
+				"id": makeTestValue(200),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
@@ -1236,8 +1271,8 @@ func TestQuery(t *testing.T) {
 		},
 		"From_Join3": {
 			sql: `SELECT * FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE a.Id = @id`,
-			params: map[string]interface{}{
-				"id": 200,
+			params: map[string]Value{
+				"id": makeTestValue(200),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy", int64(200), "yyy"},
@@ -1289,8 +1324,8 @@ func TestQuery(t *testing.T) {
 		},
 		"Function_Count_Param": {
 			sql: `SELECT COUNT(@foo) FROM Simple`,
-			params: map[string]interface{}{
-				"foo": 200,
+			params: map[string]Value{
+				"foo": makeTestValue(200),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(3)},
@@ -1329,9 +1364,9 @@ func TestQuery(t *testing.T) {
 		},
 		"Function_StartsWith_Param": {
 			sql: `SELECT STARTS_WITH(@a, @b)`,
-			params: map[string]interface{}{
-				"a": "xyz",
-				"b": "xy",
+			params: map[string]Value{
+				"a": makeTestValue("xyz"),
+				"b": makeTestValue("xy"),
 			},
 			expected: [][]interface{}{
 				[]interface{}{true},
@@ -1384,7 +1419,7 @@ func TestQueryError(t *testing.T) {
 
 	table := map[string]struct {
 		sql    string
-		params map[string]interface{}
+		params map[string]Value
 		code   codes.Code
 		msg    *regexp.Regexp
 	}{

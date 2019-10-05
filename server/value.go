@@ -28,6 +28,7 @@ import (
 )
 
 var NullExpr = Expr{}
+var NullValue = Value{}
 
 type Expr struct {
 	Raw       string
@@ -38,6 +39,11 @@ type RowIterator interface {
 	ResultSet() []ResultItem
 
 	Next() ([]interface{}, bool)
+}
+
+type Value struct {
+	Data interface{}
+	Type ValueType
 }
 
 type ValueType struct {

@@ -34,7 +34,7 @@ type Database interface {
 	ApplyDDL(ctx context.Context, ddl ast.DDL) error
 
 	Read(ctx context.Context, tbl, index string, cols []string, keyset *KeySet, limit int64) (RowIterator, error)
-	Query(ctx context.Context, query *ast.QueryStatement, params map[string]interface{}) (RowIterator, error)
+	Query(ctx context.Context, query *ast.QueryStatement, params map[string]Value) (RowIterator, error)
 
 	Insert(ctx context.Context, tbl string, cols []string, values []*structpb.ListValue) error
 	Update(ctx context.Context, tbl string, cols []string, values []*structpb.ListValue) error
@@ -178,7 +178,7 @@ func (d *database) Read(ctx context.Context, tbl, idx string, cols []string, key
 	return &rows{rows: r, resultItems: resultItems}, nil
 }
 
-func (d *database) Query(ctx context.Context, stmt *ast.QueryStatement, params map[string]interface{}) (RowIterator, error) {
+func (d *database) Query(ctx context.Context, stmt *ast.QueryStatement, params map[string]Value) (RowIterator, error) {
 	selectStmt, ok := stmt.Query.(*ast.Select)
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "Invalid query")
