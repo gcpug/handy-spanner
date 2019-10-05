@@ -65,7 +65,7 @@ func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
 	var fromClause string
 	var fromData []interface{}
 	if b.stmt.From != nil {
-		s, d, err := b.buildQueryTable(b.stmt.From.Source)
+		_, s, d, err := b.buildQueryTable(b.stmt.From.Source)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -90,15 +90,15 @@ func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
 	return query, b.args, resultItems, nil
 }
 
-func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (string, []interface{}, error) {
+func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, []interface{}, error) {
 	switch src := exp.(type) {
 	case *ast.TableName:
 		t, free, err := b.db.readTable(src.Table.Name)
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
-				return "", nil, status.Error(codes.InvalidArgument, err.Error())
+				return nil, "", nil, status.Error(codes.InvalidArgument, err.Error())
 			}
-			return "", nil, err
+			return nil, "", nil, err
 		}
 		b.frees = append(b.frees, free)
 		view := t.TableView()
@@ -116,17 +116,25 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (string, []interface{}
 		}
 		b.allResultItems = append(b.allResultItems, view.ResultItems)
 
-		return query, nil, nil
+		return view, query, nil, nil
 	case *ast.Join:
 		var data []interface{}
-		q1, d1, err := b.buildQueryTable(src.Left)
+		view1, q1, d1, err := b.buildQueryTable(src.Left)
 		if err != nil {
-			return "", nil, fmt.Errorf("left table error %v", err)
+			return nil, "", nil, fmt.Errorf("left table error %v", err)
 		}
-		q2, d2, err := b.buildQueryTable(src.Right)
+		if view1 == nil {
+			return nil, "", nil, fmt.Errorf("left table view is nil")
+		}
+
+		view2, q2, d2, err := b.buildQueryTable(src.Right)
 		if err != nil {
-			return "", nil, fmt.Errorf("right table error %v", err)
+			return nil, "", nil, fmt.Errorf("right table error %v", err)
 		}
+		if view2 == nil {
+			return nil, "", nil, fmt.Errorf("right table view is nil")
+		}
+
 		data = append(data, d1...)
 		data = append(data, d2...)
 
@@ -137,19 +145,34 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (string, []interface{}
 			case *ast.BinaryExpr:
 				s, d, err := b.buildExpr(expr)
 				if err != nil {
-					return "", nil, wrapExprError(err, expr, "ON")
+					return nil, "", nil, wrapExprError(err, expr, "ON")
 				}
 				condition = fmt.Sprintf("ON %s", s.Raw)
 				data = append(data, d...)
 
 			default:
-				return "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for JOIN condition", expr)
+				return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for JOIN condition", expr)
 			}
+
+		case *ast.Using:
+			names := make([]string, len(cond.Idents))
+			for i := range cond.Idents {
+				name := cond.Idents[i].Name
+				if _, ok := view1.ResultItemsMap[name]; !ok {
+					return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on left side of join", name)
+				}
+				if _, ok := view2.ResultItemsMap[name]; !ok {
+					return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on right side of join", name)
+				}
+				names[i] = name
+			}
+			condition = fmt.Sprintf("USING (%s)", strings.Join(names, ", "))
 		default:
-			return "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for JOIN condition", cond)
+			return nil, "", nil, status.Errorf(codes.Unimplemented, "unknown condition for JOIN: %T", cond)
 		}
 
-		return fmt.Sprintf("%s %s %s %s", q1, src.Op, q2, condition), data, nil
+		// TODO: return joined view
+		return nil, fmt.Sprintf("%s %s %s %s", q1, src.Op, q2, condition), data, nil
 
 	case *ast.Unnest:
 		return b.buildUnnestView(src)
@@ -159,7 +182,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (string, []interface{}
 		case *ast.Select:
 			query, data, items, err := BuildQuery(b.db, q, b.params)
 			if err != nil {
-				return "", nil, fmt.Errorf("Subquery error: %v", err)
+				return nil, "", nil, fmt.Errorf("Subquery error: %v", err)
 			}
 
 			itemsMap := make(map[string]ResultItem, len(items))
@@ -184,25 +207,29 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (string, []interface{}
 				b.views["."+viewName] = view
 			}
 
-			return fmt.Sprintf("(%s) AS %s", query, viewName), data, nil
+			return view, fmt.Sprintf("(%s) AS %s", query, viewName), data, nil
 
 		case *ast.SubQuery:
-			return "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
+			return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
 		case *ast.CompoundQuery:
-			return "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
+			return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
 		}
-		return "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
+		return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
 	case *ast.ParenTableExpr:
-		return "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
+		view, q, d, err := b.buildQueryTable(src.Source)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		return view, fmt.Sprintf("(%s)", q), d, nil
 	default:
-		return "", nil, status.Errorf(codes.Unknown, "unknown expression %T for FROM", src)
+		return nil, "", nil, status.Errorf(codes.Unknown, "unknown expression %T for FROM", src)
 	}
 }
 
-func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (string, []interface{}, error) {
+func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []interface{}, error) {
 	s, data, err := b.buildUnnestExpr(src.Expr)
 	if err != nil {
-		return "", nil, wrapExprError(err, src.Expr, "UNNEST")
+		return nil, "", nil, wrapExprError(err, src.Expr, "UNNEST")
 	}
 
 	var viewName string
@@ -230,7 +257,7 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (string, []interface{}, 
 		b.views["."+viewName] = view
 	}
 
-	return fmt.Sprintf("(%s) AS %s", s.Raw, viewName), data, nil
+	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), data, nil
 }
 
 func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultItem, string, error) {

@@ -1266,19 +1266,19 @@ func TestQuery(t *testing.T) {
 			},
 		},
 
-		"From_Join": {
+		"From_Join_ON": {
 			sql: `SELECT a.* FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE b.Value = "xxx"`,
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 			},
 		},
-		"From_Join1": {
+		"From_Join_ON1": {
 			sql: `SELECT a.Id, a.Value FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE b.Value = "xxx"`,
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 			},
 		},
-		"From_Join2": {
+		"From_Join_ON2": {
 			sql: `SELECT a.* FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE a.Id = @id`,
 			params: map[string]Value{
 				"id": makeTestValue(200),
@@ -1287,13 +1287,34 @@ func TestQuery(t *testing.T) {
 				[]interface{}{int64(200), "yyy"},
 			},
 		},
-		"From_Join3": {
+		"From_Join_ON3": {
 			sql: `SELECT * FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE a.Id = @id`,
 			params: map[string]Value{
 				"id": makeTestValue(200),
 			},
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy", int64(200), "yyy"},
+			},
+		},
+		"From_Join_USING": {
+			sql: `SELECT a.* FROM Simple AS a JOIN Simple AS b USING (Id) WHERE b.Value = "xxx"`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+			},
+		},
+		"From_Join_Subquery_USING": {
+			sql: `SELECT a.* FROM Simple AS a JOIN (SELECT Id FROM Simple) AS b USING (Id) WHERE a.Value = "xxx"`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+			},
+		},
+
+		"From_Join_Paren": {
+			sql: `SELECT a.Id FROM (Simple AS a JOIN Simple AS b USING (Id))`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
 			},
 		},
 
@@ -1536,6 +1557,22 @@ func TestQueryError(t *testing.T) {
 		// 	code: codes.InvalidArgument,
 		// 	msg:  regexp.MustCompile(`A scalar subquery returned more than one row.`),
 		// },
+
+		"JoinUsingColumnNotExist": {
+			sql:  `SELECT 1 FROM Simple a JOIN Simple b USING (foo)`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Column foo in USING clause not found on left side of join`),
+		},
+		"JoinUsingColumnNotExist_RightSide": {
+			sql:  `SELECT 1 FROM Simple a JOIN CompositePrimaryKeys b USING (Value)`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Column Value in USING clause not found on right side of join`),
+		},
+		"JoinUsingColumnNotExist_Subquery": {
+			sql:  `SELECT 1 FROM Simple a JOIN (SELECT Value FROM Simple) b USING (Id)`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Column Id in USING clause not found on right side of join`),
+		},
 	}
 
 	for name, tc := range table {
