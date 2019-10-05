@@ -443,54 +443,50 @@ func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy) (string, []
 }
 
 func (b *QueryBuilder) buildQueryLimitOffset(limit *ast.Limit) (string, []interface{}, error) {
-	var limitClause string
-	var data []interface{}
-
-	switch c := limit.Count.(type) {
-	case *ast.Param:
-		v, ok := b.params[c.Name]
-		if !ok {
-			return "", nil, fmt.Errorf("params not found: %v", c.Name)
-		}
-		limitClause = "?"
-		data = append(data, v)
-	case *ast.IntLiteral:
-		n, err := strconv.ParseInt(c.Value, c.Base, 64)
-		if err != nil {
-			return "", nil, fmt.Errorf("unexpected format %q as int64: %v", c.Value, err)
-		}
-		limitClause = strconv.FormatInt(n, 10)
-
-	case *ast.CastIntValue:
-		return "", nil, fmt.Errorf("CAST is not supported yet")
-	default:
-		return "", nil, fmt.Errorf("unknown LIMIT type: %T", c)
+	e, data, err := b.buildIntValue(limit.Count)
+	if err != nil {
+		return "", nil, err
 	}
+	limitClause := e.Raw
 
 	if limit.Offset != nil {
-		switch c := limit.Offset.Value.(type) {
-		case *ast.Param:
-			v, ok := b.params[c.Name]
-			if !ok {
-				return "", nil, fmt.Errorf("params not found: %v", c.Name)
-			}
-			limitClause += " OFFSET ?"
-			data = append(data, v)
-		case *ast.IntLiteral:
-			n, err := strconv.ParseInt(c.Value, c.Base, 64)
-			if err != nil {
-				return "", nil, fmt.Errorf("unexpected format %q as int64: %v", c.Value, err)
-			}
-			limitClause += " OFFSET " + strconv.FormatInt(n, 10)
-
-		case *ast.CastIntValue:
-			return "", nil, fmt.Errorf("CAST is not supported yet")
-		default:
-			return "", nil, fmt.Errorf("unknown LIMIT type: %T", c)
+		e, d, err := b.buildIntValue(limit.Offset.Value)
+		if err != nil {
+			return "", nil, err
 		}
+		data = append(data, d...)
+		limitClause += fmt.Sprintf(" OFFSET %s", e.Raw)
 	}
 
 	return limitClause, data, nil
+}
+
+func (b *QueryBuilder) buildIntValue(intValue ast.IntValue) (Expr, []interface{}, error) {
+	switch iv := intValue.(type) {
+	case *ast.Param:
+		v, ok := b.params[iv.Name]
+		if !ok {
+			return NullExpr, nil, fmt.Errorf("params not found: %v", iv.Name)
+		}
+		return Expr{
+			ValueType: v.Type,
+			Raw:       "?",
+		}, []interface{}{v.Data}, nil
+	case *ast.IntLiteral:
+		n, err := strconv.ParseInt(iv.Value, iv.Base, 64)
+		if err != nil {
+			return NullExpr, nil, fmt.Errorf("unexpected format %q as int64: %v", iv.Value, err)
+		}
+		return Expr{
+			ValueType: ValueType{Code: TCInt64},
+			Raw:       strconv.FormatInt(n, 10),
+		}, nil, nil
+
+	case *ast.CastIntValue:
+		return NullExpr, nil, fmt.Errorf("CAST is not supported yet")
+	default:
+		return NullExpr, nil, fmt.Errorf("unknown LIMIT type")
+	}
 }
 
 func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface{}, error) {
@@ -706,6 +702,12 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			Raw:       fmt.Sprintf("%s %s %s AND %s", left.Raw, op, rstart.Raw, rend.Raw),
 		}, data, nil
 
+	case *ast.SelectorExpr:
+		return NullExpr, nil, newExprErrorf(expr, false, "Selector not supported yet")
+
+	case *ast.IndexExpr:
+		return NullExpr, nil, newExprErrorf(expr, false, "Index not supported yet")
+
 	case *ast.IsNullExpr:
 		left, ldata, lerr := b.buildExpr(e.Left)
 		if lerr != nil {
@@ -746,17 +748,6 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
 			Raw:       fmt.Sprintf("%s %s %s", left.Raw, op, b),
-		}, data, nil
-
-	case *ast.ParenExpr:
-		s, data, err := b.buildExpr(e.Expr)
-		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Paren")
-		}
-
-		return Expr{
-			ValueType: s.ValueType,
-			Raw:       fmt.Sprintf("(%s)", s.Raw),
 		}, data, nil
 
 	case *ast.CallExpr:
@@ -801,6 +792,41 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			Raw:       "COUNT(*)",
 		}, nil, nil
 
+	case *ast.CastExpr:
+		return NullExpr, nil, newExprErrorf(expr, false, "Cast not supported yet")
+
+	case *ast.ExtractExpr:
+		return NullExpr, nil, newExprErrorf(expr, false, "Extract not supported yet")
+
+	case *ast.CaseExpr:
+		return NullExpr, nil, newExprErrorf(expr, false, "Case not supported yet")
+
+	case *ast.ParenExpr:
+		s, data, err := b.buildExpr(e.Expr)
+		if err != nil {
+			return NullExpr, nil, wrapExprError(err, expr, "Paren")
+		}
+
+		return Expr{
+			ValueType: s.ValueType,
+			Raw:       fmt.Sprintf("(%s)", s.Raw),
+		}, data, nil
+
+	case *ast.ScalarSubQuery:
+		return NullExpr, nil, newExprErrorf(expr, false, "ScalarSubquery not supported yet")
+
+	case *ast.ArraySubQuery:
+		return NullExpr, nil, newExprErrorf(expr, false, "ArraySubquery not supported yet")
+
+	case *ast.ExistsSubQuery:
+		return NullExpr, nil, newExprErrorf(expr, false, "ExistsSubquery not supported yet")
+
+	case *ast.ArrayLiteral:
+		return NullExpr, nil, newExprErrorf(expr, false, "ArrayLiteral not supported yet")
+
+	case *ast.StructLiteral:
+		return NullExpr, nil, newExprErrorf(expr, false, "StructLiteral not supported yet")
+
 	case *ast.NullLiteral:
 		return Expr{
 			ValueType: ValueType{Code: TCString}, // TODO
@@ -840,6 +866,15 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			ValueType: ValueType{Code: TCString},
 			Raw:       fmt.Sprintf("%q", e.Value),
 		}, nil, nil
+
+	case *ast.BytesLiteral:
+		return NullExpr, nil, newExprErrorf(expr, false, "BytesLiteral not supported yet")
+
+	case *ast.DateLiteral:
+		return NullExpr, nil, newExprErrorf(expr, false, "DateLiteral not supported yet")
+
+	case *ast.TimestampLiteral:
+		return NullExpr, nil, newExprErrorf(expr, false, "TimestampLiteral not supported yet")
 
 	case *ast.Param:
 		v, ok := b.params[e.Name]

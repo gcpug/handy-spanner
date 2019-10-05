@@ -64,7 +64,7 @@ type server struct {
 func (s *server) ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL) error {
 	db, err := s.getOrCreateDatabase(databaseName)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	return db.ApplyDDL(ctx, stmt)
