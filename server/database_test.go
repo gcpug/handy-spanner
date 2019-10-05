@@ -1371,6 +1371,56 @@ func TestQuery(t *testing.T) {
 			expected: nil,
 		},
 
+		"Compound_Union_Distinct": {
+			sql: `SELECT Id FROM Simple UNION DISTINCT SELECT Id FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+			},
+		},
+		"Compound_Union_All": {
+			sql: `SELECT Id FROM Simple UNION ALL SELECT Id FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+			},
+		},
+		"Compound_Union_All_SelectLimit": {
+			sql: `SELECT Id FROM Simple UNION ALL (SELECT Id FROM Simple LIMIT 1)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+				[]interface{}{int64(100)},
+			},
+		},
+		"Compound_Union_All_UnionLimit": {
+			sql: `SELECT Id FROM Simple UNION ALL (SELECT Id FROM Simple) LIMIT 5`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+			},
+		},
+		"Compound_Union_All_OrderBy": {
+			sql: `SELECT Id FROM Simple UNION ALL (SELECT Id FROM Simple) ORDER BY Id`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+				[]interface{}{int64(300)},
+			},
+		},
+
 		"Arithmetic_Add": {
 			sql: `SELECT 1 + 2`,
 			expected: [][]interface{}{
