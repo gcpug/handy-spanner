@@ -204,7 +204,6 @@ func (d *database) Query(ctx context.Context, stmt *ast.QueryStatement, params m
 func (d *database) write(ctx context.Context, tbl string, cols []string, values []*structpb.ListValue,
 	nonNullCheck bool,
 	affectedRowsCheck bool,
-	validateFn func(*Table, []*Column) error,
 	buildQueryFn func(*Table, []*Column) string,
 	buildArgsFn func(*Table, []*Column, []interface{}) []interface{},
 ) error {
@@ -261,15 +260,14 @@ func (d *database) write(ctx context.Context, tbl string, cols []string, values 
 		}
 	}
 
-	if err := validateFn(table, columns); err != nil {
-		return nil
-	}
-
 	if len(values) == 0 {
 		return nil
 	}
 
 	query := buildQueryFn(table, columns)
+	if query == "" {
+		return nil
+	}
 
 	for _, vs := range values {
 		if len(vs.Values) != len(cols) {
@@ -336,10 +334,6 @@ func (d *database) write(ctx context.Context, tbl string, cols []string, values 
 }
 
 func (d *database) Insert(ctx context.Context, tbl string, cols []string, values []*structpb.ListValue) error {
-	validateFn := func(table *Table, columns []*Column) error {
-		return nil
-	}
-
 	buildQueryFn := func(table *Table, columns []*Column) string {
 		columnName := strings.Join(cols, ", ")
 		placeholder := "?"
@@ -353,19 +347,10 @@ func (d *database) Insert(ctx context.Context, tbl string, cols []string, values
 		return data
 	}
 
-	return d.write(ctx, tbl, cols, values, true, false, validateFn, buildQueryFn, buildArgsFn)
+	return d.write(ctx, tbl, cols, values, true, false, buildQueryFn, buildArgsFn)
 }
 
 func (d *database) Update(ctx context.Context, tbl string, cols []string, values []*structpb.ListValue) error {
-	validateFn := func(table *Table, columns []*Column) error {
-		// require values for all primary keys + at least 1 column
-		numPKeys := len(table.primaryKey.IndexColumns())
-		if len(cols) <= numPKeys {
-			return status.Errorf(codes.InvalidArgument, "TODO: invalid columns")
-		}
-		return nil
-	}
-
 	buildQueryFn := func(table *Table, columns []*Column) string {
 		assigns := make([]string, 0, len(cols))
 		for _, c := range columns {
@@ -374,6 +359,12 @@ func (d *database) Update(ctx context.Context, tbl string, cols []string, values
 			}
 			assigns = append(assigns, fmt.Sprintf("%s = ?", c.Name()))
 		}
+
+		// If no columns to be updated exist, it should be no-op.
+		if len(assigns) == 0 {
+			return ""
+		}
+
 		setClause := strings.Join(assigns, ", ")
 
 		pKeysNames := table.primaryKey.IndexColumnNames()
@@ -406,14 +397,10 @@ func (d *database) Update(ctx context.Context, tbl string, cols []string, values
 		return values
 	}
 
-	return d.write(ctx, tbl, cols, values, false, true, validateFn, buildQueryFn, buildArgsFn)
+	return d.write(ctx, tbl, cols, values, false, true, buildQueryFn, buildArgsFn)
 }
 
 func (d *database) Replace(ctx context.Context, tbl string, cols []string, values []*structpb.ListValue) error {
-	validateFn := func(table *Table, columns []*Column) error {
-		return nil
-	}
-
 	buildQueryFn := func(table *Table, columns []*Column) string {
 		columnName := strings.Join(cols, ", ")
 		placeholder := "?"
@@ -427,14 +414,10 @@ func (d *database) Replace(ctx context.Context, tbl string, cols []string, value
 		return data
 	}
 
-	return d.write(ctx, tbl, cols, values, true, false, validateFn, buildQueryFn, buildArgsFn)
+	return d.write(ctx, tbl, cols, values, true, false, buildQueryFn, buildArgsFn)
 }
 
 func (d *database) InsertOrUpdate(ctx context.Context, tbl string, cols []string, values []*structpb.ListValue) error {
-	validateFn := func(table *Table, columns []*Column) error {
-		return nil
-	}
-
 	buildQueryFn := func(table *Table, columns []*Column) string {
 		assigns := make([]string, 0, len(cols))
 		for _, c := range columns {
@@ -473,7 +456,7 @@ func (d *database) InsertOrUpdate(ctx context.Context, tbl string, cols []string
 		return data
 	}
 
-	return d.write(ctx, tbl, cols, values, false, false, validateFn, buildQueryFn, buildArgsFn)
+	return d.write(ctx, tbl, cols, values, false, false, buildQueryFn, buildArgsFn)
 }
 
 func (d *database) Delete(ctx context.Context, tbl string, keyset *KeySet) error {
