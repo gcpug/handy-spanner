@@ -86,6 +86,149 @@ func TestCreateSession(t *testing.T) {
 	})
 }
 
+func TestBatchCreateSessions(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+
+	validDatabaseName := "projects/fake/instances/fake/databases/fake"
+
+	t.Run("Success", func(t *testing.T) {
+		for i := 0; i < 3; i++ {
+			sessions, err := s.BatchCreateSessions(ctx, &spannerpb.BatchCreateSessionsRequest{
+				Database:     validDatabaseName,
+				SessionCount: 3,
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(sessions.Session) != 3 {
+				t.Error("the number of sessions should be 3")
+			}
+		}
+	})
+
+	t.Run("Invalid", func(t *testing.T) {
+		names := []string{
+			"projects/fake/instances/fake/databases/",
+			"projects/fake/instances//databases/fake",
+			"projects//instances/fake/databases/fake",
+			"xx/fake/instances/fake/databases/fake",
+			"projects/fake/xx/fake/databases/fake",
+			"projects/fake/instances/fake/xx/fake",
+			"xxx",
+		}
+		for _, name := range names {
+			_, err := s.BatchCreateSessions(ctx, &spannerpb.BatchCreateSessionsRequest{
+				Database:     name,
+				SessionCount: 1,
+			})
+			st := status.Convert(err)
+			if want, got := codes.InvalidArgument, st.Code(); want != got {
+				t.Errorf("expect %v but got %v for %v", want, got, name)
+			}
+		}
+	})
+}
+
+func TestGetSession(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+	session, _ := testCreateSession(t, s)
+
+	_, err := s.GetSession(ctx, &spannerpb.GetSessionRequest{
+		Name: session.Name,
+	})
+	if err != nil {
+		t.Fatalf("GetSession must success: %v", err)
+
+		_, err = s.GetSession(ctx, &spannerpb.GetSessionRequest{
+			Name: "xx",
+		})
+		st := status.Convert(err)
+		if want, got := codes.InvalidArgument, st.Code(); want != got {
+			t.Errorf("expect %v but got %v", want, got)
+		}
+	}
+	_, err = s.GetSession(ctx, &spannerpb.GetSessionRequest{
+		Name: session.Name + "x",
+	})
+	st := status.Convert(err)
+	if want, got := codes.NotFound, st.Code(); want != got {
+		t.Errorf("expect %v but got %v", want, got)
+	}
+}
+
+func TestListSessions(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+
+	dbName1 := fmt.Sprintf("projects/fake/instances/fakse/databases/%s", uuidpkg.New().String())
+	dbName2 := fmt.Sprintf("projects/fake/instances/fakse/databases/%s", uuidpkg.New().String())
+
+	var sessions1 []*spannerpb.Session
+	var sessions2 []*spannerpb.Session
+
+	for i := 0; i < 3; i++ {
+		session, err := s.CreateSession(context.Background(), &spannerpb.CreateSessionRequest{
+			Database: dbName1,
+		})
+		if err != nil {
+			t.Fatalf("failed to create session: %v", err)
+		}
+		sessions1 = append(sessions1, session)
+	}
+	for i := 0; i < 2; i++ {
+		session, err := s.CreateSession(context.Background(), &spannerpb.CreateSessionRequest{
+			Database: dbName2,
+		})
+		if err != nil {
+			t.Fatalf("failed to create session: %v", err)
+		}
+		sessions2 = append(sessions2, session)
+	}
+
+	res1, err := s.ListSessions(ctx, &spannerpb.ListSessionsRequest{
+		Database: dbName1,
+	})
+	if err != nil {
+		t.Fatalf("ListSession must succeed: %v", err)
+	}
+	for _, s := range res1.Sessions {
+		var found bool
+		for _, s2 := range sessions1 {
+			if s.Name == s2.Name {
+				found = true
+				continue
+			}
+		}
+		if !found {
+			t.Errorf("session %s not found", s.Name)
+		}
+	}
+
+	res2, err := s.ListSessions(ctx, &spannerpb.ListSessionsRequest{
+		Database: dbName2,
+	})
+	if err != nil {
+		t.Fatalf("ListSession must succeed: %v", err)
+	}
+	for _, s := range res2.Sessions {
+		var found bool
+		for _, s2 := range sessions2 {
+			if s.Name == s2.Name {
+				found = true
+				continue
+			}
+		}
+		if !found {
+			t.Errorf("session %s not found", s.Name)
+		}
+	}
+}
+
 func TestDeleteSession(t *testing.T) {
 	ctx := context.Background()
 
