@@ -406,6 +406,48 @@ func (i *TableIndex) HasColumn(c string) bool {
 type TableView struct {
 	ResultItems    []ResultItem
 	ResultItemsMap map[string]ResultItem
+	ambiguous      map[string]struct{}
+}
+
+func (v *TableView) AllItems() []ResultItem {
+	return v.ResultItems
+}
+
+func (v *TableView) Get(id string) (ResultItem, bool, bool) {
+	if _, ok := v.ambiguous[id]; ok {
+		return ResultItem{}, true, false
+	}
+	item, ok := v.ResultItemsMap[id]
+	if !ok {
+		return ResultItem{}, false, true
+	}
+	return item, false, false
+}
+
+func createTableViewFromItems(items1 []ResultItem, items2 []ResultItem) *TableView {
+	newItems := make([]ResultItem, 0, len(items1)+len(items2))
+	newItemsMap := make(map[string]ResultItem, len(items1)+len(items2))
+	ambiguous := make(map[string]struct{})
+
+	for _, items := range [][]ResultItem{items1, items2} {
+		for _, item := range items {
+			newItems = append(newItems, item)
+			if item.Name != "" {
+				_, ok := newItemsMap[item.Name]
+				if ok {
+					ambiguous[item.Name] = struct{}{}
+				} else {
+					newItemsMap[item.Name] = item
+				}
+			}
+		}
+	}
+
+	return &TableView{
+		ResultItems:    newItems,
+		ResultItemsMap: newItemsMap,
+		ambiguous:      ambiguous,
+	}
 }
 
 func createTableViewFromTable(table *Table) *TableView {
