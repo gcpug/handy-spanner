@@ -70,6 +70,7 @@ Note that it becomes specific implementations for a fake server, which means you
    * Query Parameters
    * JOINs
    * Subquery
+   * SET operations: UNION, INTERSECT, EXCEPT
    * UNNEST (partially)
    * Functions (partially)
    * Arithmetic operations
@@ -94,8 +95,9 @@ Note that it becomes specific implementations for a fake server, which means you
 * Query
    * Strict type checking
    * More functions
-   * UNION, INTERSECT, EXCEPT
    * Partionan Query
+   * EXCEPT ALL and INTERSECT ALL
+   * Merging INT64 and FLOAT64 in SET operations
 * DML
    * not yet
 * DDL

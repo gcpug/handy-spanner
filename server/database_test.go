@@ -1420,6 +1420,117 @@ func TestQuery(t *testing.T) {
 				[]interface{}{int64(300)},
 			},
 		},
+		"Compound_Union_All_OrderBy_Limit": {
+			sql: `SELECT Id FROM Simple UNION ALL (SELECT Id FROM Simple) ORDER BY Id LIMIT 3`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+			},
+		},
+		"Compound_Intersect_Distinct": {
+			sql: `SELECT Id FROM Simple INTERSECT DISTINCT SELECT Id FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+			},
+		},
+		"Compound_Intersect_Distinct2": {
+			sql: `SELECT Id FROM Simple INTERSECT DISTINCT (SELECT Id FROM Simple WHERE Id IN (100, 300))`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(300)},
+			},
+		},
+		"Compound_Intersect_Distinct_Limit": {
+			sql: `SELECT Id FROM Simple INTERSECT DISTINCT (SELECT Id FROM Simple) LIMIT 2`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+			},
+		},
+		"Compound_Intersect_Distinct_OrderBy": {
+			sql: `SELECT Id FROM Simple INTERSECT DISTINCT (SELECT Id FROM Simple) ORDER BY Id DESC`,
+			expected: [][]interface{}{
+				[]interface{}{int64(300)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(100)},
+			},
+		},
+		"Compound_Except_Distinct": {
+			sql:      `SELECT Id FROM Simple EXCEPT DISTINCT SELECT Id FROM Simple`,
+			expected: nil,
+		},
+		"Compound_Except_Distinct2": {
+			sql: `SELECT Id FROM Simple EXCEPT DISTINCT (SELECT Id FROM Simple WHERE Id IN (100, 300))`,
+			expected: [][]interface{}{
+				[]interface{}{int64(200)},
+			},
+		},
+		"Compound_Except_Distinct_Limit": {
+			sql: `SELECT Id FROM Simple EXCEPT DISTINCT (SELECT Id FROM Simple WHERE Id = 200) LIMIT 1`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+		"Compound_Except_Distinct_OrderBy": {
+			sql: `SELECT Id FROM Simple EXCEPT DISTINCT (SELECT Id FROM Simple WHERE Id = 200) ORDER BY Id DESC`,
+			expected: [][]interface{}{
+				[]interface{}{int64(300)},
+				[]interface{}{int64(100)},
+			},
+		},
+		"Compound_Complex1": {
+			sql: `SELECT Id FROM Simple UNION ALL SELECT Id+2 FROM Simple UNION ALL SELECT Id+1 FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+				[]interface{}{int64(102)},
+				[]interface{}{int64(202)},
+				[]interface{}{int64(302)},
+				[]interface{}{int64(101)},
+				[]interface{}{int64(201)},
+				[]interface{}{int64(301)},
+			},
+		},
+		"Compound_Complex2": {
+			sql: `SELECT Id FROM Simple UNION ALL SELECT Id+1 FROM Simple UNION ALL SELECT Id+2 FROM Simple ORDER BY Id DESC`,
+			expected: [][]interface{}{
+				[]interface{}{int64(302)},
+				[]interface{}{int64(301)},
+				[]interface{}{int64(300)},
+				[]interface{}{int64(202)},
+				[]interface{}{int64(201)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(102)},
+				[]interface{}{int64(101)},
+				[]interface{}{int64(100)},
+			},
+		},
+		"Compound_Complex3": {
+			sql: `(SELECT Id FROM Simple UNION ALL SELECT Id+1 FROM Simple) INTERSECT DISTINCT SELECT Id FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+			},
+		},
+		// TODO: INT64 and FLOAT64 are compatible value type
+		// "Compound_MergeIntFloat": {
+		// 	sql: `SELECT 1 UNION ALL SELECT 0.1`,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{float64(1)},
+		// 		[]interface{}{float64(0.1)},
+		// 	},
+		// },
+		// "Compound_MergeIntFloat2": {
+		// 	sql: `SELECT 1 UNION DISTINCT SELECT 1.0`,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{float64(1.0)},
+		// 	},
+		// },
 
 		"Arithmetic_Add": {
 			sql: `SELECT 1 + 2`,
@@ -1768,6 +1879,27 @@ func TestQueryError(t *testing.T) {
 			sql:  `SELECT 1 FROM Simple a JOIN (SELECT Value FROM Simple) b USING (Id)`,
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`^Column Id in USING clause not found on right side of join`),
+		},
+
+		"CompoundColumnsNum": {
+			sql:  `SELECT 1 UNION ALL SELECT 1, 2`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Queries in UNION ALL have mismatched column count; query 1 has 1 column, query 2 has 2 columns`),
+		},
+		"CompoundColumnsNum2": {
+			sql:  `SELECT 1, 2 INTERSECT DISTINCT SELECT 1`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Queries in INTERSECT DISTINCT have mismatched column count; query 1 has 2 column, query 2 has 1 columns`),
+		},
+		"CompoundColumnsType": {
+			sql:  `SELECT 1 EXCEPT DISTINCT SELECT "xx"`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Column 1 in EXCEPT DISTINCT has incompatible types: INT64, STRING`),
+		},
+		"CompoundColumnsType2": {
+			sql:  `SELECT 1, 0.1 EXCEPT DISTINCT SELECT 1, true`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Column 2 in EXCEPT DISTINCT has incompatible types: FLOAT64, BOOL`),
 		},
 	}
 
