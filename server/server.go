@@ -128,6 +128,22 @@ func (s *server) getSession(name string) (*session, error) {
 	return session, nil
 }
 
+func (s *server) createSession(db *database, dbName string) (*session, error) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+
+	for i := 0; i < 3; i++ {
+		session := newSession(db, dbName)
+		if _, ok := s.sessions[session.Name()]; ok {
+			continue
+		}
+		s.sessions[session.Name()] = session
+		return session, nil
+	}
+
+	return nil, status.Errorf(codes.Internal, "create session failed")
+}
+
 func (s *server) getOrCreateDatabase(name string) (*database, error) {
 	s.dbMu.RLock()
 	db, ok := s.db[name]
@@ -147,9 +163,6 @@ func (s *server) getOrCreateDatabase(name string) (*database, error) {
 }
 
 func (s *server) CreateSession(ctx context.Context, req *spannerpb.CreateSessionRequest) (*spannerpb.Session, error) {
-	s.sessionMu.Lock()
-	defer s.sessionMu.Unlock()
-
 	_, ok := parseDatabaseName(req.Database)
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "Invalid CreateSession request")
@@ -160,34 +173,67 @@ func (s *server) CreateSession(ctx context.Context, req *spannerpb.CreateSession
 		return nil, err
 	}
 
-	var ret *session
-	for i := 0; i < 3; i++ {
-		session := newSession(db, req.Database)
-		if _, ok := s.sessions[session.Name()]; ok {
-			continue
-		}
-		s.sessions[session.Name()] = session
-		ret = session
-		break
+	session, err := s.createSession(db, req.Database)
+	if err != nil {
+		return nil, err
 	}
 
-	if ret == nil {
-		return nil, status.Errorf(codes.Internal, "create session failed")
-	}
-
-	return ret.Proto(), nil
+	return session.Proto(), nil
 }
 
 func (s *server) BatchCreateSessions(ctx context.Context, req *spannerpb.BatchCreateSessionsRequest) (*spannerpb.BatchCreateSessionsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: BatchCreateSessions")
+	_, ok := parseDatabaseName(req.Database)
+	if !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "Invalid BatchCreateSessions request")
+	}
+
+	db, err := s.getOrCreateDatabase(req.Database)
+	if err != nil {
+		return nil, err
+	}
+
+	sessions := make([]*spannerpb.Session, req.SessionCount)
+	for i := 0; i < int(req.SessionCount); i++ {
+		s, err := s.createSession(db, req.Database)
+		if err != nil {
+			return nil, err
+		}
+		sessions[i] = s.Proto()
+	}
+
+	return &spannerpb.BatchCreateSessionsResponse{
+		Session: sessions,
+	}, nil
 }
 
 func (s *server) GetSession(ctx context.Context, req *spannerpb.GetSessionRequest) (*spannerpb.Session, error) {
-	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: GetSession")
+	session, err := s.getSession(req.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return session.Proto(), nil
 }
 
 func (s *server) ListSessions(ctx context.Context, req *spannerpb.ListSessionsRequest) (*spannerpb.ListSessionsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ListSessions")
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+
+	// TODO: respect page size
+
+	prefix := req.Database + "/"
+	var sessions []*spannerpb.Session
+	for name, session := range s.sessions {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+
+		sessions = append(sessions, session.Proto())
+	}
+
+	return &spannerpb.ListSessionsResponse{
+		Sessions: sessions,
+	}, nil
 }
 
 func (s *server) DeleteSession(ctx context.Context, req *spannerpb.DeleteSessionRequest) (*emptypb.Empty, error) {
