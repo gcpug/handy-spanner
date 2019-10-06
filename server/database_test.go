@@ -245,7 +245,7 @@ func makeTestValue(v interface{}) Value {
 			Data: v,
 			Type: ValueType{
 				Code:      TCArray,
-				ArrayType: &ValueType{Code: TCString},
+				ArrayType: &ValueType{Code: TCInt64},
 			},
 		}
 	default:
@@ -1249,7 +1249,47 @@ func TestQuery(t *testing.T) {
 				[]interface{}{int64(3)},
 			},
 		},
-		"From_Unnest_Literal_As": {
+		"From_Unnest_Literal_Params_Array": {
+			sql: `SELECT * FROM UNNEST (@foo)`,
+			params: map[string]Value{
+				"foo": makeTestValue([]int64{3, 4}),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(3)},
+				[]interface{}{int64(4)},
+			},
+		},
+		"From_Unnest_Literal_Params_Array_WithOffset": {
+			sql: `SELECT * FROM UNNEST (@foo) WITH OFFSET`,
+			params: map[string]Value{
+				"foo": makeTestValue([]int64{3, 4}),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(3), int64(0)},
+				[]interface{}{int64(4), int64(1)},
+			},
+		},
+		"From_Unnest_Literal_Params_Alias": {
+			sql: `SELECT x FROM UNNEST (@foo) AS x`,
+			params: map[string]Value{
+				"foo": makeTestValue([]int64{3, 4}),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(3)},
+				[]interface{}{int64(4)},
+			},
+		},
+		"From_Unnest_Literal_Params_WithOffset_Alias": {
+			sql: `SELECT x, y FROM UNNEST (@foo) AS x WITH OFFSET y`,
+			params: map[string]Value{
+				"foo": makeTestValue([]int64{3, 4}),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(3), int64(0)},
+				[]interface{}{int64(4), int64(1)},
+			},
+		},
+		"From_Unnest_Literal_Alias_Star": {
 			sql: `SELECT * FROM UNNEST ([1,2,3]) AS xxx`,
 			expected: [][]interface{}{
 				[]interface{}{int64(1)},
@@ -1257,12 +1297,28 @@ func TestQuery(t *testing.T) {
 				[]interface{}{int64(3)},
 			},
 		},
-		"From_Unnest_Literal_As2": {
+		"From_Unnest_Literal_Alias_Star_WithOffset": {
+			sql: `SELECT * FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(0)},
+				[]interface{}{int64(2), int64(1)},
+				[]interface{}{int64(3), int64(2)},
+			},
+		},
+		"From_Unnest_Literal_Alias_Ident": {
 			sql: `SELECT xxx FROM UNNEST ([1,2,3]) AS xxx`,
 			expected: [][]interface{}{
 				[]interface{}{int64(1)},
 				[]interface{}{int64(2)},
 				[]interface{}{int64(3)},
+			},
+		},
+		"From_Unnest_Literal_Alias_WithOffset_Ident": {
+			sql: `SELECT xxx, yyy FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(0)},
+				[]interface{}{int64(2), int64(1)},
+				[]interface{}{int64(3), int64(2)},
 			},
 		},
 
@@ -1723,43 +1779,43 @@ func TestQuery(t *testing.T) {
 			},
 		},
 		"Function_Max_Int": {
-			sql: `SELECT MAX(Id) FROM Simple`,
+			sql: `SELECT MAX(x) FROM UNNEST([100, 200, 300]) AS x`,
 			expected: [][]interface{}{
 				[]interface{}{int64(300)},
 			},
 		},
 		"Function_Max_String": {
-			sql: `SELECT MAX(Value) FROM Simple`,
+			sql: `SELECT MAX(x) FROM UNNEST(["xxx", "zz", "yy"]) AS x`,
 			expected: [][]interface{}{
-				[]interface{}{"zzz"},
+				[]interface{}{"zz"},
 			},
 		},
 		"Function_Min_Int": {
-			sql: `SELECT MIN(Id) FROM Simple`,
+			sql: `SELECT MIN(x) FROM UNNEST([100, 200, 300]) AS x`,
 			expected: [][]interface{}{
 				[]interface{}{int64(100)},
 			},
 		},
 		"Function_Min_String": {
-			sql: `SELECT MIN(Value) FROM Simple`,
+			sql: `SELECT MIN(x) FROM UNNEST(["xxx", "zz", "yy"]) AS x`,
 			expected: [][]interface{}{
 				[]interface{}{"xxx"},
 			},
 		},
 		"Function_Avg": {
-			sql: `SELECT AVG(Id) as avg FROM Simple`, // TODO: use unnest
+			sql: `SELECT AVG(x) as avg FROM UNNEST([100, 200, NULL, 300, 100]) AS x`,
 			expected: [][]interface{}{
-				[]interface{}{float64(200)},
+				[]interface{}{float64(175)},
 			},
 		},
 		"Function_Avg_Distinct": {
-			sql: `SELECT AVG(DISTINCT Id) as avg FROM Simple`, // TODO: use unnest
+			sql: `SELECT AVG(DISTINCT x) as avg FROM UNNEST([100, 200, NULL, 300, 100]) AS x`,
 			expected: [][]interface{}{
 				[]interface{}{float64(200)},
 			},
 		},
 		"Function_Sum": {
-			sql: `SELECT SUM(Id) as avg FROM Simple`, // TODO: use unnest
+			sql: `SELECT SUM(x) as avg FROM UNNEST([100, 200, 300]) AS x`,
 			expected: [][]interface{}{
 				[]interface{}{int64(600)},
 			},

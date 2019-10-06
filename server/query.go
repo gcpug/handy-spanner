@@ -367,8 +367,48 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 	}
 }
 
+// buildUnnestView creates a Tableview from an UNNEST() expression.
+//
+// buildUnnestExpr creates a table like `VALUES (a), (b), (c)`, but the columns are unnamed.
+// If aliases for unnested values or offsets are used, they can be specified by the name.
+// e.g. SELECT MAX(x), MAX(y) FROM UNNEST() AS x OFFSET WITH AS y
+//
+// sqlite cannot have syntax to make alias names for VALUES columns.
+// Then we use UNION to make them have column names by merging into a table with column names.
+// A table with column names can be created with dynamically with literals.
+// e.g. `SELECT 1 AS x UNION ALL VALUES (a), (b), (c)`
+// But it has an uneeded row for merging into that, so it can use LIMIT 0 clause to ignore the row.
+// e.g. `SELECT 1 AS x LIMIT 0 UNION ALL VALUES (a), (b), (c)`
+// To make the gouping of statements clear, it needs to put parenthesis in select statement, but
+// sqlite cannot simply put parenthesis around select statement, so it needs to use subquery like this:
+// e.g. `SELECT * FROM (SELECT 1 AS x LIMIT 0) UNION ALL VALUES (a), (b), (c)`
+//
+// As the result, `SELECT MAX(x) FROM UNNEST([1,2,3]) AS x` for spanner query generates:
+//   SELECT MAX(UNNEST0.value)
+//     FROM
+//       SELECT * FROM (SELECT 1 AS value LIMIT 0)
+//         UNION ALL
+//       VALUES (1), (2), (3)
+//       AS UNNEST0
+//
+// `SELECT MAX(x), MAX(y) FROM UNNEST([1,2,3]) AS x WITH OFFSET AS y` for spanner query generates:
+//   SELECT MAX(UNNEST0.value), MAX(UNNEST0.column)
+//     FROM
+//       SELECT * FROM (SELECT 1 AS value, 1 AS column LIMIT 0)
+//         UNION ALL
+//       VALUES (1, 0), (2, 1), (3, 2)
+//       AS UNNEST0
 func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []interface{}, error) {
-	s, data, err := b.buildUnnestExpr(src.Expr)
+	var offset bool
+	var offsetAlias string
+	if src.WithOffset != nil {
+		offset = true
+		if src.WithOffset.As != nil {
+			offsetAlias = src.WithOffset.As.Alias.Name
+		}
+	}
+
+	s, data, err := b.buildUnnestExpr(src.Expr, offset)
 	if err != nil {
 		return nil, "", nil, wrapExprError(err, src.Expr, "UNNEST")
 	}
@@ -382,17 +422,37 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []i
 		itemName = src.As.Alias.Name
 	}
 
-	item := ResultItem{
-		Name:      itemName,
-		ValueType: *s.ValueType.ArrayType,
-		Expr: Expr{
-			Raw:       fmt.Sprintf("%s.column1", viewName), // implicitly named column1
+	items := []ResultItem{
+		{
+			Name:      itemName,
 			ValueType: *s.ValueType.ArrayType,
+			Expr: Expr{
+				Raw:       fmt.Sprintf("%s.value", viewName), // implicitly named column1
+				ValueType: *s.ValueType.ArrayType,
+			},
 		},
 	}
 
-	view := createTableViewFromItems([]ResultItem{item}, nil)
-	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), data, nil
+	if offset {
+		items = append(items, ResultItem{
+			Name:      offsetAlias,
+			ValueType: ValueType{Code: TCInt64},
+			Expr: Expr{
+				Raw:       fmt.Sprintf("%s.offset", viewName),
+				ValueType: ValueType{Code: TCInt64},
+			},
+		})
+	}
+
+	var stmt string
+	if offset {
+		stmt = "SELECT * FROM (SELECT 0 AS value, 0 as offset LIMIT 0) UNION ALL " + s.Raw
+	} else {
+		stmt = "SELECT * FROM (SELECT 0 AS value LIMIT 0) UNION ALL " + s.Raw
+	}
+
+	view := createTableViewFromItems(items, nil)
+	return view, fmt.Sprintf("(%s) AS %s", stmt, viewName), data, nil
 }
 
 func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultItem, string, error) {
@@ -688,7 +748,7 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface
 		}, data, nil
 
 	case *ast.UnnestInCondition:
-		s, d, err := b.buildUnnestExpr(c.Expr)
+		s, d, err := b.buildUnnestExpr(c.Expr, false)
 		if err != nil {
 			return NullExpr, nil, err
 		}
@@ -702,26 +762,43 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface
 	}
 }
 
-func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr) (Expr, []interface{}, error) {
+// buildUnnestExpr creates a table from UNNEST() expression.
+// sqlite cannot handle array type and UNNEST(), so this function simulates it by creating a table
+// virtually with VALUES().
+//
+// `UNNEST([a, b, c])` in spanner results in the following expression in sqlite:
+// `VALUES (a), (b), (c)`
+//
+// When array param is specified like `UNNEST(@foo)`, it expands all elements of the array like:
+// `VALUES (?), (?) (?)
+//
+// If offset for unnest is needed `UNNEST([a, b, c])` generates:
+// `VALUES (a, 0), (b, 1), (c, 2)
+func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool) (Expr, []interface{}, error) {
 	switch e := expr.(type) {
 	case *ast.Param:
 		v, ok := b.params[e.Name]
 		if !ok {
 			return NullExpr, nil, fmt.Errorf("params not found: %v", e.Name)
 		}
-		return b.unnestValue(v)
+		return b.unnestValue(v, offset)
+
 	case *ast.ArrayLiteral:
 		// TODO: check all of Array values are the same type
 
 		var ss []string
 		var data []interface{}
 		var vt *ValueType
-		for _, v := range e.Values {
+		for i, v := range e.Values {
 			s, d, err := b.buildExpr(v)
 			if err != nil {
 				return NullExpr, nil, wrapExprError(err, v, "Array Literal")
 			}
-			ss = append(ss, fmt.Sprintf("(%s)", s.Raw))
+			if offset {
+				ss = append(ss, fmt.Sprintf("(%s, %d)", s.Raw, i))
+			} else {
+				ss = append(ss, fmt.Sprintf("(%s)", s.Raw))
+			}
 			data = append(data, d...)
 
 			if vt == nil {
@@ -741,7 +818,7 @@ func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr) (Expr, []interface{}, erro
 	return NullExpr, nil, fmt.Errorf("unexpected expression type for UNNEST: %T", expr)
 }
 
-func (b *QueryBuilder) unnestValue(v Value) (Expr, []interface{}, error) {
+func (b *QueryBuilder) unnestValue(v Value, offset bool) (Expr, []interface{}, error) {
 	errMsg := "Second argument of IN UNNEST must be an array but was %s"
 	switch v.Data.(type) {
 	case nil:
@@ -761,19 +838,24 @@ func (b *QueryBuilder) unnestValue(v Value) (Expr, []interface{}, error) {
 	case []bool, []int64, []float64, []string, [][]byte:
 		vv := reflect.ValueOf(v.Data)
 		n := vv.Len()
-		var placeholders string
-		if n == 1 {
-			placeholders = "VALUES (?)"
-		} else if n > 1 {
-			placeholders = "VALUES (?)" + strings.Repeat(", (?)", n-1)
-		}
+
+		placeholders := make([]string, n)
 		args := make([]interface{}, n)
 		for i := 0; i < n; i++ {
+			if offset {
+				placeholders[i] = fmt.Sprintf("(?, %d)", i)
+			} else {
+				placeholders[i] = "(?)"
+			}
 			args[i] = vv.Index(i).Interface()
+		}
+		var raw string
+		if n > 0 {
+			raw = "VALUES " + strings.Join(placeholders, ", ")
 		}
 		return Expr{
 			ValueType: v.Type, // TODO: check correct type or not
-			Raw:       placeholders,
+			Raw:       raw,
 		}, args, nil
 	}
 
