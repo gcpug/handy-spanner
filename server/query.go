@@ -146,6 +146,40 @@ func (b *QueryBuilder) buildSubQuery(sub *ast.SubQuery) (string, []interface{}, 
 func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, []interface{}, []ResultItem, error) {
 	var ss []string
 
+	var op string
+	var fullOpName string
+	switch compound.Op {
+	case ast.SetOpUnion:
+		if compound.Distinct {
+			// distinct is used by default in sqlite
+			op = "UNION"
+			fullOpName = "UNION DISTINCT"
+		} else {
+			op = "UNION ALL"
+			fullOpName = "UNION ALL"
+		}
+	case ast.SetOpIntersect:
+		if compound.Distinct {
+			// distinct is used by default in sqlite
+			op = "INTERSECT"
+			fullOpName = "INTERSECT DISTINCT"
+		} else {
+			// sqlite does not support INTERSECT ALL
+			// TODO: simulation of INTERSECT ALL
+			return "", nil, nil, status.Errorf(codes.Unimplemented, "INTERSECT ALL is not supported yet")
+		}
+	case ast.SetOpExcept:
+		if compound.Distinct {
+			// distinct is used by default in sqlite
+			op = "EXCEPT"
+			fullOpName = "EXCEPT DISTINCT"
+		} else {
+			// sqlite does not support EXCEPT ALL
+			// TODO: simulation of EXCEPT ALL
+			return "", nil, nil, status.Errorf(codes.Unimplemented, "EXCEPT ALL is not supported yet")
+		}
+	}
+
 	s, data, items, err := BuildQuery(b.db, compound.Queries[0], b.params)
 	if err != nil {
 		return "", nil, nil, err
@@ -165,20 +199,29 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 	// SELECT * FROM (SELECT .. FROM xxx) UNION ALL SELECT * FROM (SELECT ... FROM yyy)
 	ss = append(ss, fmt.Sprintf("SELECT * FROM (%s)", s))
 
-	for _, query := range compound.Queries[1:] {
-		s, d, items, err := BuildQuery(b.db, query, b.params)
+	for i, query := range compound.Queries[1:] {
+		s, d, items2, err := BuildQuery(b.db, query, b.params)
 		if err != nil {
 			return "", nil, nil, err
 		}
-		_ = items
+
+		if len(items) != len(items2) {
+			return "", nil, nil, status.Errorf(codes.InvalidArgument,
+				"Queries in %s have mismatched column count; query 1 has %d column, query %d has %d columns",
+				fullOpName, len(items), i+2, len(items2))
+		}
+
+		// check the result items match to the first query's items
+		for j := range items {
+			if !compareValueType(items[j].ValueType, items2[j].ValueType) {
+				return "", nil, nil, status.Errorf(codes.InvalidArgument,
+					"Column %d in %s has incompatible types: %s, %s",
+					j+1, fullOpName, items[j].ValueType, items2[j].ValueType)
+			}
+		}
+
 		ss = append(ss, fmt.Sprintf("SELECT * FROM (%s)", s))
 		data = append(data, d...)
-	}
-
-	distinct := "ALL"
-	if compound.Distinct {
-		// distinct is used by default in sqlite
-		distinct = ""
 	}
 
 	var orderByClause string
@@ -208,7 +251,7 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 		b.args = append(b.args, data...)
 	}
 
-	query := strings.Join(ss, fmt.Sprintf(" %s %s ", compound.Op, distinct))
+	query := strings.Join(ss, fmt.Sprintf(" %s ", op))
 	query = fmt.Sprintf("%s%s%s", query, orderByClause, limitClause)
 	return query, data, items, nil
 }
@@ -301,43 +344,34 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 		return b.buildUnnestView(src)
 
 	case *ast.SubQueryTableExpr:
-		switch q := src.Query.(type) {
-		case *ast.Select:
-			query, data, items, err := BuildQuery(b.db, q, b.params)
-			if err != nil {
-				return nil, "", nil, fmt.Errorf("Subquery error: %v", err)
-			}
-
-			itemsMap := make(map[string]ResultItem, len(items))
-			for i := range items {
-				name := items[i].Name
-				if name != "" {
-					itemsMap[name] = items[i]
-				}
-			}
-			view := &TableView{
-				ResultItems:    items,
-				ResultItemsMap: itemsMap,
-			}
-			b.allResultItems = append(b.allResultItems, view.ResultItems)
-
-			var viewName string
-			if src.As == nil {
-				viewName = fmt.Sprintf("__SUBQUERY%d", b.subqueryViewNum)
-				b.subqueryViewNum++
-			} else {
-				viewName = src.As.Alias.Name
-				b.views["."+viewName] = view
-			}
-
-			return view, fmt.Sprintf("(%s) AS %s", query, viewName), data, nil
-
-		case *ast.SubQuery:
-			return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
-		case *ast.CompoundQuery:
-			return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
+		query, data, items, err := BuildQuery(b.db, src.Query, b.params)
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("Subquery error: %v", err)
 		}
-		return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for FROM", src)
+
+		itemsMap := make(map[string]ResultItem, len(items))
+		for i := range items {
+			name := items[i].Name
+			if name != "" {
+				itemsMap[name] = items[i]
+			}
+		}
+		view := &TableView{
+			ResultItems:    items,
+			ResultItemsMap: itemsMap,
+		}
+		b.allResultItems = append(b.allResultItems, view.ResultItems)
+
+		var viewName string
+		if src.As == nil {
+			viewName = fmt.Sprintf("__SUBQUERY%d", b.subqueryViewNum)
+			b.subqueryViewNum++
+		} else {
+			viewName = src.As.Alias.Name
+			b.views["."+viewName] = view
+		}
+
+		return view, fmt.Sprintf("(%s) AS %s", query, viewName), data, nil
 	case *ast.ParenTableExpr:
 		view, q, d, err := b.buildQueryTable(src.Source)
 		if err != nil {
@@ -663,27 +697,18 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface
 		}, data, nil
 
 	case *ast.SubQueryInCondition:
-		switch q := c.Query.(type) {
-		case *ast.Select:
-			query, data, items, err := BuildQuery(b.db, q, b.params)
-			if err != nil {
-				return NullExpr, nil, newExprErrorf(nil, false, "BuildQuery error for ScalarSubquery: %v", err)
-			}
-			if len(items) != 1 {
-				return NullExpr, nil, newExprErrorf(nil, true, "Subquery of type IN must have only one output column")
-			}
-			return Expr{
-				ValueType: items[0].ValueType, // inherit ValueType from result item
-				Raw:       fmt.Sprintf("(%s)", query),
-			}, data, nil
-
-		case *ast.SubQuery:
-			return NullExpr, nil, newExprErrorf(nil, false, "SubQuery for %T not supported yet", c)
-		case *ast.CompoundQuery:
-			return NullExpr, nil, newExprErrorf(nil, false, "CompoundQuery for %T not supported yet", c)
+		query, data, items, err := BuildQuery(b.db, c.Query, b.params)
+		if err != nil {
+			return NullExpr, nil, newExprErrorf(nil, false, "BuildQuery error for SubqueryInCondition: %v", err)
 		}
+		if len(items) != 1 {
+			return NullExpr, nil, newExprErrorf(nil, true, "Subquery of type IN must have only one output column")
+		}
+		return Expr{
+			ValueType: items[0].ValueType, // inherit ValueType from result item
+			Raw:       fmt.Sprintf("(%s)", query),
+		}, data, nil
 
-		return NullExpr, nil, fmt.Errorf("Sub Query is not supported yet")
 	case *ast.UnnestInCondition:
 		s, d, err := b.buildUnnestExpr(c.Expr)
 		if err != nil {
@@ -816,7 +841,6 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				Code: TCInt64, // TODO
 			}
 		case ast.OpAdd, ast.OpSub, ast.OpMul:
-			fmt.Printf("left %v right %v\n", left.ValueType, right.ValueType)
 			code := TCInt64
 			if left.ValueType.Code == TCFloat64 || right.ValueType.Code == TCFloat64 {
 				code = TCFloat64

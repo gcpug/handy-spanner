@@ -60,6 +60,30 @@ func (t ValueType) IsStruct() bool {
 	return t.Code == TCStruct
 }
 
+func (t ValueType) String() string {
+	switch t.Code {
+	case TCBool:
+		return "BOOL"
+	case TCInt64:
+		return "INT64"
+	case TCFloat64:
+		return "FLOAT64"
+	case TCTimestamp:
+		return "TIMESTAMP"
+	case TCDate:
+		return "DATE"
+	case TCString:
+		return "STRING"
+	case TCBytes:
+		return "BYTES"
+	case TCArray:
+		return "ARRAY" // TODO
+	case TCStruct:
+		return "STRUCT" // TODO
+	}
+	return "(unknown type)"
+}
+
 func compareValueType(a, b ValueType) bool {
 	return a == b
 }
