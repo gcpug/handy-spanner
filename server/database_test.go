@@ -1258,7 +1258,7 @@ func TestQuery(t *testing.T) {
 			},
 		},
 		"From_Unnest_Literal_As2": {
-			sql: `SELECT xxx.* FROM UNNEST ([1,2,3]) AS xxx`,
+			sql: `SELECT xxx FROM UNNEST ([1,2,3]) AS xxx`,
 			expected: [][]interface{}{
 				[]interface{}{int64(1)},
 				[]interface{}{int64(2)},
@@ -1266,6 +1266,20 @@ func TestQuery(t *testing.T) {
 			},
 		},
 
+		"From_Join_CommaJoin": {
+			sql: `SELECT * FROM Simple a, Simple b`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx", int64(100), "xxx"},
+				[]interface{}{int64(100), "xxx", int64(200), "yyy"},
+				[]interface{}{int64(100), "xxx", int64(300), "zzz"},
+				[]interface{}{int64(200), "yyy", int64(100), "xxx"},
+				[]interface{}{int64(200), "yyy", int64(200), "yyy"},
+				[]interface{}{int64(200), "yyy", int64(300), "zzz"},
+				[]interface{}{int64(300), "zzz", int64(100), "xxx"},
+				[]interface{}{int64(300), "zzz", int64(200), "yyy"},
+				[]interface{}{int64(300), "zzz", int64(300), "zzz"},
+			},
+		},
 		"From_Join_ON": {
 			sql: `SELECT a.* FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE b.Value = "xxx"`,
 			expected: [][]interface{}{
@@ -1819,6 +1833,11 @@ func TestQueryError(t *testing.T) {
 		code   codes.Code
 		msg    *regexp.Regexp
 	}{
+		"StarWithoutFromClause": {
+			sql:  "SELECT *",
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`SELECT \* must have a FROM clause`),
+		},
 		"TableNotFound": {
 			sql:  "SELECT * FROM xxx",
 			code: codes.InvalidArgument,
@@ -1838,6 +1857,28 @@ func TestQueryError(t *testing.T) {
 			sql:  "SELECT a.foo FROM Simple a",
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`Name foo not found inside a`),
+		},
+		"IdentiferNotFoundWithoutFromClause": {
+			sql:  "SELECT x",
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Unrecognized name: x`),
+		},
+		"PathIdentiferNotFoundWithoutFromClause": {
+			sql:  "SELECT x.*",
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Unrecognized name: x`),
+		},
+
+		"DuplicateTableAlias": {
+			sql: "SELECT 1 FROM Simple a, Simple a",
+			// code: codes.InvalidArgument,
+			code: codes.Unknown, // TODO
+			msg:  regexp.MustCompile(`Duplicate table alias a in the same FROM clause`),
+		},
+		"AmbiguousColumn": {
+			sql:  "SELECT Id FROM Simple a, Simple b",
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Column name Id is ambiguous`),
 		},
 
 		// TODO: memefish cannot parse this sql

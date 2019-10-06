@@ -29,10 +29,9 @@ type QueryBuilder struct {
 	db   *database
 	stmt ast.QueryExpr
 
-	views          map[string]*TableView
-	allResultItems [][]ResultItem
-	resultItems    map[string][]ResultItem
-	params         map[string]Value
+	views    map[string]*TableView
+	rootView *TableView
+	params   map[string]Value
 
 	args []interface{}
 
@@ -44,11 +43,10 @@ type QueryBuilder struct {
 
 func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value) (string, []interface{}, []ResultItem, error) {
 	b := &QueryBuilder{
-		db:          db,
-		stmt:        stmt,
-		views:       make(map[string]*TableView),
-		resultItems: make(map[string][]ResultItem),
-		params:      params,
+		db:     db,
+		stmt:   stmt,
+		views:  make(map[string]*TableView),
+		params: params,
 	}
 	return b.Build()
 }
@@ -74,6 +72,14 @@ func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
 	return "", nil, nil, status.Errorf(codes.Unimplemented, "not unknown expression %T", b.stmt)
 }
 
+func (b *QueryBuilder) registerTableAlias(view *TableView, name string) error {
+	if _, ok := b.views[name]; ok {
+		return newExprErrorf(nil, true, "Duplicate table alias a in the same FROM clause")
+	}
+	b.views[name] = view
+	return nil
+}
+
 func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []interface{}, []ResultItem, error) {
 	if len(selectStmt.Results) == 0 {
 		return "", nil, nil, status.Errorf(codes.InvalidArgument, "Invalid query")
@@ -82,12 +88,13 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 	var fromClause string
 	var fromData []interface{}
 	if selectStmt.From != nil {
-		_, s, d, err := b.buildQueryTable(selectStmt.From.Source)
+		view, s, d, err := b.buildQueryTable(selectStmt.From.Source)
 		if err != nil {
 			return "", nil, nil, err
 		}
 		fromClause = "FROM " + s
 		fromData = d
+		b.rootView = view
 	}
 
 	resultItems, selectQuery, err := b.buildResultSet(selectStmt.Results)
@@ -115,14 +122,8 @@ func (b *QueryBuilder) buildSubQuery(sub *ast.SubQuery) (string, []interface{}, 
 
 	var orderByClause string
 	if sub.OrderBy != nil {
-		itemsMap := make(map[string][]ResultItem)
-		for _, i := range items {
-			if i.Name == "" {
-				continue
-			}
-			itemsMap[i.Name] = append(itemsMap[i.Name], i)
-		}
-		s, data, err := b.buildQueryOrderByClause(sub.OrderBy, itemsMap)
+		view := createTableViewFromItems(items, nil)
+		s, data, err := b.buildQueryOrderByClause(sub.OrderBy, view)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -226,14 +227,8 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 
 	var orderByClause string
 	if compound.OrderBy != nil {
-		itemsMap := make(map[string][]ResultItem)
-		for _, i := range items {
-			if i.Name == "" {
-				continue
-			}
-			itemsMap[i.Name] = append(itemsMap[i.Name], i)
-		}
-		s, data, err := b.buildQueryOrderByClause(compound.OrderBy, itemsMap)
+		view := createTableViewFromItems(items, nil)
+		s, data, err := b.buildQueryOrderByClause(compound.OrderBy, view)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -272,15 +267,15 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 		var query string
 		if src.As == nil {
 			query = t.Name
-			b.views["."+t.Name] = view
+			if err := b.registerTableAlias(view, t.Name); err != nil {
+				return nil, "", nil, err
+			}
 		} else {
 			query = fmt.Sprintf("%s AS %s", t.Name, src.As.Alias.Name)
-			b.views["."+src.As.Alias.Name] = view
+			if err := b.registerTableAlias(view, src.As.Alias.Name); err != nil {
+				return nil, "", nil, err
+			}
 		}
-		for key, item := range view.ResultItemsMap {
-			b.resultItems[key] = append(b.resultItems[key], item)
-		}
-		b.allResultItems = append(b.allResultItems, view.ResultItems)
 
 		return view, query, nil, nil
 	case *ast.Join:
@@ -333,12 +328,10 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 				names[i] = name
 			}
 			condition = fmt.Sprintf("USING (%s)", strings.Join(names, ", "))
-		default:
-			return nil, "", nil, status.Errorf(codes.Unimplemented, "unknown condition for JOIN: %T", cond)
 		}
 
-		// TODO: return joined view
-		return nil, fmt.Sprintf("%s %s %s %s", q1, src.Op, q2, condition), data, nil
+		newView := createTableViewFromItems(view1.AllItems(), view2.AllItems())
+		return newView, fmt.Sprintf("%s %s %s %s", q1, src.Op, q2, condition), data, nil
 
 	case *ast.Unnest:
 		return b.buildUnnestView(src)
@@ -349,18 +342,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 			return nil, "", nil, fmt.Errorf("Subquery error: %v", err)
 		}
 
-		itemsMap := make(map[string]ResultItem, len(items))
-		for i := range items {
-			name := items[i].Name
-			if name != "" {
-				itemsMap[name] = items[i]
-			}
-		}
-		view := &TableView{
-			ResultItems:    items,
-			ResultItemsMap: itemsMap,
-		}
-		b.allResultItems = append(b.allResultItems, view.ResultItems)
+		view := createTableViewFromItems(items, nil)
 
 		var viewName string
 		if src.As == nil {
@@ -368,7 +350,9 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 			b.subqueryViewNum++
 		} else {
 			viewName = src.As.Alias.Name
-			b.views["."+viewName] = view
+			if err := b.registerTableAlias(view, viewName); err != nil {
+				return nil, "", nil, err
+			}
 		}
 
 		return view, fmt.Sprintf("(%s) AS %s", query, viewName), data, nil
@@ -389,64 +373,55 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []i
 		return nil, "", nil, wrapExprError(err, src.Expr, "UNNEST")
 	}
 
-	var viewName string
-	if src.As == nil {
-		viewName = fmt.Sprintf("__UNNEST%d", b.unnestViewNum)
-		b.unnestViewNum++
-	} else {
-		viewName = src.As.Alias.Name
-	}
+	viewName := fmt.Sprintf("__UNNEST%d", b.unnestViewNum)
+	b.unnestViewNum++
 
-	view := &TableView{
-		ResultItems: []ResultItem{ResultItem{
-			Name:      "",
-			ValueType: *s.ValueType.ArrayType,
-			Expr: Expr{
-				Raw:       fmt.Sprintf("%s.*", viewName),
-				ValueType: *s.ValueType.ArrayType,
-			},
-		}},
-		ResultItemsMap: make(map[string]ResultItem),
-	}
-	b.allResultItems = append(b.allResultItems, view.ResultItems)
-
+	// If alias is specified, it names unnested column
+	itemName := ""
 	if src.As != nil {
-		b.views["."+viewName] = view
+		itemName = src.As.Alias.Name
 	}
 
+	item := ResultItem{
+		Name:      itemName,
+		ValueType: *s.ValueType.ArrayType,
+		Expr: Expr{
+			Raw:       fmt.Sprintf("%s.column1", viewName), // implicitly named column1
+			ValueType: *s.ValueType.ArrayType,
+		},
+	}
+
+	view := createTableViewFromItems([]ResultItem{item}, nil)
 	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), data, nil
 }
 
 func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultItem, string, error) {
 	var data []interface{}
-	n := len(selectItems) + len(b.allResultItems)
+	n := len(selectItems)
+	if b.rootView != nil {
+		n += len(b.rootView.ResultItems)
+	}
 	items := make([]ResultItem, 0, n)
 	exprs := make([]string, 0, len(selectItems))
 	for _, item := range selectItems {
 		switch i := item.(type) {
 		case *ast.Star:
-			for i := range b.allResultItems {
-				items = append(items, b.allResultItems[i]...)
+			if b.rootView == nil {
+				return nil, "", status.Errorf(codes.InvalidArgument, `SELECT * must have a FROM clause`)
 			}
+			items = append(items, b.rootView.AllItems()...)
 			exprs = append(exprs, "*")
 		case *ast.DotStar:
 			switch e := i.Expr.(type) {
 			case *ast.Ident:
-				view, ok := b.views["."+e.Name]
+				view, ok := b.views[e.Name]
 				if !ok {
 					return nil, "", status.Errorf(codes.InvalidArgument, "Unrecognized name: %s", e.Name)
 				}
-				for _, item := range view.ResultItems {
-					items = append(items, ResultItem{
-						Name:      item.Name,
-						ValueType: item.ValueType,
-						Expr: Expr{
-							Raw:       fmt.Sprintf("%s.%s", e.Name, item.Expr.Raw),
-							ValueType: item.Expr.ValueType,
-						},
-					})
-				}
+				items = append(items, view.AllItems()...)
 				exprs = append(exprs, fmt.Sprintf("%s.*", e.Name))
+			case *ast.Path:
+				return nil, "", status.Errorf(codes.Unimplemented, "%T is not supported in buildResultSet ", e)
 			default:
 				return nil, "", status.Errorf(codes.Unimplemented, "unknown expression %T in result set for DotStar", e)
 			}
@@ -534,7 +509,7 @@ func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {
 
 	var orderByClause string
 	if stmt.OrderBy != nil {
-		s, data, err := b.buildQueryOrderByClause(stmt.OrderBy, b.resultItems)
+		s, data, err := b.buildQueryOrderByClause(stmt.OrderBy, b.rootView)
 		if err != nil {
 			return "", err
 		}
@@ -596,7 +571,7 @@ func (b *QueryBuilder) buildQueryGroupByClause(groupby *ast.GroupBy) (string, []
 	return strings.Join(groupByClause, ", "), data, nil
 }
 
-func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, resultItemsMap map[string][]ResultItem) (string, []interface{}, error) {
+func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, view *TableView) (string, []interface{}, error) {
 	var orderByClause []string
 	var data []interface{}
 
@@ -604,11 +579,14 @@ func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, resultItems
 		var expr Expr
 		switch e := item.Expr.(type) {
 		case *ast.Ident:
-			i, ok := resultItemsMap[e.Name]
-			if !ok {
-				return "", nil, newExprErrorf(e, true, "Unrecognized name: %s", e.Name)
+			i, ambiguous, notfound := view.Get(e.Name)
+			if notfound {
+				return "", nil, newExprErrorf(nil, true, "Unrecognized name: %s", e.Name)
 			}
-			expr = i[0].Expr
+			if ambiguous {
+				return "", nil, newExprErrorf(nil, true, "Column name %s is ambiguous", e.Name)
+			}
+			expr = i.Expr
 		}
 
 		collate := ""
@@ -1145,11 +1123,18 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			Raw:       "?",
 		}, []interface{}{v.Data}, nil
 	case *ast.Ident:
-		item, ok := b.resultItems[e.Name]
-		if !ok {
+		if b.rootView == nil {
 			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
 		}
-		return item[0].Expr, nil, nil
+
+		item, ambiguous, notfound := b.rootView.Get(e.Name)
+		if notfound {
+			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
+		}
+		if ambiguous {
+			return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", e.Name)
+		}
+		return item.Expr, nil, nil
 	case *ast.Path:
 		if len(e.Idents) != 2 {
 			return NullExpr, nil, newExprErrorf(expr, false, "path expression not supported")
@@ -1157,7 +1142,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		first := e.Idents[0]
 		second := e.Idents[1]
 
-		tbl, ok := b.views["."+first.Name]
+		tbl, ok := b.views[first.Name]
 		if !ok {
 			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", first.Name)
 		}
