@@ -72,7 +72,7 @@ func TestQueryBuilder_UnnestValue_Success(t *testing.T) {
 	}
 
 	for _, tc := range table {
-		s, d, err := b.unnestValue(tc.v)
+		s, d, err := b.unnestValue(tc.v, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -134,7 +134,7 @@ func TestQueryBuilder_UnnestValue_Error(t *testing.T) {
 	}
 
 	for _, tc := range table {
-		_, _, err := b.unnestValue(tc.v)
+		_, _, err := b.unnestValue(tc.v, false)
 		st := status.Convert(err)
 		if st.Code() != tc.code {
 			t.Errorf("expect code %v, but got %v", tc.code, st.Code())
