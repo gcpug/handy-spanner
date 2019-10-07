@@ -554,6 +554,26 @@ func TestIntegration_Query_Detail(t *testing.T) {
 				{int64(5)},
 			},
 		},
+		{
+			sql:   "SELECT 10, -10, 010, 0x10, 0X10",
+			names: []string{"", "", "", "", ""},
+			columns: []interface{}{
+				int64(0), int64(0), int64(0), int64(0), int64(0),
+			},
+			expected: [][]interface{}{
+				{int64(10), int64(-10), int64(8), int64(16), int64(16)},
+			},
+		},
+		{
+			sql:   "SELECT 1.1, .1, 123.456e-67, .1E4, 58., 4e2",
+			names: []string{"", "", "", "", "", ""},
+			columns: []interface{}{
+				float64(0), float64(0), float64(0), float64(0), float64(0), float64(0),
+			},
+			expected: [][]interface{}{
+				{float64(1.1), float64(.1), float64(123.456e-67), float64(.1e4), float64(58.), float64(4e2)},
+			},
+		},
 	}
 
 	for _, tc := range table {

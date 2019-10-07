@@ -1202,6 +1202,12 @@ func TestQuery(t *testing.T) {
 				[]interface{}{"foo"},
 			},
 		},
+		"NoTable_NullLiteral": {
+			sql: `SELECT NULL`,
+			expected: [][]interface{}{
+				[]interface{}{nil},
+			},
+		},
 		"NoTable_Params_Int": {
 			sql: `SELECT @foo`,
 			params: map[string]Value{

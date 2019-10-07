@@ -1150,7 +1150,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 
 	case *ast.NullLiteral:
 		return Expr{
-			ValueType: ValueType{Code: TCString}, // TODO
+			ValueType: ValueType{Code: TCInt64},
 			Raw:       "NULL",
 		}, nil, nil
 

@@ -482,3 +482,379 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 		})
 	}
 }
+
+func TestMakeValueFromSpannerValue(t *testing.T) {
+	table := map[string]struct {
+		value    *structpb.Value
+		typ      *spannerpb.Type
+		expected Value
+	}{
+		"Null": {
+			value: makeNullValue(),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_INT64,
+			},
+			expected: Value{
+				Data: nil,
+				Type: ValueType{
+					Code: TCInt64,
+				},
+			},
+		},
+		"Int": {
+			value: makeStringValue("100"),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_INT64,
+			},
+			expected: Value{
+				Data: int64(100),
+				Type: ValueType{
+					Code: TCInt64,
+				},
+			},
+		},
+		"String": {
+			value: makeStringValue("xx"),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_STRING,
+			},
+			expected: Value{
+				Data: "xx",
+				Type: ValueType{
+					Code: TCString,
+				},
+			},
+		},
+		"Bool": {
+			value: makeBoolValue(true),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BOOL,
+			},
+			expected: Value{
+				Data: true,
+				Type: ValueType{
+					Code: TCBool,
+				},
+			},
+		},
+		"Number": {
+			value: makeNumberValue(0.123),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_FLOAT64,
+			},
+			expected: Value{
+				Data: 0.123,
+				Type: ValueType{
+					Code: TCFloat64,
+				},
+			},
+		},
+		"Timestamp": {
+			value: makeStringValue("2012-03-04T00:00:00.123456789Z"),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_TIMESTAMP,
+			},
+			expected: Value{
+				Data: "2012-03-04T00:00:00.123456789Z",
+				Type: ValueType{
+					Code: TCTimestamp,
+				},
+			},
+		},
+		"Date": {
+			value: makeStringValue("2012-03-04"),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_DATE,
+			},
+			expected: Value{
+				Data: "2012-03-04",
+				Type: ValueType{
+					Code: TCDate,
+				},
+			},
+		},
+		"Bytes": {
+			value: makeStringValue("xxxxx"),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BYTES,
+			},
+			expected: Value{
+				Data: []byte("xxxxx"),
+				Type: ValueType{
+					Code: TCBytes,
+				},
+			},
+		},
+		"ListInt": {
+			value: makeListValueAsValue(makeListValue(
+				makeStringValue("100"),
+				makeStringValue("101"),
+			)),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_INT64,
+				},
+			},
+			expected: Value{
+				Data: []int64{100, 101},
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCInt64,
+					},
+				},
+			},
+		},
+		"ListString": {
+			value: makeListValueAsValue(makeListValue(
+				makeStringValue("xxx"),
+				makeStringValue("yyy"),
+			)),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_STRING,
+				},
+			},
+			expected: Value{
+				Data: []string{"xxx", "yyy"},
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCString,
+					},
+				},
+			},
+		},
+		"ListStringNull": {
+			value: makeNullValue(),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_STRING,
+				},
+			},
+			expected: Value{
+				Data: []string(nil),
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCString,
+					},
+				},
+			},
+		},
+		"ListBool": {
+			value: makeListValueAsValue(makeListValue(
+				makeBoolValue(true),
+				makeBoolValue(false),
+			)),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_BOOL,
+				},
+			},
+			expected: Value{
+				Data: []bool{true, false},
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCBool,
+					},
+				},
+			},
+		},
+		"ListBoolNull": {
+			value: makeNullValue(),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_BOOL,
+				},
+			},
+			expected: Value{
+				Data: []bool(nil),
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCBool,
+					},
+				},
+			},
+		},
+		"ListNumber": {
+			value: makeListValueAsValue(makeListValue(
+				makeNumberValue(0.123),
+				makeNumberValue(1.123),
+			)),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_FLOAT64,
+				},
+			},
+			expected: Value{
+				Data: []float64{0.123, 1.123},
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCFloat64,
+					},
+				},
+			},
+		},
+		"ListNumberNull": {
+			value: makeNullValue(),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_FLOAT64,
+				},
+			},
+			expected: Value{
+				Data: []float64(nil),
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCFloat64,
+					},
+				},
+			},
+		},
+		"ListTimestamp": {
+			value: makeListValueAsValue(makeListValue(
+				makeStringValue("2012-03-04T00:00:00.123456789Z"),
+				makeStringValue("2012-03-04T00:00:00.000000000Z"),
+			)),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_TIMESTAMP,
+				},
+			},
+			expected: Value{
+				Data: []string{
+					"2012-03-04T00:00:00.123456789Z",
+					"2012-03-04T00:00:00.000000000Z",
+				},
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCTimestamp,
+					},
+				},
+			},
+		},
+		"ListTimestampNull": {
+			value: makeNullValue(),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_TIMESTAMP,
+				},
+			},
+			expected: Value{
+				Data: []string(nil),
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCTimestamp,
+					},
+				},
+			},
+		},
+		"ListDate": {
+			value: makeListValueAsValue(makeListValue(
+				makeStringValue("2012-03-04"),
+				makeStringValue("2012-03-05"),
+			)),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_DATE,
+				},
+			},
+			expected: Value{
+				Data: []string{"2012-03-04", "2012-03-05"},
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCDate,
+					},
+				},
+			},
+		},
+		"ListDateNull": {
+			value: makeNullValue(),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_DATE,
+				},
+			},
+			expected: Value{
+				Data: []string(nil),
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCDate,
+					},
+				},
+			},
+		},
+		"ListBytes": {
+			value: makeListValueAsValue(makeListValue(
+				makeStringValue("xxxxx"),
+				makeStringValue("yyyyy"),
+			)),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_BYTES,
+				},
+			},
+			expected: Value{
+				Data: [][]byte{[]byte("xxxxx"), []byte("yyyyy")},
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCBytes,
+					},
+				},
+			},
+		},
+		"ListBytesNull": {
+			value: makeNullValue(),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_BYTES,
+				},
+			},
+			expected: Value{
+				Data: [][]byte(nil),
+				Type: ValueType{
+					Code: TCArray,
+					ArrayType: &ValueType{
+						Code: TCBytes,
+					},
+				},
+			},
+		},
+	}
+
+	for name, tc := range table {
+		t.Run(name, func(t *testing.T) {
+			res, err := makeValueFromSpannerValue(tc.value, tc.typ)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if diff := cmp.Diff(tc.expected, res); diff != "" {
+				t.Errorf("(-got, +want)\n%s", diff)
+			}
+		})
+	}
+
+}
