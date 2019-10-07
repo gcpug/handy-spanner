@@ -1440,6 +1440,22 @@ func TestQuery(t *testing.T) {
 			sql:      `SELECT Id FROM Simple WHERE EXISTS(SELECT * FROM Simple WHERE Id = 1000)`,
 			expected: nil,
 		},
+		"SubQuery_ColumnAlias": {
+			sql: `SELECT Id, foo, bar FROM (SELECT Id, Id AS foo, Id bar FROM Simple)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100), int64(100), int64(100)},
+				[]interface{}{int64(200), int64(200), int64(200)},
+				[]interface{}{int64(300), int64(300), int64(300)},
+			},
+		},
+		"SubQuery_TableAlias": {
+			sql: `SELECT xx.Id FROM (SELECT Id FROM Simple) AS xx`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+				[]interface{}{int64(200)},
+				[]interface{}{int64(300)},
+			},
+		},
 
 		"Compound_Union_Distinct": {
 			sql: `SELECT Id FROM Simple UNION DISTINCT SELECT Id FROM Simple`,
