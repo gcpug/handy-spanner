@@ -742,6 +742,7 @@ func makeDataFromSpannerValue(v *structpb.Value, typ *spannerpb.Type) (interface
 	case spannerpb.TypeCode_INT64:
 		switch vv := v.Kind.(type) {
 		case *structpb.Value_StringValue:
+			// base is always 10
 			n, err := strconv.ParseInt(vv.StringValue, 10, 64)
 			if err != nil {
 				return nil, fmt.Errorf("unexpected format %q as int64: %v", vv.StringValue, err)
@@ -799,12 +800,12 @@ func makeDataFromSpannerValue(v *structpb.Value, typ *spannerpb.Type) (interface
 func makeValueFromSpannerValue(v *structpb.Value, typ *spannerpb.Type) (Value, error) {
 	vt, err := makeValueTypeFromSpannerType(typ)
 	if err != nil {
-		return Value{}, nil
+		return Value{}, err
 	}
 
 	data, err := makeDataFromSpannerValue(v, typ)
 	if err != nil {
-		return Value{}, nil
+		return Value{}, err
 	}
 
 	return Value{
