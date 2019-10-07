@@ -516,14 +516,16 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			if err != nil {
 				return nil, "", wrapExprError(err, i.Expr, "Alias")
 			}
-
 			data = append(data, d...)
 			items = append(items, ResultItem{
 				Name:      alias,
 				ValueType: s.ValueType,
-				Expr:      s,
+				Expr: Expr{
+					Raw:       fmt.Sprintf("%s AS %s", s.Raw, alias),
+					ValueType: s.ValueType,
+				},
 			})
-			exprs = append(exprs, s.Raw)
+			exprs = append(exprs, fmt.Sprintf("%s AS %s", s.Raw, alias))
 
 		default:
 			return nil, "", status.Errorf(codes.Unimplemented, "not supported %T in result set", item)
