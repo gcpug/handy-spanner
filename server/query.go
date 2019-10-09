@@ -109,6 +109,10 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 		return "", nil, nil, err
 	}
 
+	if selectStmt.Distinct {
+		selectQuery = "DISTINCT " + selectQuery
+	}
+
 	query := fmt.Sprintf(`SELECT %s %s %s`, selectQuery, fromClause, whereClause)
 
 	return query, b.args, resultItems, nil

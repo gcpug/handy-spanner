@@ -377,6 +377,9 @@ func TestIntegration_Query(t *testing.T) {
 		spanner.Insert("Simple", []string{"Id", "Value"},
 			[]interface{}{300, "zzz"},
 		),
+		spanner.Insert("Simple", []string{"Id", "Value"},
+			[]interface{}{400, "zzz"},
+		),
 	})
 	if err != nil {
 		t.Fatalf("Applying mutations: %v", err)
@@ -395,6 +398,7 @@ func TestIntegration_Query(t *testing.T) {
 				{ID: 102, Value: "xxx2"},
 				{ID: 200, Value: "yyy"},
 				{ID: 300, Value: "zzz"},
+				{ID: 400, Value: "zzz"},
 			},
 		},
 		{
@@ -405,6 +409,7 @@ func TestIntegration_Query(t *testing.T) {
 				{ID: 102, Value: "xxx2"},
 				{ID: 200, Value: "yyy"},
 				{ID: 300, Value: "zzz"},
+				{ID: 400, Value: "zzz"},
 			},
 		},
 		{
@@ -445,6 +450,16 @@ func TestIntegration_Query(t *testing.T) {
 			},
 			expected: []*Simple{
 				{ID: 200, Value: "yyy"},
+			},
+		},
+		{
+			sql: "SELECT DISTINCT Value FROM Simple",
+			expected: []*Simple{
+				{ID: 0, Value: "xxx0"},
+				{ID: 0, Value: "xxx1"},
+				{ID: 0, Value: "xxx2"},
+				{ID: 0, Value: "yyy"},
+				{ID: 0, Value: "zzz"},
 			},
 		},
 	}
