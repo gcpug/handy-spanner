@@ -16,12 +16,12 @@ package server
 
 import (
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"reflect"
-	"strconv"
 	"time"
 
-	"github.com/MakeNowJust/memefish/pkg/ast"
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -138,7 +138,25 @@ func (it *rows) Next() ([]interface{}, bool) {
 			values[i] = reflect.New(reflect.TypeOf(sql.NullString{}))
 		case TCBytes:
 			values[i] = reflect.New(reflect.TypeOf(&[]byte{}))
-		case TCArray, TCStruct:
+		case TCArray:
+			var dataType reflect.Type
+			switch item.ValueType.ArrayType.Code {
+			case TCBool:
+				dataType = reflect.TypeOf([]bool{})
+			case TCInt64:
+				dataType = reflect.TypeOf([]int64{})
+			case TCFloat64:
+				dataType = reflect.TypeOf([]float64{})
+			case TCTimestamp, TCDate, TCString:
+				dataType = reflect.TypeOf([]string{})
+			case TCBytes:
+				dataType = reflect.TypeOf(&[]byte{})
+			default:
+				panic(fmt.Sprintf("unknown supported type for Array: %v", item.ValueType.ArrayType.Code))
+			}
+			// use jsonValue type to convert json stored in sqlite into go array
+			values[i] = reflect.ValueOf(&jsonValue{Data: reflect.Indirect(reflect.New(dataType)).Interface()})
+		case TCStruct:
 			panic(fmt.Sprintf("unknown supported type: %v", item.ValueType.Code))
 		}
 		ptrs[i] = values[i].Interface()
@@ -186,6 +204,8 @@ func (it *rows) Next() ([]interface{}, bool) {
 			} else {
 				data[i] = *vv
 			}
+		case jsonValue:
+			data[i] = vv.Data
 		default:
 			data[i] = v
 		}
@@ -208,58 +228,10 @@ func convertToDatabaseValues(lv *structpb.ListValue, columns []*Column) ([]inter
 }
 
 func spannerValue2DatabaseValue(v *structpb.Value, col Column) (interface{}, error) {
-	if _, ok := v.Kind.(*structpb.Value_NullValue); ok {
-		return nil, nil
-	}
-
-	switch col.dataType {
-	case ast.BoolTypeName:
-		vv, ok := v.Kind.(*structpb.Value_BoolValue)
-		if ok {
-			return vv.BoolValue, nil
-		}
-
-	case ast.Int64TypeName:
-		vv, ok := v.Kind.(*structpb.Value_StringValue)
-		if ok {
-			n, err := strconv.ParseInt(vv.StringValue, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("unexpected format %q as int64: %v", vv.StringValue, err)
-			}
-			return n, nil
-		}
-
-	case ast.Float64TypeName:
-		vv, ok := v.Kind.(*structpb.Value_NumberValue)
-		if ok {
-			return vv.NumberValue, nil
-		}
-
-	case ast.StringTypeName:
-		vv, ok := v.Kind.(*structpb.Value_StringValue)
-		if ok {
-			return vv.StringValue, nil
-		}
-
-	case ast.BytesTypeName:
-		vv, ok := v.Kind.(*structpb.Value_StringValue)
-		if ok {
-			return []byte(vv.StringValue), nil
-		}
-
-	case ast.DateTypeName:
-		vv, ok := v.Kind.(*structpb.Value_StringValue)
-		if ok {
-			s := vv.StringValue
-			if _, err := time.Parse("2006-01-02", s); err != nil {
-				return nil, fmt.Errorf("unexpected for %q as date: %v", s, err)
-			}
-			return s, nil
-		}
-
-	case ast.TimestampTypeName:
-		vv, ok := v.Kind.(*structpb.Value_StringValue)
-		if ok {
+	// special handling of commit_stamp
+	// It needs to be checked if the column allows to use commit_timestamp
+	if col.valueType.Code == TCTimestamp {
+		if vv, ok := v.Kind.(*structpb.Value_StringValue); ok {
 			s := vv.StringValue
 			if s == "spanner.commit_timestamp()" {
 				if !col.allowCommitTimestamp {
@@ -267,14 +239,49 @@ func spannerValue2DatabaseValue(v *structpb.Value, col Column) (interface{}, err
 					return nil, fmt.Errorf(msg, col.Name) // TODO: return FailedPrecondition
 				}
 				now := time.Now().UTC()
-				s = now.Format(time.RFC3339Nano)
+				vv.StringValue = now.Format(time.RFC3339Nano)
 			}
-			if _, err := time.Parse(time.RFC3339Nano, s); err != nil {
-				return nil, fmt.Errorf("unexpected format %q as timestamp: %v", s, err)
-			}
-			return s, nil
 		}
 	}
 
-	return nil, fmt.Errorf("unexpected value %v for type %v", v.Kind, col)
+	vv, err := makeDataFromSpannerValue(v, col.valueType)
+	if err != nil {
+		return nil, err
+	}
+
+	// for array type use jsonValue to save the value as json
+	if col.valueType.Code == TCArray {
+		return &jsonValue{
+			Data: vv,
+		}, nil
+	}
+	return vv, nil
+}
+
+// jsonValue is a struct to marshal/unmarshal go array values into/from sqlite json.
+// TODO: make this struct to the value that handles all types of go values
+type jsonValue struct {
+	Data interface{}
+}
+
+func (js *jsonValue) Value() (driver.Value, error) {
+	b, err := json.Marshal(js.Data)
+	if err != nil {
+		return nil, fmt.Errorf("json.Marshal failed in jsonArray: %v", err)
+	}
+
+	return driver.Value(string(b)), nil
+}
+
+func (js *jsonValue) Scan(src interface{}) error {
+	v, ok := src.(string)
+	if !ok {
+		return fmt.Errorf("unexpected type %T for jsonArray", src)
+	}
+
+	if err := json.Unmarshal([]byte(v), &js.Data); err != nil {
+		return fmt.Errorf("json.Unmarshal failed in jsonArray: %v", err)
+	}
+
+	return nil
 }
