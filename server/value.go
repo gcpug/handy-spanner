@@ -17,7 +17,6 @@ package server
 import (
 	"database/sql"
 	"database/sql/driver"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -108,6 +107,216 @@ const (
 	TCStruct
 )
 
+type ArrayValue interface {
+	Elements() interface{}
+}
+
+var _ ArrayValue = (*ArrayBool)(nil)
+var _ ArrayValue = (*ArrayString)(nil)
+var _ ArrayValue = (*ArrayFloat64)(nil)
+var _ ArrayValue = (*ArrayInt64)(nil)
+var _ ArrayValue = (*ArrayBytes)(nil)
+
+type ArrayBool struct {
+	Data    []*bool
+	Invalid bool
+}
+
+type ArrayString struct {
+	Data    []*string
+	Invalid bool
+}
+
+type ArrayFloat64 struct {
+	Data    []*float64
+	Invalid bool
+}
+
+type ArrayInt64 struct {
+	Data    []*int64
+	Invalid bool
+}
+
+type ArrayBytes struct {
+	Data    [][]byte
+	Invalid bool
+}
+
+func (a *ArrayBool) Elements() interface{} {
+	return a.Data
+}
+
+func (a *ArrayBool) Value() (driver.Value, error) {
+	if a.Invalid {
+		return nil, fmt.Errorf("cannot use invalid value")
+	}
+
+	b, err := json.Marshal(a.Data)
+	if err != nil {
+		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
+	}
+
+	return driver.Value(string(b)), nil
+}
+
+func (a *ArrayBool) Scan(src interface{}) error {
+	if src == nil {
+		a.Invalid = true
+		return nil
+	}
+
+	v, ok := src.(string)
+	if !ok {
+		return fmt.Errorf("unexpected type %T for %T", src, a)
+	}
+
+	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
+		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
+	}
+
+	return nil
+}
+
+func (a *ArrayString) Elements() interface{} {
+	return a.Data
+}
+
+func (a *ArrayString) Value() (driver.Value, error) {
+	if a.Invalid {
+		return nil, fmt.Errorf("cannot use invalid value")
+	}
+
+	b, err := json.Marshal(a.Data)
+	if err != nil {
+		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
+	}
+
+	return driver.Value(string(b)), nil
+}
+
+func (a *ArrayString) Scan(src interface{}) error {
+	if src == nil {
+		a.Invalid = true
+		return nil
+	}
+
+	v, ok := src.(string)
+	if !ok {
+		return fmt.Errorf("unexpected type %T for %T", src, a)
+	}
+
+	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
+		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
+	}
+
+	return nil
+}
+
+func (a *ArrayFloat64) Elements() interface{} {
+	return a.Data
+}
+
+func (a *ArrayFloat64) Value() (driver.Value, error) {
+	if a.Invalid {
+		return nil, fmt.Errorf("cannot use invalid value")
+	}
+
+	b, err := json.Marshal(a.Data)
+	if err != nil {
+		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
+	}
+
+	return driver.Value(string(b)), nil
+}
+
+func (a *ArrayFloat64) Scan(src interface{}) error {
+	if src == nil {
+		a.Invalid = true
+		return nil
+	}
+
+	v, ok := src.(string)
+	if !ok {
+		return fmt.Errorf("unexpected type %T for %T", src, a)
+	}
+
+	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
+		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
+	}
+
+	return nil
+}
+
+func (a *ArrayInt64) Elements() interface{} {
+	return a.Data
+}
+
+func (a *ArrayInt64) Value() (driver.Value, error) {
+	if a.Invalid {
+		return nil, fmt.Errorf("cannot use invalid value")
+	}
+
+	b, err := json.Marshal(a.Data)
+	if err != nil {
+		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
+	}
+
+	return driver.Value(string(b)), nil
+}
+
+func (a *ArrayInt64) Scan(src interface{}) error {
+	if src == nil {
+		a.Invalid = true
+		return nil
+	}
+
+	v, ok := src.(string)
+	if !ok {
+		return fmt.Errorf("unexpected type %T for %T", src, a)
+	}
+
+	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
+		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
+	}
+
+	return nil
+}
+
+func (a *ArrayBytes) Elements() interface{} {
+	return a.Data
+}
+
+func (a *ArrayBytes) Value() (driver.Value, error) {
+	if a.Invalid {
+		return nil, fmt.Errorf("cannot use invalid value")
+	}
+
+	b, err := json.Marshal(a.Data)
+	if err != nil {
+		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
+	}
+
+	return driver.Value(string(b)), nil
+}
+
+func (a *ArrayBytes) Scan(src interface{}) error {
+	if src == nil {
+		a.Invalid = true
+		return nil
+	}
+
+	v, ok := src.(string)
+	if !ok {
+		return fmt.Errorf("unexpected type %T for %T", src, a)
+	}
+
+	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
+		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
+	}
+
+	return nil
+}
+
 type rows struct {
 	rows        *sql.Rows
 	resultItems []ResultItem
@@ -140,26 +349,21 @@ func (it *rows) Next() ([]interface{}, bool) {
 		case TCBytes:
 			values[i] = reflect.New(reflect.TypeOf(&[]byte{}))
 		case TCArray:
-			var dataType reflect.Type
 			switch item.ValueType.ArrayType.Code {
 			case TCBool:
-				dataType = reflect.TypeOf([]bool{})
+				values[i] = reflect.New(reflect.TypeOf(ArrayBool{}))
 			case TCInt64:
-				dataType = reflect.TypeOf([]int64{})
+				values[i] = reflect.New(reflect.TypeOf(ArrayInt64{}))
 			case TCFloat64:
-				dataType = reflect.TypeOf([]float64{})
+				values[i] = reflect.New(reflect.TypeOf(ArrayFloat64{}))
 			case TCTimestamp, TCDate, TCString:
-				dataType = reflect.TypeOf([]string{})
+				values[i] = reflect.New(reflect.TypeOf(ArrayString{}))
 			case TCBytes:
-				dataType = reflect.TypeOf([]string{})
+				values[i] = reflect.New(reflect.TypeOf(ArrayBytes{}))
+
 			default:
 				panic(fmt.Sprintf("unknown supported type for Array: %v", item.ValueType.ArrayType.Code))
 			}
-			// use jsonValue type to convert json stored in sqlite into go array
-			values[i] = reflect.ValueOf(&jsonValue{
-				Data: reflect.New(dataType),
-				Code: item.ValueType.ArrayType.Code,
-			})
 		case TCStruct:
 			panic(fmt.Sprintf("unknown supported type: %v", item.ValueType.Code))
 		}
@@ -208,20 +412,35 @@ func (it *rows) Next() ([]interface{}, bool) {
 			} else {
 				data[i] = *vv
 			}
-		case jsonValue:
-			if vv.Code == TCBytes {
-				ss := vv.Data.Interface().(*[]string)
-				var d [][]byte
-				for _, s := range *ss {
-					decoded, err := base64.StdEncoding.DecodeString(s)
-					if err != nil {
-						panic("failed to decode base64 for bytes")
-					}
-					d = append(d, decoded)
-				}
-				data[i] = d
+		case ArrayBool:
+			if vv.Invalid {
+				data[i] = nil
 			} else {
-				data[i] = reflect.Indirect(vv.Data).Interface()
+				data[i] = &vv
+			}
+		case ArrayString:
+			if vv.Invalid {
+				data[i] = nil
+			} else {
+				data[i] = &vv
+			}
+		case ArrayFloat64:
+			if vv.Invalid {
+				data[i] = nil
+			} else {
+				data[i] = &vv
+			}
+		case ArrayInt64:
+			if vv.Invalid {
+				data[i] = nil
+			} else {
+				data[i] = &vv
+			}
+		case ArrayBytes:
+			if vv.Invalid {
+				data[i] = nil
+			} else {
+				data[i] = &vv
 			}
 		default:
 			data[i] = v
@@ -266,40 +485,12 @@ func spannerValue2DatabaseValue(v *structpb.Value, col Column) (interface{}, err
 		return nil, err
 	}
 
-	// for array type use jsonValue to save the value as json
-	if col.valueType.Code == TCArray {
-		return &jsonValue{
-			Data: reflect.ValueOf(vv),
-		}, nil
+	// sqlite doesn not support nil with type like []string(nil)
+	// explicitly convert those values to nil to store as null value
+	rv := reflect.ValueOf(vv)
+	if rv.Kind() == reflect.Slice && rv.IsNil() {
+		return nil, nil
 	}
+
 	return vv, nil
-}
-
-// jsonValue is a struct to marshal/unmarshal go array values into/from sqlite json.
-// TODO: make this struct to the value that handles all types of go values
-type jsonValue struct {
-	Data reflect.Value
-	Code TypeCode
-}
-
-func (js *jsonValue) Value() (driver.Value, error) {
-	b, err := json.Marshal(js.Data.Interface())
-	if err != nil {
-		return nil, fmt.Errorf("json.Marshal failed in jsonArray: %v", err)
-	}
-
-	return driver.Value(string(b)), nil
-}
-
-func (js *jsonValue) Scan(src interface{}) error {
-	v, ok := src.(string)
-	if !ok {
-		return fmt.Errorf("unexpected type %T for jsonArray", src)
-	}
-
-	if err := json.Unmarshal([]byte(v), js.Data.Interface()); err != nil {
-		return fmt.Errorf("json.Unmarshal failed in jsonArray: %v", err)
-	}
-
-	return nil
 }

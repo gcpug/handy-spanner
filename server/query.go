@@ -863,6 +863,35 @@ func (b *QueryBuilder) unnestValue(v Value, offset bool) (Expr, []interface{}, e
 			ValueType: v.Type, // TODO: check correct type or not
 			Raw:       raw,
 		}, args, nil
+
+	case ArrayValue:
+		rv := reflect.ValueOf(v.Data.(ArrayValue).Elements())
+		n := rv.Len()
+
+		placeholders := make([]string, n)
+		args := make([]interface{}, n)
+		for i := 0; i < n; i++ {
+			if offset {
+				placeholders[i] = fmt.Sprintf("(?, %d)", i)
+			} else {
+				placeholders[i] = "(?)"
+			}
+			rvv := rv.Index(i)
+			if rvv.IsNil() {
+				args[i] = nil
+			} else {
+				args[i] = rvv.Interface()
+			}
+		}
+		var raw string
+		if n > 0 {
+			raw = "VALUES " + strings.Join(placeholders, ", ")
+		}
+		return Expr{
+			ValueType: v.Type, // TODO: check correct type or not
+			Raw:       raw,
+		}, args, nil
+
 	}
 
 	return NullExpr, nil, fmt.Errorf("unexpected parameter type for UNNEST: %T", v)

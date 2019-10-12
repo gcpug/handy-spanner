@@ -17,6 +17,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -596,21 +597,54 @@ func spannerValueFromValue(x interface{}) (*structpb.Value, error) {
 	case string:
 		return &structpb.Value{Kind: &structpb.Value_StringValue{x}}, nil
 	case []byte:
-		return &structpb.Value{Kind: &structpb.Value_StringValue{string(x)}}, nil
+		if x == nil {
+			return &structpb.Value{Kind: &structpb.Value_NullValue{}}, nil
+		} else {
+			return &structpb.Value{Kind: &structpb.Value_StringValue{string(x)}}, nil
+		}
 	case nil:
 		return &structpb.Value{Kind: &structpb.Value_NullValue{}}, nil
-	case []interface{}:
-		var vs []*structpb.Value
-		for _, elem := range x {
+	case []*bool, []*int64, []*float64, []*string:
+		rv := reflect.ValueOf(x)
+		n := rv.Len()
+		vs := make([]*structpb.Value, n)
+		for i := 0; i < n; i++ {
+			var elem interface{}
+
+			rvv := rv.Index(i)
+			if !rvv.IsNil() {
+				elem = reflect.Indirect(rv.Index(i)).Interface()
+			}
+
 			v, err := spannerValueFromValue(elem)
 			if err != nil {
 				return nil, err
 			}
-			vs = append(vs, v)
+			vs[i] = v
 		}
 		return &structpb.Value{Kind: &structpb.Value_ListValue{
 			&structpb.ListValue{Values: vs},
 		}}, nil
+
+	case [][]byte:
+		rv := reflect.ValueOf(x)
+		n := rv.Len()
+		vs := make([]*structpb.Value, n)
+		for i := 0; i < n; i++ {
+			elem := rv.Index(i).Interface()
+			v, err := spannerValueFromValue(elem)
+			if err != nil {
+				return nil, err
+			}
+			vs[i] = v
+		}
+		return &structpb.Value{Kind: &structpb.Value_ListValue{
+			&structpb.ListValue{Values: vs},
+		}}, nil
+
+	case ArrayValue:
+		return spannerValueFromValue(x.Elements())
+
 	default:
 		return nil, fmt.Errorf("unknown database value type %T", x)
 	}
@@ -653,61 +687,77 @@ func makeDataFromSpannerValue(v *structpb.Value, typ ValueType) (interface{}, er
 		n := len(vv.ListValue.Values)
 		switch typ.ArrayType.Code {
 		case TCBool:
-			ret := make([]bool, n)
+			ret := make([]*bool, n)
 			for i, vv := range vv.ListValue.Values {
 				vvv, err := makeDataFromSpannerValue(vv, *typ.ArrayType)
 				if err != nil {
 					return nil, err
 				}
-				vvvv, ok := vvv.(bool)
-				if !ok {
-					panic(fmt.Sprintf("unexpected value type: %T", vvv))
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.(bool)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = &vvvv
 				}
-				ret[i] = vvvv
 			}
-			return ret, nil
+			return &ArrayBool{Data: ret}, nil
 		case TCInt64:
-			ret := make([]int64, n)
+			ret := make([]*int64, n)
 			for i, vv := range vv.ListValue.Values {
 				vvv, err := makeDataFromSpannerValue(vv, *typ.ArrayType)
 				if err != nil {
 					return nil, err
 				}
-				vvvv, ok := vvv.(int64)
-				if !ok {
-					panic(fmt.Sprintf("unexpected value type: %T", vvv))
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.(int64)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = &vvvv
 				}
-				ret[i] = vvvv
 			}
-			return ret, nil
+			return &ArrayInt64{Data: ret}, nil
 		case TCFloat64:
-			ret := make([]float64, n)
+			ret := make([]*float64, n)
 			for i, vv := range vv.ListValue.Values {
 				vvv, err := makeDataFromSpannerValue(vv, *typ.ArrayType)
 				if err != nil {
 					return nil, err
 				}
-				vvvv, ok := vvv.(float64)
-				if !ok {
-					panic(fmt.Sprintf("unexpected value type: %T", vvv))
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.(float64)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = &vvvv
 				}
-				ret[i] = vvvv
 			}
-			return ret, nil
+			return &ArrayFloat64{Data: ret}, nil
 		case TCTimestamp, TCDate, TCString:
-			ret := make([]string, n)
+			ret := make([]*string, n)
 			for i, vv := range vv.ListValue.Values {
 				vvv, err := makeDataFromSpannerValue(vv, *typ.ArrayType)
 				if err != nil {
 					return nil, err
 				}
-				vvvv, ok := vvv.(string)
-				if !ok {
-					panic(fmt.Sprintf("unexpected value type: %T", vvv))
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.(string)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = &vvvv
 				}
-				ret[i] = vvvv
 			}
-			return ret, nil
+			return &ArrayString{Data: ret}, nil
 		case TCBytes:
 			ret := make([][]byte, n)
 			for i, vv := range vv.ListValue.Values {
@@ -715,13 +765,17 @@ func makeDataFromSpannerValue(v *structpb.Value, typ ValueType) (interface{}, er
 				if err != nil {
 					return nil, err
 				}
-				vvvv, ok := vvv.([]byte)
-				if !ok {
-					panic(fmt.Sprintf("unexpected value type: %T", vvv))
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.([]byte)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = vvvv
 				}
-				ret[i] = vvvv
 			}
-			return ret, nil
+			return &ArrayBytes{Data: ret}, nil
 		case TCArray, TCStruct:
 			return nil, fmt.Errorf("nested Array or Struct for Array is not supported yet")
 		default:

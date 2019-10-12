@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	allSchema    = []string{schemaSimple, schemaCompositePrimaryKeys, schemaFullTypes}
+	allSchema    = []string{schemaSimple, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes}
 	schemaSimple = `CREATE TABLE Simple (
   Id INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
@@ -73,6 +73,17 @@ CREATE UNIQUE INDEX FullTypesByIntDate ON FullTypes(FTInt, FTDate);
 CREATE INDEX FullTypesByIntTimestamp ON FullTypes(FTInt, FTTimestamp);
 CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
 `
+	schemaArrayTypes = `CREATE TABLE ArrayTypes (
+  Id INT64 NOT NULL,
+  ArrayString ARRAY<STRING(32)>,
+  ArrayBool ARRAY<BOOL>,
+  ArrayBytes ARRAY<BYTES(32)>,
+  ArrayTimestamp ARRAY<TIMESTAMP>,
+  ArrayInt ARRAY<INT64>,
+  ArrayFloat ARRAY<FLOAT64>,
+  ArrayDate ARRAY<DATE>,
+) PRIMARY KEY(Id);
+`
 	compositePrimaryKeysKeys = []string{
 		"Id", "PKey1", "PKey2", "Error", "X", "Y", "Z",
 	}
@@ -92,6 +103,16 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
 		"FTFloatNull",
 		"FTDate",
 		"FTDateNull",
+	}
+	arrayTypesKeys = []string{
+		"Id",
+		"ArrayString",
+		"ArrayBool",
+		"ArrayBytes",
+		"ArrayTimestamp",
+		"ArrayInt",
+		"ArrayFloat",
+		"ArrayDate",
 	}
 )
 
@@ -168,6 +189,43 @@ var initialData = []struct {
 				makeNumberValue(0.5),                              // FTFloatNull FLOAT64,
 				makeStringValue("2012-03-04"),                     // FTDate DATE NOT NULL,
 				makeStringValue("2012-03-04"),                     // FTDateNull DATE,
+			},
+		},
+	},
+	{
+		table: "ArrayTypes",
+		cols:  arrayTypesKeys,
+		values: [][]*structpb.Value{
+			{
+				makeStringValue("100"),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("yyy"),
+					makeStringValue("yyy"),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeBoolValue(true),
+					makeBoolValue(true),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("xyz"),
+					makeStringValue("xyz"),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("2012-03-04T12:34:56.123456789Z"),
+					makeStringValue("2012-03-04T12:34:56.123456789Z"),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("101"),
+					makeStringValue("101"),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeNumberValue(0.5),
+					makeNumberValue(0.5),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("2012-03-04"),
+					makeStringValue("2012-03-04"),
+				)),
 			},
 		},
 	},
@@ -250,6 +308,75 @@ func makeTestValue(v interface{}) Value {
 		}
 	default:
 		panic(fmt.Sprintf("fix makeTestValue to be able to convert interface{} to Value: %T", v))
+	}
+}
+
+func makeTestArray(code TypeCode, vs ...interface{}) interface{} {
+	switch code {
+	case TCBool:
+		arr := make([]*bool, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				s := new(bool)
+				*s = vs[i].(bool)
+				arr[i] = s
+			}
+		}
+		return &ArrayBool{Data: arr}
+	case TCString:
+		arr := make([]*string, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				s := new(string)
+				*s = vs[i].(string)
+				arr[i] = s
+			}
+		}
+		return &ArrayString{Data: arr}
+	case TCInt64:
+		arr := make([]*int64, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				s := new(int64)
+				vv, ok := vs[i].(int64)
+				if !ok {
+					vv = int64(vs[i].(int))
+				}
+				*s = vv
+				arr[i] = s
+			}
+		}
+		return &ArrayInt64{Data: arr}
+	case TCFloat64:
+		arr := make([]*float64, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				s := new(float64)
+				*s = vs[i].(float64)
+				arr[i] = s
+			}
+		}
+		return &ArrayFloat64{Data: arr}
+	case TCBytes:
+		arr := make([][]byte, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				arr[i] = vs[i].([]byte)
+			}
+		}
+		return &ArrayBytes{Data: arr}
+	default:
+		panic(fmt.Sprintf("fix makeTestArray to be able to convert interface{}: %v", code))
 	}
 }
 
@@ -2216,6 +2343,54 @@ func TestInsertAndReplace(t *testing.T) {
 				},
 			},
 		},
+		"ArrayTypes": {
+			tbl:   "ArrayTypes",
+			wcols: arrayTypesKeys,
+			values: []*structpb.Value{
+				makeStringValue("100"),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("xxx"),
+					makeStringValue("yyy"),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeBoolValue(true),
+					makeBoolValue(false),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("xyz"),
+					makeStringValue("zzz"),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("2012-03-04T12:34:56.123456789Z"),
+					makeStringValue("2012-03-04T12:34:56.000000000Z"),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("100"),
+					makeStringValue("101"),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeNumberValue(0.2),
+					makeNumberValue(0.5),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("2012-03-04"),
+					makeStringValue("2012-03-05"),
+				)),
+			},
+			cols:  arrayTypesKeys,
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(100),
+					makeTestArray(TCString, "xxx", "yyy"),
+					makeTestArray(TCBool, true, false),
+					makeTestArray(TCBytes, []byte("xyz"), []byte("zzz")),
+					makeTestArray(TCString, "2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.000000000Z"),
+					makeTestArray(TCInt64, int64(100), int64(101)),
+					makeTestArray(TCFloat64, float64(0.2), float64(0.5)),
+					makeTestArray(TCString, "2012-03-04", "2012-03-05"),
+				},
+			},
+		},
 	}
 
 	for _, op := range []string{"INSERT", "REPLACE"} {
@@ -2343,7 +2518,7 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 		}
 
 		d := time.Since(timestamp)
-		if d >= time.Millisecond {
+		if d >= 3*time.Millisecond {
 			t.Fatalf("unexpected time: %v", d)
 		}
 	}

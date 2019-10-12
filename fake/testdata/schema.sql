@@ -38,3 +38,14 @@ CREATE UNIQUE INDEX FullTypesByFTString ON FullTypes(FTString);
 CREATE UNIQUE INDEX FullTypesByIntDate ON FullTypes(FTInt, FTDate);
 CREATE INDEX FullTypesByIntTimestamp ON FullTypes(FTInt, FTTimestamp);
 CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
+
+CREATE TABLE ArrayTypes (
+  Id INT64 NOT NULL,
+  ArrayString ARRAY<STRING(32)>,
+  ArrayBool ARRAY<BOOL>,
+  ArrayBytes ARRAY<BYTES(32)>,
+  ArrayTimestamp ARRAY<TIMESTAMP>,
+  ArrayInt ARRAY<INT64>,
+  ArrayFloat ARRAY<FLOAT64>,
+  ArrayDate ARRAY<DATE>,
+) PRIMARY KEY(Id);

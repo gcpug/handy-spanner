@@ -70,9 +70,7 @@ func TestDatabaseEncDec(t *testing.T) {
 				Code:      TCArray,
 				ArrayType: &ValueType{Code: TCBool},
 			},
-			expected: []bool{
-				true, false,
-			},
+			expected: makeTestArray(TCBool, true, false),
 		},
 		"ArrayString": {
 			value: makeListValueAsValue(makeListValue(
@@ -83,9 +81,7 @@ func TestDatabaseEncDec(t *testing.T) {
 				Code:      TCArray,
 				ArrayType: &ValueType{Code: TCString},
 			},
-			expected: []string{
-				"xxx", "yyy",
-			},
+			expected: makeTestArray(TCString, "xxx", "yyy"),
 		},
 		"ArrayInt": {
 			value: makeListValueAsValue(makeListValue(
@@ -96,9 +92,7 @@ func TestDatabaseEncDec(t *testing.T) {
 				Code:      TCArray,
 				ArrayType: &ValueType{Code: TCInt64},
 			},
-			expected: []int64{
-				int64(100), int64(200),
-			},
+			expected: makeTestArray(TCInt64, 100, 200),
 		},
 		"ArrayFloat": {
 			value: makeListValueAsValue(makeListValue(
@@ -109,9 +103,7 @@ func TestDatabaseEncDec(t *testing.T) {
 				Code:      TCArray,
 				ArrayType: &ValueType{Code: TCFloat64},
 			},
-			expected: []float64{
-				float64(0.1), float64(0.2),
-			},
+			expected: makeTestArray(TCFloat64, float64(0.1), float64(0.2)),
 		},
 		"ArrayBytes": {
 			value: makeListValueAsValue(makeListValue(
@@ -122,9 +114,7 @@ func TestDatabaseEncDec(t *testing.T) {
 				Code:      TCArray,
 				ArrayType: &ValueType{Code: TCBytes},
 			},
-			expected: [][]byte{
-				[]byte("xyz"), []byte("xxx"),
-			},
+			expected: makeTestArray(TCBytes, []byte("xyz"), []byte("xxx")),
 		},
 	}
 
