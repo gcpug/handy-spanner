@@ -17,6 +17,7 @@ package server
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -150,12 +151,15 @@ func (it *rows) Next() ([]interface{}, bool) {
 			case TCTimestamp, TCDate, TCString:
 				dataType = reflect.TypeOf([]string{})
 			case TCBytes:
-				dataType = reflect.TypeOf(&[]byte{})
+				dataType = reflect.TypeOf([]string{})
 			default:
 				panic(fmt.Sprintf("unknown supported type for Array: %v", item.ValueType.ArrayType.Code))
 			}
 			// use jsonValue type to convert json stored in sqlite into go array
-			values[i] = reflect.ValueOf(&jsonValue{Data: reflect.Indirect(reflect.New(dataType)).Interface()})
+			values[i] = reflect.ValueOf(&jsonValue{
+				Data: reflect.New(dataType),
+				Code: item.ValueType.ArrayType.Code,
+			})
 		case TCStruct:
 			panic(fmt.Sprintf("unknown supported type: %v", item.ValueType.Code))
 		}
@@ -205,7 +209,20 @@ func (it *rows) Next() ([]interface{}, bool) {
 				data[i] = *vv
 			}
 		case jsonValue:
-			data[i] = vv.Data
+			if vv.Code == TCBytes {
+				ss := vv.Data.Interface().(*[]string)
+				var d [][]byte
+				for _, s := range *ss {
+					decoded, err := base64.StdEncoding.DecodeString(s)
+					if err != nil {
+						panic("failed to decode base64 for bytes")
+					}
+					d = append(d, decoded)
+				}
+				data[i] = d
+			} else {
+				data[i] = reflect.Indirect(vv.Data).Interface()
+			}
 		default:
 			data[i] = v
 		}
@@ -252,7 +269,7 @@ func spannerValue2DatabaseValue(v *structpb.Value, col Column) (interface{}, err
 	// for array type use jsonValue to save the value as json
 	if col.valueType.Code == TCArray {
 		return &jsonValue{
-			Data: vv,
+			Data: reflect.ValueOf(vv),
 		}, nil
 	}
 	return vv, nil
@@ -261,11 +278,12 @@ func spannerValue2DatabaseValue(v *structpb.Value, col Column) (interface{}, err
 // jsonValue is a struct to marshal/unmarshal go array values into/from sqlite json.
 // TODO: make this struct to the value that handles all types of go values
 type jsonValue struct {
-	Data interface{}
+	Data reflect.Value
+	Code TypeCode
 }
 
 func (js *jsonValue) Value() (driver.Value, error) {
-	b, err := json.Marshal(js.Data)
+	b, err := json.Marshal(js.Data.Interface())
 	if err != nil {
 		return nil, fmt.Errorf("json.Marshal failed in jsonArray: %v", err)
 	}
@@ -279,7 +297,7 @@ func (js *jsonValue) Scan(src interface{}) error {
 		return fmt.Errorf("unexpected type %T for jsonArray", src)
 	}
 
-	if err := json.Unmarshal([]byte(v), &js.Data); err != nil {
+	if err := json.Unmarshal([]byte(v), js.Data.Interface()); err != nil {
 		return fmt.Errorf("json.Unmarshal failed in jsonArray: %v", err)
 	}
 
