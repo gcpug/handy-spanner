@@ -127,7 +127,7 @@ type Column struct {
 
 	alias string
 
-	dataType   ast.ScalarTypeName
+	valueType  ValueType
 	dbDataType dbDataType
 
 	nullable bool
@@ -178,6 +178,7 @@ const (
 	DBDTReal    dbDataType = "REAL"
 	DBDTText    dbDataType = "TEXT"
 	DBDTBlob    dbDataType = "BLOB"
+	DBDTJson    dbDataType = "JSON"
 )
 
 func (ct columnType) SqliteDataType() string {
@@ -203,25 +204,28 @@ func (ct columnType) SqliteDataType() string {
 
 func newColumn(def *ast.ColumnDef) *Column {
 	ct := toColumnType(def.Type)
+	vt := toValueType(def.Type)
 
 	var dbdt dbDataType
-	switch ct.dataType {
+	switch vt.Code {
 	default:
-		panic(fmt.Sprintf("unknown datatype %v", ct))
-	case ast.BoolTypeName:
+		panic(fmt.Sprintf("unknown value type %#v", vt))
+	case TCBool:
 		dbdt = DBDTInteger
-	case ast.Int64TypeName:
+	case TCInt64:
 		dbdt = DBDTInteger
-	case ast.Float64TypeName:
+	case TCFloat64:
 		dbdt = DBDTReal
-	case ast.StringTypeName:
+	case TCString:
 		dbdt = DBDTText
-	case ast.BytesTypeName:
+	case TCBytes:
 		dbdt = DBDTBlob
-	case ast.DateTypeName:
+	case TCDate:
 		dbdt = DBDTText
-	case ast.TimestampTypeName:
+	case TCTimestamp:
 		dbdt = DBDTText
+	case TCArray:
+		dbdt = DBDTJson
 	}
 
 	var allowCommitTimestamp bool
@@ -232,7 +236,7 @@ func newColumn(def *ast.ColumnDef) *Column {
 	return &Column{
 		ast: def,
 
-		dataType:   ct.dataType,
+		valueType:  vt,
 		dbDataType: dbdt,
 
 		nullable: !def.NotNull,
@@ -242,6 +246,46 @@ func newColumn(def *ast.ColumnDef) *Column {
 		size:     ct.size,
 
 		allowCommitTimestamp: allowCommitTimestamp,
+	}
+}
+
+func astTypeToTypeCode(astTypeName ast.ScalarTypeName) TypeCode {
+	switch astTypeName {
+	case ast.BoolTypeName:
+		return TCBool
+	case ast.Int64TypeName:
+		return TCInt64
+	case ast.Float64TypeName:
+		return TCFloat64
+	case ast.StringTypeName:
+		return TCString
+	case ast.BytesTypeName:
+		return TCBytes
+	case ast.DateTypeName:
+		return TCDate
+	case ast.TimestampTypeName:
+		return TCTimestamp
+	default:
+		panic("unknown type")
+	}
+}
+
+func toValueType(t ast.SchemaType) ValueType {
+	switch v := t.(type) {
+	case *ast.ScalarSchemaType:
+		return ValueType{Code: astTypeToTypeCode(v.Name)}
+
+	case *ast.SizedSchemaType:
+		return ValueType{Code: astTypeToTypeCode(v.Name)}
+
+	case *ast.ArraySchemaType:
+		arrType := toValueType(v.Item)
+		return ValueType{
+			Code:      TCArray,
+			ArrayType: &arrType,
+		}
+	default:
+		panic(fmt.Sprintf("unknow type %v", t))
 	}
 
 }
@@ -472,33 +516,12 @@ type ResultItem struct {
 }
 
 func createResultItemFromColumn(column *Column) ResultItem {
-	var code TypeCode
-	switch column.dataType {
-	case ast.BoolTypeName:
-		code = TCBool
-	case ast.Int64TypeName:
-		code = TCInt64
-	case ast.Float64TypeName:
-		code = TCFloat64
-	case ast.StringTypeName:
-		code = TCString
-	case ast.BytesTypeName:
-		code = TCBytes
-	case ast.DateTypeName:
-		code = TCDate
-	case ast.TimestampTypeName:
-		code = TCTimestamp
-	}
 	return ResultItem{
-		Name: column.Name(),
-		ValueType: ValueType{
-			Code: code,
-		},
+		Name:      column.Name(),
+		ValueType: column.valueType,
 		Expr: Expr{
-			Raw: column.Name(),
-			ValueType: ValueType{
-				Code: code,
-			},
+			Raw:       column.Name(),
+			ValueType: column.valueType,
 		},
 	}
 }

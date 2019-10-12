@@ -483,6 +483,451 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 	}
 }
 
+func TestStreamingRead_ValueType(t *testing.T) {
+	fullTypesFields := []*spannerpb.StructType_Field{
+		{
+			Name: "PKey",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_STRING,
+			},
+		},
+		{
+			Name: "FTString",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_STRING,
+			},
+		},
+		{
+			Name: "FTStringNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_STRING,
+			},
+		},
+		{
+			Name: "FTBool",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BOOL,
+			},
+		},
+		{
+			Name: "FTBoolNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BOOL,
+			},
+		},
+		{
+			Name: "FTBytes",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BYTES,
+			},
+		},
+		{
+			Name: "FTBytesNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BYTES,
+			},
+		},
+		{
+			Name: "FTTimestamp",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_TIMESTAMP,
+			},
+		},
+		{
+			Name: "FTTimestampNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_TIMESTAMP,
+			},
+		},
+		{
+			Name: "FTInt",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_INT64,
+			},
+		},
+		{
+			Name: "FTIntNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_INT64,
+			},
+		},
+		{
+			Name: "FTFloat",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_FLOAT64,
+			},
+		},
+		{
+			Name: "FTFloatNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_FLOAT64,
+			},
+		},
+		{
+			Name: "FTDate",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_DATE,
+			},
+		},
+		{
+			Name: "FTDateNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_DATE,
+			},
+		},
+	}
+
+	arrayTypesFields := []*spannerpb.StructType_Field{
+		{
+			Name: "Id",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_INT64,
+			},
+		},
+		{
+			Name: "ArrayString",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_STRING,
+				},
+			},
+		},
+		{
+			Name: "ArrayBool",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_BOOL,
+				},
+			},
+		},
+		{
+			Name: "ArrayBytes",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_BYTES,
+				},
+			},
+		},
+		{
+			Name: "ArrayTimestamp",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_TIMESTAMP,
+				},
+			},
+		},
+		{
+			Name: "ArrayInt",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_INT64,
+				},
+			},
+		},
+		{
+			Name: "ArrayFloat",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_FLOAT64,
+				},
+			},
+		},
+		{
+			Name: "ArrayDate",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_DATE,
+				},
+			},
+		},
+	}
+
+	table := map[string]struct {
+		table    string
+		wcols    []string
+		values   []*structpb.Value
+		rcols    []string
+		fields   []*spannerpb.StructType_Field
+		expected []*structpb.Value
+	}{
+		"Simple": {
+			table: "Simple",
+			wcols: []string{"Id", "Value"},
+			values: []*structpb.Value{
+				makeStringValue("300"),
+				makeStringValue("zzz"),
+			},
+			rcols: []string{"Id", "Value"},
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "Id",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+				{
+					Name: "Value",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_STRING,
+					},
+				},
+			},
+			expected: []*structpb.Value{
+				makeStringValue("300"),
+				makeStringValue("zzz"),
+			},
+		},
+		"FullTypes": {
+			table: "FullTypes",
+			wcols: fullTypesKeys,
+			values: []*structpb.Value{
+				makeStringValue("xxx"), // PKey STRING(32) NOT NULL,
+				makeStringValue("xxx"), // FTString STRING(32) NOT NULL,
+				makeNullValue(),        // FTStringNull STRING(32),
+				makeBoolValue(true),    // FTBool BOOL NOT NULL,
+				makeNullValue(),        // FTBoolNull BOOL,
+				makeStringValue("xyz"), // FTBytes BYTES(32) NOT NULL,
+				makeNullValue(),        // FTBytesNull BYTES(32),
+				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
+				makeNullValue(),               // FTTimestampNull TIMESTAMP,
+				makeStringValue("100"),        // FTInt INT64 NOT NULL,
+				makeNullValue(),               // FTIntNull INT64,
+				makeNumberValue(0.5),          // FTFloat FLOAT64 NOT NULL,
+				makeNullValue(),               // FTFloatNull FLOAT64,
+				makeStringValue("2012-03-04"), // FTDate DATE NOT NULL,
+				makeNullValue(),               // FTDateNull DATE,
+			},
+			rcols:  fullTypesKeys,
+			fields: fullTypesFields,
+			expected: []*structpb.Value{
+				makeStringValue("xxx"), // PKey STRING(32) NOT NULL,
+				makeStringValue("xxx"), // FTString STRING(32) NOT NULL,
+				makeNullValue(),        // FTStringNull STRING(32),
+				makeBoolValue(true),    // FTBool BOOL NOT NULL,
+				makeNullValue(),        // FTBoolNull BOOL,
+				makeStringValue("xyz"), // FTBytes BYTES(32) NOT NULL,
+				makeNullValue(),        // FTBytesNull BYTES(32),
+				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
+				makeNullValue(),               // FTTimestampNull TIMESTAMP,
+				makeStringValue("100"),        // FTInt INT64 NOT NULL,
+				makeNullValue(),               // FTIntNull INT64,
+				makeNumberValue(0.5),          // FTFloat FLOAT64 NOT NULL,
+				makeNullValue(),               // FTFloatNull FLOAT64,
+				makeStringValue("2012-03-04"), // FTDate DATE NOT NULL,
+				makeNullValue(),               // FTDateNull DATE,
+			},
+		},
+
+		// Spanner returns array but it possiblly includes NullValue in the elements
+		"ArrayTypes_NonNull": {
+			table: "ArrayTypes",
+			wcols: arrayTypesKeys,
+			values: []*structpb.Value{
+				makeStringValue("100"),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("xxx"),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeBoolValue(true),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("xyz"),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("2012-03-04T12:34:56.123456789Z"),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("100"),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeNumberValue(0.5),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("2012-03-04"),
+					makeNullValue(),
+				)),
+			},
+			rcols:  arrayTypesKeys,
+			fields: arrayTypesFields,
+			expected: []*structpb.Value{
+				makeStringValue("100"),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("xxx"),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeBoolValue(true),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("xyz"),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("2012-03-04T12:34:56.123456789Z"),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("100"),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeNumberValue(0.5),
+					makeNullValue(),
+				)),
+				makeListValueAsValue(makeListValue(
+					makeStringValue("2012-03-04"),
+					makeNullValue(),
+				)),
+			},
+		},
+
+		// Spanner returns NullValue if the value is null
+		"ArrayTypes_Null": {
+			table: "ArrayTypes",
+			wcols: arrayTypesKeys,
+			values: []*structpb.Value{
+				makeStringValue("101"),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+			},
+			rcols:  arrayTypesKeys,
+			fields: arrayTypesFields,
+			expected: []*structpb.Value{
+				makeStringValue("101"),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+				makeNullValue(),
+			},
+		},
+
+		// Spanner returns empty list as array if the value is empty not null
+		"ArrayTypes_Empty": {
+			table: "ArrayTypes",
+			wcols: arrayTypesKeys,
+			values: []*structpb.Value{
+				makeStringValue("100"),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+			},
+			rcols:  arrayTypesKeys,
+			fields: arrayTypesFields,
+			expected: []*structpb.Value{
+				makeStringValue("100"),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+				makeListValueAsValue(&structpb.ListValue{Values: []*structpb.Value{}}),
+			},
+		},
+	}
+
+	for name, tc := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := newTestServer()
+			session, dbName := testCreateSession(t, s)
+
+			db, ok := s.db[dbName]
+			if !ok {
+				t.Fatalf("database not found")
+			}
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+				Session: session.Name,
+				Transaction: &spannerpb.CommitRequest_SingleUseTransaction{
+					SingleUseTransaction: &spannerpb.TransactionOptions{
+						Mode: &spannerpb.TransactionOptions_ReadWrite_{
+							ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+						},
+					},
+				},
+				Mutations: []*spannerpb.Mutation{
+					{
+						Operation: &spannerpb.Mutation_Insert{
+							Insert: &spannerpb.Mutation_Write{
+								Table:   tc.table,
+								Columns: tc.wcols,
+								Values: []*structpb.ListValue{
+									{
+										Values: tc.values,
+									},
+								},
+							},
+						}},
+				},
+			})
+			if err != nil {
+				t.Fatalf("commit failed: %v", err)
+			}
+
+			fake := &fakeExecuteStreamingSqlServer{}
+			if err := s.StreamingRead(&spannerpb.ReadRequest{
+				Session:     session.Name,
+				Transaction: &spannerpb.TransactionSelector{},
+				Table:       tc.table,
+				Columns:     tc.rcols,
+				KeySet:      &spannerpb.KeySet{All: true},
+			}, fake); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			var results [][]*structpb.Value
+			for _, set := range fake.sets {
+				results = append(results, set.Values)
+			}
+
+			if len(results) != 1 {
+				t.Errorf("results should be 1 record but got %v", len(results))
+			}
+
+			if diff := cmp.Diff(tc.fields, fake.sets[0].Metadata.RowType.Fields); diff != "" {
+				t.Errorf("(-got, +want)\n%s", diff)
+			}
+
+			if diff := cmp.Diff(tc.expected, results[0]); diff != "" {
+				t.Errorf("(-got, +want)\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestMakeValueFromSpannerValue(t *testing.T) {
 	table := map[string]struct {
 		value    *structpb.Value
@@ -597,7 +1042,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: []int64{100, 101},
+				Data: makeTestArray(TCInt64, 100, 101),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -618,7 +1063,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: []string{"xxx", "yyy"},
+				Data: makeTestArray(TCString, "xxx", "yyy"),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -657,7 +1102,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: []bool{true, false},
+				Data: makeTestArray(TCBool, true, false),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -696,7 +1141,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: []float64{0.123, 1.123},
+				Data: makeTestArray(TCFloat64, 0.123, 1.123),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -735,10 +1180,10 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: []string{
+				Data: makeTestArray(TCString,
 					"2012-03-04T00:00:00.123456789Z",
 					"2012-03-04T00:00:00.000000000Z",
-				},
+				),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -777,7 +1222,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: []string{"2012-03-04", "2012-03-05"},
+				Data: makeTestArray(TCString, "2012-03-04", "2012-03-05"),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -816,7 +1261,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: [][]byte{[]byte("xxxxx"), []byte("yyyyy")},
+				Data: makeTestArray(TCBytes, []byte("xxxxx"), []byte("yyyyy")),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
