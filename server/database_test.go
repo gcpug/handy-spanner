@@ -1352,6 +1352,108 @@ func TestQuery(t *testing.T) {
 		// 		[]interface{}{makeTestArray(TCFloat64, 0.1, 0.1)},
 		// 	},
 		// },
+		"TimestampLiteral_Date": {
+			sql: `SELECT TIMESTAMP "1999-01-02"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T08:00:00Z"},
+			},
+		},
+		"TimestampLiteral_Date2": {
+			sql: `SELECT TIMESTAMP "1999-1-2"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T08:00:00Z"},
+			},
+		},
+		"TimestampLiteral_WithoutNano": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:34:56"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T20:34:56Z"},
+			},
+		},
+		"TimestampLiteral_WithoutNano2": {
+			sql: `SELECT TIMESTAMP "1999-01-02 1:2:3"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03Z"},
+			},
+		},
+		"TimestampLiteral_WithoutNano_T": {
+			sql: `SELECT TIMESTAMP "1999-01-02T12:34:56"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T20:34:56Z"},
+			},
+		},
+		"TimestampLiteral_WithNano": {
+			sql: `SELECT TIMESTAMP "1999-01-02 1:2:3.123456789"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.123456789Z"},
+			},
+		},
+		"TimestampLiteral_WithNano2": {
+			sql: `SELECT TIMESTAMP "1999-01-02 01:02:03.123456"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.123456Z"},
+			},
+		},
+		"TimestampLiteral_WithNano3": {
+			sql: `SELECT TIMESTAMP "1999-01-02 01:02:03.12"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.12Z"},
+			},
+		},
+		"TimestampLiteral_WithNano_T": {
+			sql: `SELECT TIMESTAMP "1999-01-02T1:2:3.123456789"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.123456789Z"},
+			},
+		},
+		"TimestampLiteral_Timezone": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03Z"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T12:02:03Z"},
+			},
+		},
+		"TimestampLiteral_Timezone2": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03+01"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T11:02:03Z"},
+			},
+		},
+		"TimestampLiteral_Timezone3": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03-01"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T13:02:03Z"},
+			},
+		},
+		"TimestampLiteral_Timezone4": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03+01:30"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T10:32:03Z"},
+			},
+		},
+		"TimestampLiteral_Timezone_T": {
+			sql: `SELECT TIMESTAMP "1999-01-02T12:02:03Z"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T12:02:03Z"},
+			},
+		},
+		"TimestampLiteral_WithNano_Timezone": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03.123456789Z"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T12:02:03.123456789Z"},
+			},
+		},
+		"TimestampLiteral_WithNano_Timezone2": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03.123456789+03"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.123456789Z"},
+			},
+		},
+		"TimestampLiteral_WithNano_Timezone_T": {
+			sql: `SELECT TIMESTAMP "1999-01-02T12:02:03.123456789Z"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T12:02:03.123456789Z"},
+			},
+		},
 
 		"NoTable_IntLiteral": {
 			sql: `SELECT 1`,

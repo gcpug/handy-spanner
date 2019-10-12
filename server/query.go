@@ -19,11 +19,22 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MakeNowJust/memefish/pkg/ast"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+var parseLocation *time.Location
+
+func init() {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		panic(err)
+	}
+	parseLocation = loc
+}
 
 type QueryBuilder struct {
 	db   *database
@@ -1255,7 +1266,14 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return NullExpr, nil, newExprErrorf(expr, false, "DateLiteral not supported yet")
 
 	case *ast.TimestampLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "TimestampLiteral not supported yet")
+		t, ok := parseTimestampLiteral(e.Value.Value)
+		if !ok {
+			return NullExpr, nil, newExprErrorf(expr, true, "Invalid TIMESTAMP literal")
+		}
+		return Expr{
+			ValueType: ValueType{Code: TCTimestamp},
+			Raw:       `"` + t.Format(time.RFC3339Nano) + `"`,
+		}, nil, nil
 
 	case *ast.Param:
 		v, ok := b.params[e.Name]
@@ -1342,4 +1360,40 @@ func wrapExprError(err error, expr ast.Expr, msg string) error {
 	}
 
 	return newExprErrorf(expr, false, "%s, %s", msg, err.Error())
+}
+
+func parseTimestampLiteral(s string) (time.Time, bool) {
+	// TODO: cannot parse these format
+	// 1999-01-02 12:02:03.123456789+3
+	// 1999-01-02 12:02:03.123456789 UTC
+
+	if t, err := time.ParseInLocation("2006-1-2 15:4:5.999999999Z07:00", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2 15:4:5.999999999Z07", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2 15:4:5.999999999", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2T15:4:5.999999999Z07:00", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2T15:4:5.999999999Z07", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2T15:4:5.999999999", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	return time.Time{}, false
 }
