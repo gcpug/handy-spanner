@@ -19,11 +19,22 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MakeNowJust/memefish/pkg/ast"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+var parseLocation *time.Location
+
+func init() {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		panic(err)
+	}
+	parseLocation = loc
+}
 
 type QueryBuilder struct {
 	db   *database
@@ -1176,7 +1187,34 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return NullExpr, nil, newExprErrorf(expr, false, "ExistsSubquery not supported yet")
 
 	case *ast.ArrayLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "ArrayLiteral not supported yet")
+		var data []interface{}
+		var ss []string
+		var vts []ValueType
+		for i := range e.Values {
+			s, d, err := b.buildExpr(e.Values[i])
+			if err != nil {
+				return NullExpr, nil, wrapExprError(err, expr, "ArrayLiteral")
+			}
+
+			data = append(data, d...)
+			ss = append(ss, s.Raw)
+			vts = append(vts, s.ValueType)
+		}
+
+		vt, err := decideArrayElementsValueType(vts...)
+		if err != nil {
+			return NullExpr, nil, newExprErrorf(expr, true, err.Error())
+		}
+
+		// TODO: allow to use both Int64 and Float64
+
+		return Expr{
+			ValueType: ValueType{
+				Code:      TCArray,
+				ArrayType: &vt,
+			},
+			Raw: fmt.Sprintf("json_array(%s)", strings.Join(ss, ", ")),
+		}, data, nil
 
 	case *ast.StructLiteral:
 		return NullExpr, nil, newExprErrorf(expr, false, "StructLiteral not supported yet")
@@ -1222,13 +1260,30 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, nil, nil
 
 	case *ast.BytesLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "BytesLiteral not supported yet")
+		return Expr{
+			ValueType: ValueType{Code: TCBytes},
+			Raw:       `"` + string(e.Value) + `"`,
+		}, nil, nil
 
 	case *ast.DateLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "DateLiteral not supported yet")
+		t, ok := parseDateLiteral(e.Value.Value)
+		if !ok {
+			return NullExpr, nil, newExprErrorf(expr, true, "Invalid DATE literal")
+		}
+		return Expr{
+			ValueType: ValueType{Code: TCDate},
+			Raw:       `"` + t.Format("2006-01-02") + `"`,
+		}, nil, nil
 
 	case *ast.TimestampLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "TimestampLiteral not supported yet")
+		t, ok := parseTimestampLiteral(e.Value.Value)
+		if !ok {
+			return NullExpr, nil, newExprErrorf(expr, true, "Invalid TIMESTAMP literal")
+		}
+		return Expr{
+			ValueType: ValueType{Code: TCTimestamp},
+			Raw:       `"` + t.Format(time.RFC3339Nano) + `"`,
+		}, nil, nil
 
 	case *ast.Param:
 		v, ok := b.params[e.Name]
@@ -1315,4 +1370,48 @@ func wrapExprError(err error, expr ast.Expr, msg string) error {
 	}
 
 	return newExprErrorf(expr, false, "%s, %s", msg, err.Error())
+}
+
+func parseDateLiteral(s string) (time.Time, bool) {
+	if t, err := time.ParseInLocation("2006-1-2", s, parseLocation); err == nil {
+		return t, true
+	}
+
+	return time.Time{}, false
+}
+
+func parseTimestampLiteral(s string) (time.Time, bool) {
+	// TODO: cannot parse these format
+	// 1999-01-02 12:02:03.123456789+3
+	// 1999-01-02 12:02:03.123456789 UTC
+
+	if t, err := time.ParseInLocation("2006-1-2 15:4:5.999999999Z07:00", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2 15:4:5.999999999Z07", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2 15:4:5.999999999", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2T15:4:5.999999999Z07:00", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2T15:4:5.999999999Z07", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2T15:4:5.999999999", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	if t, err := time.ParseInLocation("2006-1-2", s, parseLocation); err == nil {
+		return t.UTC(), true
+	}
+
+	return time.Time{}, false
 }

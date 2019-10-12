@@ -156,8 +156,8 @@ var initialData = []struct {
 				makeStringValue("xxx"),                            // FTStringNull STRING(32),
 				makeBoolValue(true),                               // FTBool BOOL NOT NULL,
 				makeBoolValue(true),                               // FTBoolNull BOOL,
-				makeStringValue("xyz"),                            // FTBytes BYTES(32) NOT NULL,
-				makeStringValue("xyz"),                            // FTBytesNull BYTES(32),
+				makeStringValue("eHl6"),                           // FTBytes BYTES(32) NOT NULL,
+				makeStringValue("eHl6"),                           // FTBytesNull BYTES(32),
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestampNull TIMESTAMP,
 				makeStringValue("100"),                            // FTInt INT64 NOT NULL,
@@ -179,8 +179,8 @@ var initialData = []struct {
 				makeStringValue("yyy"),                            // FTStringNull STRING(32),
 				makeBoolValue(true),                               // FTBool BOOL NOT NULL,
 				makeBoolValue(true),                               // FTBoolNull BOOL,
-				makeStringValue("xyz"),                            // FTBytes BYTES(32) NOT NULL,
-				makeStringValue("xyz"),                            // FTBytesNull BYTES(32),
+				makeStringValue("eHl6"),                           // FTBytes BYTES(32) NOT NULL,
+				makeStringValue("eHl6"),                           // FTBytesNull BYTES(32),
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestampNull TIMESTAMP,
 				makeStringValue("101"),                            // FTInt INT64 NOT NULL,
@@ -207,8 +207,8 @@ var initialData = []struct {
 					makeBoolValue(true),
 				)),
 				makeListValueAsValue(makeListValue(
-					makeStringValue("xyz"),
-					makeStringValue("xyz"),
+					makeStringValue("eHl6"),
+					makeStringValue("eHl6"),
 				)),
 				makeListValueAsValue(makeListValue(
 					makeStringValue("2012-03-04T12:34:56.123456789Z"),
@@ -1317,6 +1317,162 @@ func TestQuery(t *testing.T) {
 			},
 		},
 
+		"ArrayLiteral_Empty": {
+			sql: `SELECT []`,
+			expected: [][]interface{}{
+				[]interface{}{makeTestArray(TCInt64)},
+			},
+		},
+		"ArrayLiteral_IntLiteral": {
+			sql: `SELECT [1, 2, 3]`,
+			expected: [][]interface{}{
+				[]interface{}{makeTestArray(TCInt64, 1, 2, 3)},
+			},
+		},
+		"ArrayLiteral_Ident": {
+			sql: `SELECT [1, Id] FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{makeTestArray(TCInt64, 1, 100)},
+				[]interface{}{makeTestArray(TCInt64, 1, 200)},
+				[]interface{}{makeTestArray(TCInt64, 1, 300)},
+			},
+		},
+		"ArrayLiteral_Params": {
+			sql: `SELECT ["xxx", @foo]`,
+			params: map[string]Value{
+				"foo": makeTestValue("yyy"),
+			},
+			expected: [][]interface{}{
+				[]interface{}{makeTestArray(TCString, "xxx", "yyy")},
+			},
+		},
+		// "ArrayLiteral_IntAndFloat": {
+		// 	sql: `SELECT [100, 0.1]`,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{makeTestArray(TCFloat64, 0.1, 0.1)},
+		// 	},
+		// },
+		"TimestampLiteral_Date": {
+			sql: `SELECT TIMESTAMP "1999-01-02"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T08:00:00Z"},
+			},
+		},
+		"TimestampLiteral_Date2": {
+			sql: `SELECT TIMESTAMP "1999-1-2"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T08:00:00Z"},
+			},
+		},
+		"TimestampLiteral_WithoutNano": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:34:56"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T20:34:56Z"},
+			},
+		},
+		"TimestampLiteral_WithoutNano2": {
+			sql: `SELECT TIMESTAMP "1999-01-02 1:2:3"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03Z"},
+			},
+		},
+		"TimestampLiteral_WithoutNano_T": {
+			sql: `SELECT TIMESTAMP "1999-01-02T12:34:56"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T20:34:56Z"},
+			},
+		},
+		"TimestampLiteral_WithNano": {
+			sql: `SELECT TIMESTAMP "1999-01-02 1:2:3.123456789"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.123456789Z"},
+			},
+		},
+		"TimestampLiteral_WithNano2": {
+			sql: `SELECT TIMESTAMP "1999-01-02 01:02:03.123456"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.123456Z"},
+			},
+		},
+		"TimestampLiteral_WithNano3": {
+			sql: `SELECT TIMESTAMP "1999-01-02 01:02:03.12"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.12Z"},
+			},
+		},
+		"TimestampLiteral_WithNano_T": {
+			sql: `SELECT TIMESTAMP "1999-01-02T1:2:3.123456789"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.123456789Z"},
+			},
+		},
+		"TimestampLiteral_Timezone": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03Z"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T12:02:03Z"},
+			},
+		},
+		"TimestampLiteral_Timezone2": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03+01"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T11:02:03Z"},
+			},
+		},
+		"TimestampLiteral_Timezone3": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03-01"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T13:02:03Z"},
+			},
+		},
+		"TimestampLiteral_Timezone4": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03+01:30"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T10:32:03Z"},
+			},
+		},
+		"TimestampLiteral_Timezone_T": {
+			sql: `SELECT TIMESTAMP "1999-01-02T12:02:03Z"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T12:02:03Z"},
+			},
+		},
+		"TimestampLiteral_WithNano_Timezone": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03.123456789Z"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T12:02:03.123456789Z"},
+			},
+		},
+		"TimestampLiteral_WithNano_Timezone2": {
+			sql: `SELECT TIMESTAMP "1999-01-02 12:02:03.123456789+03"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T09:02:03.123456789Z"},
+			},
+		},
+		"TimestampLiteral_WithNano_Timezone_T": {
+			sql: `SELECT TIMESTAMP "1999-01-02T12:02:03.123456789Z"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02T12:02:03.123456789Z"},
+			},
+		},
+		"DateLiteral": {
+			sql: `SELECT DATE "1999-01-02"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02"},
+			},
+		},
+		"DateLiteral2": {
+			sql: `SELECT DATE "1999-1-2"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02"},
+			},
+		},
+		"BytesLiteral": {
+			sql: `SELECT B'xyz'`,
+			expected: [][]interface{}{
+				[]interface{}{[]byte("xyz")},
+			},
+		},
+
 		"NoTable_IntLiteral": {
 			sql: `SELECT 1`,
 			expected: [][]interface{}{
@@ -2147,6 +2303,12 @@ func TestQueryError(t *testing.T) {
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`^Column 2 in EXCEPT DISTINCT has incompatible types: FLOAT64, BOOL`),
 		},
+
+		"ArrayLiteral_IncompatibleElements": {
+			sql:  `SELECT [100, "xxx"]`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Array elements of types {.*} do not have a common supertype`),
+		},
 	}
 
 	for name, tc := range table {
@@ -2230,8 +2392,8 @@ func TestInsertAndReplace(t *testing.T) {
 				makeStringValue("xxx"),                            // FTStringNull STRING(32),
 				makeBoolValue(true),                               // FTBool BOOL NOT NULL,
 				makeBoolValue(true),                               // FTBoolNull BOOL,
-				makeStringValue("xyz"),                            // FTBytes BYTES(32) NOT NULL,
-				makeStringValue("xyz"),                            // FTBytesNull BYTES(32),
+				makeStringValue("eHl6"),                           // FTBytes BYTES(32) NOT NULL,
+				makeStringValue("eHl6"),                           // FTBytesNull BYTES(32),
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestampNull TIMESTAMP,
 				makeStringValue("100"),                            // FTInt INT64 NOT NULL,
@@ -2268,13 +2430,13 @@ func TestInsertAndReplace(t *testing.T) {
 			tbl:   "FullTypes",
 			wcols: fullTypesKeys,
 			values: []*structpb.Value{
-				makeStringValue("xxx"), // PKey STRING(32) NOT NULL,
-				makeStringValue("xxx"), // FTString STRING(32) NOT NULL,
-				makeNullValue(),        // FTStringNull STRING(32),
-				makeBoolValue(true),    // FTBool BOOL NOT NULL,
-				makeNullValue(),        // FTBoolNull BOOL,
-				makeStringValue("xyz"), // FTBytes BYTES(32) NOT NULL,
-				makeNullValue(),        // FTBytesNull BYTES(32),
+				makeStringValue("xxx"),  // PKey STRING(32) NOT NULL,
+				makeStringValue("xxx"),  // FTString STRING(32) NOT NULL,
+				makeNullValue(),         // FTStringNull STRING(32),
+				makeBoolValue(true),     // FTBool BOOL NOT NULL,
+				makeNullValue(),         // FTBoolNull BOOL,
+				makeStringValue("eHl6"), // FTBytes BYTES(32) NOT NULL,
+				makeNullValue(),         // FTBytesNull BYTES(32),
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
 				makeNullValue(),               // FTTimestampNull TIMESTAMP,
 				makeStringValue("100"),        // FTInt INT64 NOT NULL,
@@ -2323,7 +2485,7 @@ func TestInsertAndReplace(t *testing.T) {
 				makeStringValue("xxx"),                            // PKey STRING(32) NOT NULL,
 				makeStringValue("xxx"),                            // FTString STRING(32) NOT NULL,
 				makeBoolValue(true),                               // FTBool BOOL NOT NULL,
-				makeStringValue("xyz"),                            // FTBytes BYTES(32) NOT NULL,
+				makeStringValue("eHl6"),                           // FTBytes BYTES(32) NOT NULL,
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
 				makeStringValue("100"),                            // FTInt INT64 NOT NULL,
 				makeNumberValue(0.5),                              // FTFloat FLOAT64 NOT NULL,
@@ -2357,8 +2519,8 @@ func TestInsertAndReplace(t *testing.T) {
 					makeBoolValue(false),
 				)),
 				makeListValueAsValue(makeListValue(
-					makeStringValue("xyz"),
-					makeStringValue("zzz"),
+					makeStringValue("eHl6"),
+					makeStringValue("enp6"),
 				)),
 				makeListValueAsValue(makeListValue(
 					makeStringValue("2012-03-04T12:34:56.123456789Z"),
@@ -2461,7 +2623,7 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 		makeStringValue("xxx"),                            // PKey STRING(32) NOT NULL,
 		makeStringValue("xxx"),                            // FTString STRING(32) NOT NULL,
 		makeBoolValue(true),                               // FTBool BOOL NOT NULL,
-		makeStringValue("xyz"),                            // FTBytes BYTES(32) NOT NULL,
+		makeStringValue("eHl6"),                           // FTBytes BYTES(32) NOT NULL,
 		makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
 		makeStringValue("spanner.commit_timestamp()"),
 		makeStringValue("100"),        // FTInt INT64 NOT NULL,
@@ -3368,8 +3530,8 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("xxx"),                            // FTStringNull STRING(32),
 				makeBoolValue(true),                               // FTBool BOOL NOT NULL,
 				makeBoolValue(true),                               // FTBoolNull BOOL,
-				makeStringValue("xyz"),                            // FTBytes BYTES(32) NOT NULL,
-				makeStringValue("xyz"),                            // FTBytesNull BYTES(32),
+				makeStringValue("eHl6"),                           // FTBytes BYTES(32) NOT NULL,
+				makeStringValue("eHl6"),                           // FTBytesNull BYTES(32),
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestampNull TIMESTAMP,
 				makeStringValue("100"),                            // FTInt INT64 NOT NULL,
@@ -3418,8 +3580,8 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("zzz"),                            // FTStringNull STRING(32),
 				makeBoolValue(true),                               // FTBool BOOL NOT NULL,
 				makeBoolValue(true),                               // FTBoolNull BOOL,
-				makeStringValue("xyz"),                            // FTBytes BYTES(32) NOT NULL,
-				makeStringValue("xyz"),                            // FTBytesNull BYTES(32),
+				makeStringValue("eHl6"),                           // FTBytes BYTES(32) NOT NULL,
+				makeStringValue("eHl6"),                           // FTBytesNull BYTES(32),
 				makeStringValue("spanner.commit_timestamp()"),     // FTTimestamp TIMESTAMP NOT NULL,
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestampNull TIMESTAMP,
 				makeStringValue("999"),                            // FTInt INT64 NOT NULL,

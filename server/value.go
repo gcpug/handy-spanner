@@ -17,6 +17,7 @@ package server
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -86,6 +87,51 @@ func (t ValueType) String() string {
 
 func compareValueType(a, b ValueType) bool {
 	return a == b
+}
+
+func compatibleValueType(a, b ValueType) (ValueType, bool) {
+	if a.Code == TCInt64 && b.Code == TCFloat64 {
+		return b, true
+	}
+	if b.Code == TCInt64 && a.Code == TCFloat64 {
+		return a, true
+	}
+	return a, a == b
+}
+
+func decideArrayElementsValueType(vts ...ValueType) (ValueType, error) {
+	vt := ValueType{Code: TCInt64}
+	if len(vts) > 0 {
+		vt = vts[0]
+	}
+
+	used := map[string]struct{}{}
+
+	for i := range vts {
+		used[vts[i].String()] = struct{}{}
+	}
+
+	for i := range vts {
+		var ok bool
+		// TODO: if ValueType is changed, types of all values also need changing
+		// vt, ok = compatibleValueType(vt, vts[i])
+		ok = compareValueType(vt, vts[i])
+		if !ok {
+			var typ string
+			first := true
+			for n := range used {
+				if !first {
+					typ += ", "
+				}
+				typ += n
+				first = false
+			}
+
+			return ValueType{}, fmt.Errorf("Array elements of types {%s} do not have a common supertype", typ)
+		}
+	}
+
+	return vt, nil
 }
 
 type StructType struct {
@@ -493,4 +539,17 @@ func spannerValue2DatabaseValue(v *structpb.Value, col Column) (interface{}, err
 	}
 
 	return vv, nil
+}
+
+func encodeBase64(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func decodeBase64(s string) ([]byte, error) {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		// seems Spanner tries to use both padding and no-padding
+		return base64.RawStdEncoding.DecodeString(s)
+	}
+	return b, nil
 }

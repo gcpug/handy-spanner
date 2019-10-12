@@ -688,13 +688,13 @@ func TestStreamingRead_ValueType(t *testing.T) {
 			table: "FullTypes",
 			wcols: fullTypesKeys,
 			values: []*structpb.Value{
-				makeStringValue("xxx"), // PKey STRING(32) NOT NULL,
-				makeStringValue("xxx"), // FTString STRING(32) NOT NULL,
-				makeNullValue(),        // FTStringNull STRING(32),
-				makeBoolValue(true),    // FTBool BOOL NOT NULL,
-				makeNullValue(),        // FTBoolNull BOOL,
-				makeStringValue("xyz"), // FTBytes BYTES(32) NOT NULL,
-				makeNullValue(),        // FTBytesNull BYTES(32),
+				makeStringValue("xxx"),  // PKey STRING(32) NOT NULL,
+				makeStringValue("xxx"),  // FTString STRING(32) NOT NULL,
+				makeNullValue(),         // FTStringNull STRING(32),
+				makeBoolValue(true),     // FTBool BOOL NOT NULL,
+				makeNullValue(),         // FTBoolNull BOOL,
+				makeStringValue("eHh4"), // FTBytes BYTES(32) NOT NULL,
+				makeNullValue(),         // FTBytesNull BYTES(32),
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
 				makeNullValue(),               // FTTimestampNull TIMESTAMP,
 				makeStringValue("100"),        // FTInt INT64 NOT NULL,
@@ -707,13 +707,13 @@ func TestStreamingRead_ValueType(t *testing.T) {
 			rcols:  fullTypesKeys,
 			fields: fullTypesFields,
 			expected: []*structpb.Value{
-				makeStringValue("xxx"), // PKey STRING(32) NOT NULL,
-				makeStringValue("xxx"), // FTString STRING(32) NOT NULL,
-				makeNullValue(),        // FTStringNull STRING(32),
-				makeBoolValue(true),    // FTBool BOOL NOT NULL,
-				makeNullValue(),        // FTBoolNull BOOL,
-				makeStringValue("xyz"), // FTBytes BYTES(32) NOT NULL,
-				makeNullValue(),        // FTBytesNull BYTES(32),
+				makeStringValue("xxx"),  // PKey STRING(32) NOT NULL,
+				makeStringValue("xxx"),  // FTString STRING(32) NOT NULL,
+				makeNullValue(),         // FTStringNull STRING(32),
+				makeBoolValue(true),     // FTBool BOOL NOT NULL,
+				makeNullValue(),         // FTBoolNull BOOL,
+				makeStringValue("eHh4"), // FTBytes BYTES(32) NOT NULL,
+				makeNullValue(),         // FTBytesNull BYTES(32),
 				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
 				makeNullValue(),               // FTTimestampNull TIMESTAMP,
 				makeStringValue("100"),        // FTInt INT64 NOT NULL,
@@ -740,7 +740,7 @@ func TestStreamingRead_ValueType(t *testing.T) {
 					makeNullValue(),
 				)),
 				makeListValueAsValue(makeListValue(
-					makeStringValue("xyz"),
+					makeStringValue("eHh4"),
 					makeNullValue(),
 				)),
 				makeListValueAsValue(makeListValue(
@@ -773,7 +773,7 @@ func TestStreamingRead_ValueType(t *testing.T) {
 					makeNullValue(),
 				)),
 				makeListValueAsValue(makeListValue(
-					makeStringValue("xyz"),
+					makeStringValue("eHh4"),
 					makeNullValue(),
 				)),
 				makeListValueAsValue(makeListValue(
@@ -1019,7 +1019,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 			},
 		},
 		"Bytes": {
-			value: makeStringValue("xxxxx"),
+			value: makeStringValue("eHh4eHg="),
 			typ: &spannerpb.Type{
 				Code: spannerpb.TypeCode_BYTES,
 			},
@@ -1251,8 +1251,8 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 		},
 		"ListBytes": {
 			value: makeListValueAsValue(makeListValue(
-				makeStringValue("xxxxx"),
-				makeStringValue("yyyyy"),
+				makeStringValue("eHh4eHg="),
+				makeStringValue("eXl5eXk="),
 			)),
 			typ: &spannerpb.Type{
 				Code: spannerpb.TypeCode_ARRAY,
