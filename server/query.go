@@ -1176,7 +1176,34 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return NullExpr, nil, newExprErrorf(expr, false, "ExistsSubquery not supported yet")
 
 	case *ast.ArrayLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "ArrayLiteral not supported yet")
+		var data []interface{}
+		var ss []string
+		var vts []ValueType
+		for i := range e.Values {
+			s, d, err := b.buildExpr(e.Values[i])
+			if err != nil {
+				return NullExpr, nil, wrapExprError(err, expr, "ArrayLiteral")
+			}
+
+			data = append(data, d...)
+			ss = append(ss, s.Raw)
+			vts = append(vts, s.ValueType)
+		}
+
+		vt, err := decideArrayElementsValueType(vts...)
+		if err != nil {
+			return NullExpr, nil, newExprErrorf(expr, true, err.Error())
+		}
+
+		// TODO: allow to use both Int64 and Float64
+
+		return Expr{
+			ValueType: ValueType{
+				Code:      TCArray,
+				ArrayType: &vt,
+			},
+			Raw: fmt.Sprintf("json_array(%s)", strings.Join(ss, ", ")),
+		}, data, nil
 
 	case *ast.StructLiteral:
 		return NullExpr, nil, newExprErrorf(expr, false, "StructLiteral not supported yet")

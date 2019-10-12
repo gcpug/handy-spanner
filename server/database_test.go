@@ -1317,6 +1317,42 @@ func TestQuery(t *testing.T) {
 			},
 		},
 
+		"ArrayLiteral_Empty": {
+			sql: `SELECT []`,
+			expected: [][]interface{}{
+				[]interface{}{makeTestArray(TCInt64)},
+			},
+		},
+		"ArrayLiteral_IntLiteral": {
+			sql: `SELECT [1, 2, 3]`,
+			expected: [][]interface{}{
+				[]interface{}{makeTestArray(TCInt64, 1, 2, 3)},
+			},
+		},
+		"ArrayLiteral_Ident": {
+			sql: `SELECT [1, Id] FROM Simple`,
+			expected: [][]interface{}{
+				[]interface{}{makeTestArray(TCInt64, 1, 100)},
+				[]interface{}{makeTestArray(TCInt64, 1, 200)},
+				[]interface{}{makeTestArray(TCInt64, 1, 300)},
+			},
+		},
+		"ArrayLiteral_Params": {
+			sql: `SELECT ["xxx", @foo]`,
+			params: map[string]Value{
+				"foo": makeTestValue("yyy"),
+			},
+			expected: [][]interface{}{
+				[]interface{}{makeTestArray(TCString, "xxx", "yyy")},
+			},
+		},
+		// "ArrayLiteral_IntAndFloat": {
+		// 	sql: `SELECT [100, 0.1]`,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{makeTestArray(TCFloat64, 0.1, 0.1)},
+		// 	},
+		// },
+
 		"NoTable_IntLiteral": {
 			sql: `SELECT 1`,
 			expected: [][]interface{}{
@@ -2146,6 +2182,12 @@ func TestQueryError(t *testing.T) {
 			sql:  `SELECT 1, 0.1 EXCEPT DISTINCT SELECT 1, true`,
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`^Column 2 in EXCEPT DISTINCT has incompatible types: FLOAT64, BOOL`),
+		},
+
+		"ArrayLiteral_IncompatibleElements": {
+			sql:  `SELECT [100, "xxx"]`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Array elements of types {.*} do not have a common supertype`),
 		},
 	}
 

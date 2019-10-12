@@ -88,6 +88,51 @@ func compareValueType(a, b ValueType) bool {
 	return a == b
 }
 
+func compatibleValueType(a, b ValueType) (ValueType, bool) {
+	if a.Code == TCInt64 && b.Code == TCFloat64 {
+		return b, true
+	}
+	if b.Code == TCInt64 && a.Code == TCFloat64 {
+		return a, true
+	}
+	return a, a == b
+}
+
+func decideArrayElementsValueType(vts ...ValueType) (ValueType, error) {
+	vt := ValueType{Code: TCInt64}
+	if len(vts) > 0 {
+		vt = vts[0]
+	}
+
+	used := map[string]struct{}{}
+
+	for i := range vts {
+		used[vts[i].String()] = struct{}{}
+	}
+
+	for i := range vts {
+		var ok bool
+		// TODO: if ValueType is changed, types of all values also need changing
+		// vt, ok = compatibleValueType(vt, vts[i])
+		ok = compareValueType(vt, vts[i])
+		if !ok {
+			var typ string
+			first := true
+			for n := range used {
+				if !first {
+					typ += ", "
+				}
+				typ += n
+				first = false
+			}
+
+			return ValueType{}, fmt.Errorf("Array elements of types {%s} do not have a common supertype", typ)
+		}
+	}
+
+	return vt, nil
+}
+
 type StructType struct {
 	FieldNames []string
 	FieldTypes map[string]*ValueType
