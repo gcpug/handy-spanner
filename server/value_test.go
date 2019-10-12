@@ -52,9 +52,9 @@ func TestDatabaseEncDec(t *testing.T) {
 			expected: float64(0.5),
 		},
 		"Bytes": {
-			value:    makeStringValue("xyz"),
+			value:    makeStringValue("eHh4"), // xxx
 			typ:      ValueType{Code: TCBytes},
-			expected: []byte("xyz"),
+			expected: []byte("xxx"),
 		},
 		"Timestamp": {
 			value:    makeStringValue("2012-03-04T00:00:00.123456789Z"),
@@ -107,8 +107,8 @@ func TestDatabaseEncDec(t *testing.T) {
 		},
 		"ArrayBytes": {
 			value: makeListValueAsValue(makeListValue(
-				makeStringValue("xyz"),
-				makeStringValue("xxx"),
+				makeStringValue("eHl6"), // xyz
+				makeStringValue("eHh4"), // xxx
 			)),
 			typ: ValueType{
 				Code:      TCArray,

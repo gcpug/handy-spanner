@@ -600,7 +600,7 @@ func spannerValueFromValue(x interface{}) (*structpb.Value, error) {
 		if x == nil {
 			return &structpb.Value{Kind: &structpb.Value_NullValue{}}, nil
 		} else {
-			return &structpb.Value{Kind: &structpb.Value_StringValue{string(x)}}, nil
+			return &structpb.Value{Kind: &structpb.Value_StringValue{encodeBase64(x)}}, nil
 		}
 	case nil:
 		return &structpb.Value{Kind: &structpb.Value_NullValue{}}, nil
@@ -838,7 +838,11 @@ func makeDataFromSpannerValue(v *structpb.Value, typ ValueType) (interface{}, er
 	case TCBytes:
 		switch vv := v.Kind.(type) {
 		case *structpb.Value_StringValue:
-			return []byte(vv.StringValue), nil
+			b, err := decodeBase64(vv.StringValue)
+			if err != nil {
+				return nil, fmt.Errorf("TODO: %v", err)
+			}
+			return b, nil
 		}
 	case TCArray:
 		return nil, fmt.Errorf("Array type is not supported")

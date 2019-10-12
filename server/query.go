@@ -1260,7 +1260,10 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, nil, nil
 
 	case *ast.BytesLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "BytesLiteral not supported yet")
+		return Expr{
+			ValueType: ValueType{Code: TCBytes},
+			Raw:       `"` + string(e.Value) + `"`,
+		}, nil, nil
 
 	case *ast.DateLiteral:
 		t, ok := parseDateLiteral(e.Value.Value)

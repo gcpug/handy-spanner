@@ -17,6 +17,7 @@ package server
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -538,4 +539,17 @@ func spannerValue2DatabaseValue(v *structpb.Value, col Column) (interface{}, err
 	}
 
 	return vv, nil
+}
+
+func encodeBase64(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func decodeBase64(s string) ([]byte, error) {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		// seems Spanner tries to use both padding and no-padding
+		return base64.RawStdEncoding.DecodeString(s)
+	}
+	return b, nil
 }
