@@ -1454,6 +1454,18 @@ func TestQuery(t *testing.T) {
 				[]interface{}{"1999-01-02T12:02:03.123456789Z"},
 			},
 		},
+		"DateLiteral": {
+			sql: `SELECT DATE "1999-01-02"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02"},
+			},
+		},
+		"DateLiteral2": {
+			sql: `SELECT DATE "1999-1-2"`,
+			expected: [][]interface{}{
+				[]interface{}{"1999-01-02"},
+			},
+		},
 
 		"NoTable_IntLiteral": {
 			sql: `SELECT 1`,

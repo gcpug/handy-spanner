@@ -1263,7 +1263,14 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return NullExpr, nil, newExprErrorf(expr, false, "BytesLiteral not supported yet")
 
 	case *ast.DateLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "DateLiteral not supported yet")
+		t, ok := parseDateLiteral(e.Value.Value)
+		if !ok {
+			return NullExpr, nil, newExprErrorf(expr, true, "Invalid DATE literal")
+		}
+		return Expr{
+			ValueType: ValueType{Code: TCDate},
+			Raw:       `"` + t.Format("2006-01-02") + `"`,
+		}, nil, nil
 
 	case *ast.TimestampLiteral:
 		t, ok := parseTimestampLiteral(e.Value.Value)
@@ -1360,6 +1367,14 @@ func wrapExprError(err error, expr ast.Expr, msg string) error {
 	}
 
 	return newExprErrorf(expr, false, "%s, %s", msg, err.Error())
+}
+
+func parseDateLiteral(s string) (time.Time, bool) {
+	if t, err := time.ParseInLocation("2006-1-2", s, parseLocation); err == nil {
+		return t, true
+	}
+
+	return time.Time{}, false
 }
 
 func parseTimestampLiteral(s string) (time.Time, bool) {
