@@ -1006,6 +1006,16 @@ func TestQuery(t *testing.T) {
 		`INSERT INTO CompositePrimaryKeys VALUES(3, "bbb", 3, 0, "x1", "y3", "z")`,
 		`INSERT INTO CompositePrimaryKeys VALUES(4, "ccc", 3, 0, "x2", "y4", "z")`,
 		`INSERT INTO CompositePrimaryKeys VALUES(5, "ccc", 4, 0, "x2", "y5", "z")`,
+
+		`INSERT INTO ArrayTypes VALUES(100,
+           json_array("xxx1", "xxx2"),
+           json_array(true, false),
+           json_array("eHl6", "eHl6"),
+           json_array("2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.999999999Z"),
+           json_array(1, 2),
+           json_array(0.1, 0.2),
+           json_array("2012-03-04", "2012-03-05")
+        )`,
 	} {
 		if _, err := db.db.ExecContext(ctx, query); err != nil {
 			t.Fatalf("Insert failed: %v", err)
@@ -1310,11 +1320,15 @@ func TestQuery(t *testing.T) {
 				[]interface{}{int64(100), "xxx"},
 			},
 		},
-		"Simple_UNNEST_Array3": {
-			sql: `SELECT Id, Value FROM Simple WHERE Value IN UNNEST (["xxx", 1])`,
+		"Simple_UNNEST_Ident": {
+			sql: `SELECT Id FROM ArrayTypes WHERE 1 IN UNNEST (ArrayInt)`,
 			expected: [][]interface{}{
-				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(100)},
 			},
+		},
+		"Simple_UNNEST_Ident2": {
+			sql:      `SELECT Id FROM ArrayTypes WHERE 1 NOT IN UNNEST (ArrayInt)`,
+			expected: nil,
 		},
 
 		"ArrayLiteral_Empty": {
@@ -2306,6 +2320,11 @@ func TestQueryError(t *testing.T) {
 
 		"ArrayLiteral_IncompatibleElements": {
 			sql:  `SELECT [100, "xxx"]`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Array elements of types {.*} do not have a common supertype`),
+		},
+		"ArrayLiteral_Unnest_ImcompatibleElements": {
+			sql:  `SELECT * FROM UNNEST (["xxx", 1])`,
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`^Array elements of types {.*} do not have a common supertype`),
 		},

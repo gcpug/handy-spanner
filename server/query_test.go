@@ -38,41 +38,41 @@ func TestQueryBuilder_UnnestValue_Success(t *testing.T) {
 			v: Value{
 				Data: []bool{true, false},
 			},
-			ph:   "VALUES (?), (?)",
+			ph:   "JSON_ARRAY((?), (?))",
 			args: []interface{}{true, false},
 		},
 		{
 			v: Value{
 				Data: []int64{(100), int64(101)},
 			},
-			ph:   "VALUES (?), (?)",
+			ph:   "JSON_ARRAY((?), (?))",
 			args: []interface{}{int64(100), int64(101)},
 		},
 		{
 			v: Value{
 				Data: []float64{float64(1.1), float64(1.2)},
 			},
-			ph:   "VALUES (?), (?)",
+			ph:   "JSON_ARRAY((?), (?))",
 			args: []interface{}{float64(1.1), float64(1.2)},
 		},
 		{
 			v: Value{
 				Data: []string{"aa", "bb", "cc"},
 			},
-			ph:   "VALUES (?), (?), (?)",
+			ph:   "JSON_ARRAY((?), (?), (?))",
 			args: []interface{}{"aa", "bb", "cc"},
 		},
 		{
 			v: Value{
 				Data: [][]byte{[]byte("aa"), []byte("bb"), []byte("cc")},
 			},
-			ph:   "VALUES (?), (?), (?)",
+			ph:   "JSON_ARRAY((?), (?), (?))",
 			args: []interface{}{[]byte("aa"), []byte("bb"), []byte("cc")},
 		},
 	}
 
 	for _, tc := range table {
-		s, d, err := b.unnestValue(tc.v, false)
+		s, d, err := b.expandArrayParam(tc.v)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -134,7 +134,7 @@ func TestQueryBuilder_UnnestValue_Error(t *testing.T) {
 	}
 
 	for _, tc := range table {
-		_, _, err := b.unnestValue(tc.v, false)
+		_, _, err := b.expandArrayParam(tc.v)
 		st := status.Convert(err)
 		if st.Code() != tc.code {
 			t.Errorf("expect code %v, but got %v", tc.code, st.Code())

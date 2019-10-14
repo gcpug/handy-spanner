@@ -388,31 +388,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 // If aliases for unnested values or offsets are used, they can be specified by the name.
 // e.g. SELECT MAX(x), MAX(y) FROM UNNEST() AS x OFFSET WITH AS y
 //
-// sqlite cannot have syntax to make alias names for VALUES columns.
-// Then we use UNION to make them have column names by merging into a table with column names.
-// A table with column names can be created with dynamically with literals.
-// e.g. `SELECT 1 AS x UNION ALL VALUES (a), (b), (c)`
-// But it has an uneeded row for merging into that, so it can use LIMIT 0 clause to ignore the row.
-// e.g. `SELECT 1 AS x LIMIT 0 UNION ALL VALUES (a), (b), (c)`
-// To make the gouping of statements clear, it needs to put parenthesis in select statement, but
-// sqlite cannot simply put parenthesis around select statement, so it needs to use subquery like this:
-// e.g. `SELECT * FROM (SELECT 1 AS x LIMIT 0) UNION ALL VALUES (a), (b), (c)`
-//
-// As the result, `SELECT MAX(x) FROM UNNEST([1,2,3]) AS x` for spanner query generates:
-//   SELECT MAX(UNNEST0.value)
-//     FROM
-//       SELECT * FROM (SELECT 1 AS value LIMIT 0)
-//         UNION ALL
-//       VALUES (1), (2), (3)
-//       AS UNNEST0
-//
-// `SELECT MAX(x), MAX(y) FROM UNNEST([1,2,3]) AS x WITH OFFSET AS y` for spanner query generates:
-//   SELECT MAX(UNNEST0.value), MAX(UNNEST0.column)
-//     FROM
-//       SELECT * FROM (SELECT 1 AS value, 1 AS column LIMIT 0)
-//         UNION ALL
-//       VALUES (1, 0), (2, 1), (3, 2)
-//       AS UNNEST0
+// See the doc comment of buildUnnestExpr about the generated query.
 func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []interface{}, error) {
 	var offset bool
 	var offsetAlias string
@@ -459,15 +435,8 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []i
 		})
 	}
 
-	var stmt string
-	if offset {
-		stmt = "SELECT * FROM (SELECT 0 AS value, 0 as offset LIMIT 0) UNION ALL " + s.Raw
-	} else {
-		stmt = "SELECT * FROM (SELECT 0 AS value LIMIT 0) UNION ALL " + s.Raw
-	}
-
 	view := createTableViewFromItems(items, nil)
-	return view, fmt.Sprintf("(%s) AS %s", stmt, viewName), data, nil
+	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), data, nil
 }
 
 func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultItem, string, error) {
@@ -780,62 +749,42 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface
 }
 
 // buildUnnestExpr creates a table from UNNEST() expression.
-// sqlite cannot handle array type and UNNEST(), so this function simulates it by creating a table
-// virtually with VALUES().
+//
+// sqlite cannot handle array type and UNNEST() directly.
+// Array type is handled as JSON, so UNNEST canbe simulated by JSON_EACH().
 //
 // `UNNEST([a, b, c])` in spanner results in the following expression in sqlite:
-// `VALUES (a), (b), (c)`
+// `SELECT value JSON_EACH(JSON_ARRAY((a), (b), (c))`
 //
 // When array param is specified like `UNNEST(@foo)`, it expands all elements of the array like:
-// `VALUES (?), (?) (?)
+// `SELECT value JSON_EACH(JSON_ARRAY((?), (?) (?)))`
 //
 // If offset for unnest is needed `UNNEST([a, b, c])` generates:
-// `VALUES (a, 0), (b, 1), (c, 2)
+// `SELECT value, key as offset JSON_EACH(JSON_ARRAY(a, b, c))`
 func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool) (Expr, []interface{}, error) {
-	switch e := expr.(type) {
-	case *ast.Param:
-		v, ok := b.params[e.Name]
-		if !ok {
-			return NullExpr, nil, fmt.Errorf("params not found: %v", e.Name)
-		}
-		return b.unnestValue(v, offset)
-
-	case *ast.ArrayLiteral:
-		// TODO: check all of Array values are the same type
-
-		var ss []string
-		var data []interface{}
-		var vt *ValueType
-		for i, v := range e.Values {
-			s, d, err := b.buildExpr(v)
-			if err != nil {
-				return NullExpr, nil, wrapExprError(err, v, "Array Literal")
-			}
-			if offset {
-				ss = append(ss, fmt.Sprintf("(%s, %d)", s.Raw, i))
-			} else {
-				ss = append(ss, fmt.Sprintf("(%s)", s.Raw))
-			}
-			data = append(data, d...)
-
-			if vt == nil {
-				vt = &s.ValueType
-			}
-		}
-
-		return Expr{
-			ValueType: ValueType{
-				Code:      TCArray,
-				ArrayType: vt, // TODO: nil?
-			},
-			Raw: "VALUES " + strings.Join(ss, ", "),
-		}, data, nil
+	s, data, err := b.buildExpr(expr)
+	if err != nil {
+		return NullExpr, nil, wrapExprError(err, expr, "UNNEST")
 	}
 
-	return NullExpr, nil, fmt.Errorf("unexpected expression type for UNNEST: %T", expr)
+	if s.ValueType.Code != TCArray {
+		return NullExpr, nil, newExprErrorf(expr, false, "TODO: unnest requires array: %v", s.ValueType.Code)
+	}
+
+	var raw string
+	if offset {
+		raw = fmt.Sprintf("SELECT value, key as offset FROM JSON_EACH(%s)", s.Raw)
+	} else {
+		raw = fmt.Sprintf("SELECT value FROM JSON_EACH(%s)", s.Raw)
+	}
+
+	return Expr{
+		ValueType: s.ValueType,
+		Raw:       raw,
+	}, data, nil
 }
 
-func (b *QueryBuilder) unnestValue(v Value, offset bool) (Expr, []interface{}, error) {
+func (b *QueryBuilder) expandArrayParam(v Value) (Expr, []interface{}, error) {
 	errMsg := "Second argument of IN UNNEST must be an array but was %s"
 	switch v.Data.(type) {
 	case nil:
@@ -859,16 +808,12 @@ func (b *QueryBuilder) unnestValue(v Value, offset bool) (Expr, []interface{}, e
 		placeholders := make([]string, n)
 		args := make([]interface{}, n)
 		for i := 0; i < n; i++ {
-			if offset {
-				placeholders[i] = fmt.Sprintf("(?, %d)", i)
-			} else {
-				placeholders[i] = "(?)"
-			}
+			placeholders[i] = "(?)"
 			args[i] = vv.Index(i).Interface()
 		}
 		var raw string
 		if n > 0 {
-			raw = "VALUES " + strings.Join(placeholders, ", ")
+			raw = "JSON_ARRAY(" + strings.Join(placeholders, ", ") + ")"
 		}
 		return Expr{
 			ValueType: v.Type, // TODO: check correct type or not
@@ -882,11 +827,7 @@ func (b *QueryBuilder) unnestValue(v Value, offset bool) (Expr, []interface{}, e
 		placeholders := make([]string, n)
 		args := make([]interface{}, n)
 		for i := 0; i < n; i++ {
-			if offset {
-				placeholders[i] = fmt.Sprintf("(?, %d)", i)
-			} else {
-				placeholders[i] = "(?)"
-			}
+			placeholders[i] = "(?)"
 			rvv := rv.Index(i)
 			if rvv.IsNil() {
 				args[i] = nil
@@ -896,7 +837,7 @@ func (b *QueryBuilder) unnestValue(v Value, offset bool) (Expr, []interface{}, e
 		}
 		var raw string
 		if n > 0 {
-			raw = "VALUES " + strings.Join(placeholders, ", ")
+			raw = "JSON_ARRAY(" + strings.Join(placeholders, ", ") + ")"
 		}
 		return Expr{
 			ValueType: v.Type, // TODO: check correct type or not
@@ -1290,10 +1231,15 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		if !ok {
 			return NullExpr, nil, newExprErrorf(expr, true, "params not found: %s", e.Name)
 		}
-		return Expr{
-			ValueType: v.Type,
-			Raw:       "?",
-		}, []interface{}{v.Data}, nil
+
+		if v.Type.Code == TCArray {
+			return b.expandArrayParam(v)
+		} else {
+			return Expr{
+				ValueType: v.Type,
+				Raw:       "?",
+			}, []interface{}{v.Data}, nil
+		}
 	case *ast.Ident:
 		if b.rootView == nil {
 			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
