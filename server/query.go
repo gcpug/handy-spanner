@@ -1018,6 +1018,8 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			return NullExpr, nil, newExprErrorf(expr, false, "unsupported CALL function: %s", name)
 		}
 
+		// TODO: distinct
+
 		// when fn.NArgs < 0, args is variadic
 		if fn.NArgs >= 0 && fn.NArgs != len(e.Args) {
 			return NullExpr, nil, newExprErrorf(expr, true, "%s requires %d arguments", name, fn.NArgs)

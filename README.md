@@ -68,10 +68,11 @@ Note that it becomes specific implementations for a fake server, which means you
    * LIMIT OFFSET
    * SELECT alias
    * Query Parameters
+   * Literals (except STRUCT)
    * JOINs
    * Subquery
    * SET operations: UNION, INTERSECT, EXCEPT
-   * UNNEST (partially)
+   * UNNEST
    * Functions (partially)
    * Arithmetic operations
 * Mutation
@@ -82,7 +83,7 @@ Note that it becomes specific implementations for a fake server, which means you
 * DDL
    * CreateTable, CreateIndex only
 * Data Types
-   * Int, Float, String, Bool, Byte, Date, Timestamp
+   * Int, Float, String, Bool, Byte, Date, Timestamp, Array<Any>
 
 ### Not supported features
 
@@ -90,14 +91,14 @@ Note that it becomes specific implementations for a fake server, which means you
    * Applying mutations is not transactional
    * Optimistic lock
    * No check for transaction type RO/RW
-* Data Types
-   * Array and Struct type
 * Query
    * Strict type checking
    * More functions
    * Partionan Query
    * EXCEPT ALL and INTERSECT ALL
    * Merging INT64 and FLOAT64 in SET operations
+   * Array operations
+   * Struct
 * DML
    * not yet
 * DDL
