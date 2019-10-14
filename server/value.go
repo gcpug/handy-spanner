@@ -141,6 +141,31 @@ type StructType struct {
 
 type TypeCode int32
 
+func (c TypeCode) String() string {
+	switch c {
+	case TCBool:
+		return "BOOL"
+	case TCInt64:
+		return "INT64"
+	case TCFloat64:
+		return "FLOAT64"
+	case TCTimestamp:
+		return "TIMESTAMP"
+	case TCDate:
+		return "DATE"
+	case TCString:
+		return "STRING"
+	case TCBytes:
+		return "BYTES"
+	case TCArray:
+		return "ARRAY"
+	case TCStruct:
+		return "STRUCT"
+	default:
+		return "(unknown)"
+	}
+}
+
 const (
 	TCBool TypeCode = iota + 1
 	TCInt64

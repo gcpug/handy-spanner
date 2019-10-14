@@ -18,15 +18,13 @@ import (
 	"testing"
 
 	cmp "github.com/google/go-cmp/cmp"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func newTestQueryBuilder() *QueryBuilder {
 	return &QueryBuilder{}
 }
 
-func TestQueryBuilder_UnnestValue_Success(t *testing.T) {
+func TestQueryBuilder_ExpandParamByPlaceholders(t *testing.T) {
 	b := newTestQueryBuilder()
 
 	table := []struct {
@@ -72,7 +70,7 @@ func TestQueryBuilder_UnnestValue_Success(t *testing.T) {
 	}
 
 	for _, tc := range table {
-		s, d, err := b.expandArrayParam(tc.v)
+		s, d, err := b.expandParamByPlaceholders(tc.v)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -85,59 +83,5 @@ func TestQueryBuilder_UnnestValue_Success(t *testing.T) {
 			t.Errorf("(-got, +want)\n%s", diff)
 		}
 
-	}
-}
-
-func TestQueryBuilder_UnnestValue_Error(t *testing.T) {
-	b := newTestQueryBuilder()
-
-	table := []struct {
-		v    Value
-		code codes.Code
-	}{
-		{
-			v: Value{
-				Data: nil,
-			},
-			code: codes.Unknown,
-		},
-		{
-			v: Value{
-				Data: true,
-			},
-			code: codes.InvalidArgument,
-		},
-		{
-			v: Value{
-				Data: int64(100),
-			},
-			code: codes.InvalidArgument,
-		},
-		{
-			v: Value{
-				Data: float64(100),
-			},
-			code: codes.InvalidArgument,
-		},
-		{
-			v: Value{
-				Data: "x",
-			},
-			code: codes.InvalidArgument,
-		},
-		{
-			v: Value{
-				Data: []byte("x"),
-			},
-			code: codes.InvalidArgument,
-		},
-	}
-
-	for _, tc := range table {
-		_, _, err := b.expandArrayParam(tc.v)
-		st := status.Convert(err)
-		if st.Code() != tc.code {
-			t.Errorf("expect code %v, but got %v", tc.code, st.Code())
-		}
 	}
 }

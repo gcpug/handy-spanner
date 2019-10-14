@@ -1743,6 +1743,13 @@ func TestQuery(t *testing.T) {
 			sql:      `SELECT Id FROM Simple WHERE EXISTS(SELECT * FROM Simple WHERE Id = 1000)`,
 			expected: nil,
 		},
+		"SubQuery_Array": {
+			sql: `SELECT * FROM UNNEST(ARRAY(SELECT 100))`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+
 		"SubQuery_ColumnAlias": {
 			sql: `SELECT Id, foo, bar FROM (SELECT Id, Id AS foo, Id bar FROM Simple)`,
 			expected: [][]interface{}{
@@ -2327,6 +2334,33 @@ func TestQueryError(t *testing.T) {
 			sql:  `SELECT * FROM UNNEST (["xxx", 1])`,
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`^Array elements of types {.*} do not have a common supertype`),
+		},
+		"ArrayLiteral_Unnest_Bool": {
+			sql:  `SELECT 1 FROM UNNEST (true)`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Values referenced in UNNEST must be arrays. UNNEST contains expression of type BOOL`),
+		},
+		"ArrayLiteral_In_Unnest_Bool": {
+			sql:  `SELECT 1 FROM Simple WHERE 1 IN UNNEST (true)`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Second argument of IN UNNEST must be an array but was BOOL`),
+		},
+
+		"Limit_InvalidType": {
+			sql: `SELECT 1 FROM Simple LIMIT @foo`,
+			params: map[string]Value{
+				"foo": makeTestValue("xx"),
+			},
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^LIMIT expects an integer literal or parameter`),
+		},
+		"Offset_InvalidType": {
+			sql: `SELECT 1 FROM Simple LIMIT 1 OFFSET @foo`,
+			params: map[string]Value{
+				"foo": makeTestValue("xx"),
+			},
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^OFFSET expects an integer literal or parameter`),
 		},
 	}
 
