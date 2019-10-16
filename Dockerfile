@@ -18,7 +18,7 @@ FROM alpine:3.10
 COPY --from=builder /go/src/handy-spanner/handy-spanner /usr/local/bin/handy-spanner
 
 RUN apk --no-cache add \
-	ca-certificates
+	ca-certificates tzdata
 
 USER nobody
 EXPOSE 9999
