@@ -967,7 +967,40 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return NullExpr, nil, newExprErrorf(expr, false, "Selector not supported yet")
 
 	case *ast.IndexExpr:
-		return NullExpr, nil, newExprErrorf(expr, false, "Index not supported yet")
+		var data []interface{}
+
+		s1, d1, err := b.buildExpr(e.Expr)
+		if err != nil {
+			return NullExpr, nil, wrapExprError(err, expr, "Expr")
+		}
+		data = append(data, d1...)
+
+		s2, d2, err := b.buildExpr(e.Index)
+		if err != nil {
+			return NullExpr, nil, wrapExprError(err, expr, "Index")
+		}
+		data = append(data, d2...)
+
+		if s1.ValueType.Code != TCArray {
+			msg := "Element access using [] is not supported on values of type %s"
+			return NullExpr, nil, newExprErrorf(expr, true, msg, s1.ValueType.Code)
+		}
+		if s2.ValueType.Code != TCInt64 {
+			msg := "Array position in [] must be coercible to INT64 type, but has type %s"
+			return NullExpr, nil, newExprErrorf(expr, true, msg, s2.ValueType.Code)
+		}
+
+		var raw string
+		if e.Ordinal {
+			raw = fmt.Sprintf("JSON_EXTRACT(%s, '$[' || (%s-1) || ']')", s1.Raw, s2.Raw)
+		} else {
+			raw = fmt.Sprintf("JSON_EXTRACT(%s, '$[' || %s || ']')", s1.Raw, s2.Raw)
+		}
+
+		return Expr{
+			ValueType: *s1.ValueType.ArrayType,
+			Raw:       raw,
+		}, data, nil
 
 	case *ast.IsNullExpr:
 		left, ldata, lerr := b.buildExpr(e.Left)
@@ -1193,6 +1226,10 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}
 		if len(items) != 1 {
 			return NullExpr, nil, newExprErrorf(expr, true, "ARRAY subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
+		}
+		if items[0].ValueType.Code == TCArray {
+			msg := "Cannot use array subquery with column of type %s because nested arrays are not supported"
+			return NullExpr, nil, newExprErrorf(expr, true, msg, items[0].ValueType)
 		}
 
 		return Expr{
