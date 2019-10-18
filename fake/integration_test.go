@@ -16,15 +16,19 @@ package fake
 
 import (
 	"context"
+	"io/ioutil"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/civil"
 	"cloud.google.com/go/spanner"
+	admindatabasev1 "cloud.google.com/go/spanner/admin/database/apiv1"
 	cmp "github.com/google/go-cmp/cmp"
 	"google.golang.org/api/option"
+	databasepb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 )
 
 type FullType struct {
@@ -622,5 +626,51 @@ func TestIntegration_Query_Detail(t *testing.T) {
 			t.Fatalf("(-got, +want)\n%s", diff)
 		}
 
+	}
+}
+
+func TestIntegration_UpdateDatbaseDdl(t *testing.T) {
+	ctx := context.Background()
+	dbName := "projects/fake/instances/fake/databases/fake"
+
+	srv, conn, err := Run()
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	defer srv.Stop()
+
+	adminclient, err := admindatabasev1.NewDatabaseAdminClient(ctx, option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatalf("failed to connect fake spanner server: %v", err)
+	}
+
+	f, err := os.Open("./testdata/schema.sql")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+
+	b, err := ioutil.ReadAll(f)
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	var stmts []string
+	for _, s := range strings.Split(string(b), ";") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		stmts = append(stmts, s)
+	}
+
+	op, err := adminclient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
+		Database:   dbName,
+		Statements: stmts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := op.Wait(ctx); err != nil {
+		t.Fatalf("Wait err: %v", err)
 	}
 }

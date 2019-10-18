@@ -25,6 +25,7 @@ import (
 	"github.com/MakeNowJust/memefish/pkg/parser"
 	"github.com/MakeNowJust/memefish/pkg/token"
 	"github.com/gcpug/handy-spanner/server"
+	lropb "google.golang.org/genproto/googleapis/longrunning"
 	adminv1pb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	"google.golang.org/grpc"
@@ -76,7 +77,7 @@ func New(lis net.Listener) (*Server, error) {
 
 	adminv1pb.RegisterDatabaseAdminServer(s.grpcServer, s.srv)
 	spannerpb.RegisterSpannerServer(s.grpcServer, s.srv)
-	// TODO: support longrunning server
+	lropb.RegisterOperationsServer(s.grpcServer, s.srv)
 
 	reflection.Register(s.grpcServer)
 	channelzsvc.RegisterChannelzServiceToServer(s.grpcServer)

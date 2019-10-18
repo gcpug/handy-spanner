@@ -26,6 +26,8 @@ import (
 	"github.com/MakeNowJust/memefish/pkg/ast"
 	"github.com/MakeNowJust/memefish/pkg/parser"
 	"github.com/MakeNowJust/memefish/pkg/token"
+	"github.com/golang/protobuf/ptypes"
+	"github.com/golang/protobuf/ptypes/empty"
 	emptypb "github.com/golang/protobuf/ptypes/empty"
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	lropb "google.golang.org/genproto/googleapis/longrunning"
@@ -40,6 +42,7 @@ type FakeSpannerServer interface {
 
 	spannerpb.SpannerServer
 	adminv1pb.DatabaseAdminServer
+	lropb.OperationsServer
 }
 
 func NewFakeServer() FakeSpannerServer {
@@ -91,6 +94,52 @@ func (s *server) UpdateDatabaseDdl(ctx context.Context, req *adminv1pb.UpdateDat
 
 	op := &lropb.Operation{
 		Name: "TODO:xxx",
+	}
+	return op, nil
+}
+
+func (s *server) ListOperations(ctx context.Context, req *lropb.ListOperationsRequest) (*lropb.ListOperationsResponse, error) {
+	// TODO
+	return &lropb.ListOperationsResponse{}, nil
+}
+
+func (s *server) GetOperation(ctx context.Context, req *lropb.GetOperationRequest) (*lropb.Operation, error) {
+	name := "TODO:xxx"
+	if req.Name != name {
+		return nil, status.Errorf(codes.NotFound, "Operation not found: %s", name)
+	}
+
+	any, _ := ptypes.MarshalAny(&empty.Empty{})
+	op := &lropb.Operation{
+		Name: "TODO:xxx",
+		Done: true,
+		Result: &lropb.Operation_Response{
+			Response: any,
+		},
+	}
+	return op, nil
+}
+
+func (s *server) DeleteOperation(ctx context.Context, req *lropb.DeleteOperationRequest) (*empty.Empty, error) {
+	return &empty.Empty{}, nil
+}
+
+func (s *server) CancelOperation(ctx context.Context, req *lropb.CancelOperationRequest) (*empty.Empty, error) {
+	return &empty.Empty{}, nil
+}
+
+func (s *server) WaitOperation(ctx context.Context, req *lropb.WaitOperationRequest) (*lropb.Operation, error) {
+	name := "TODO:xxx"
+	if req.Name != name {
+		return nil, status.Errorf(codes.NotFound, "Operation not found: %s", name)
+	}
+	any, _ := ptypes.MarshalAny(&empty.Empty{})
+	op := &lropb.Operation{
+		Name: "TODO:xxx",
+		Done: true,
+		Result: &lropb.Operation_Response{
+			Response: any,
+		},
 	}
 	return op, nil
 }
