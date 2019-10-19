@@ -1336,6 +1336,49 @@ func TestQuery(t *testing.T) {
 			expected: nil,
 		},
 
+		"ArrayIndex_OFFSET1": {
+			sql: `SELECT [1, 2, 3][OFFSET(0)]`,
+			expected: [][]interface{}{
+				[]interface{}{int64(1)},
+			},
+		},
+		"ArrayIndex_OFFSET2": {
+			sql: `SELECT [1, 2, 3][OFFSET(2)]`,
+			expected: [][]interface{}{
+				[]interface{}{int64(3)},
+			},
+		},
+		"ArrayIndex_OFFSET_Param": {
+			sql: `SELECT [1, 2, 3][OFFSET(@foo)]`,
+			params: map[string]Value{
+				"foo": makeTestValue(1),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(2)},
+			},
+		},
+		"ArrayIndex_ORDINAL1": {
+			sql: `SELECT [1, 2, 3][ORDINAL(1)]`,
+			expected: [][]interface{}{
+				[]interface{}{int64(1)},
+			},
+		},
+		"ArrayIndex_ORDINAL3": {
+			sql: `SELECT [1, 2, 3][ORDINAL(3)]`,
+			expected: [][]interface{}{
+				[]interface{}{int64(3)},
+			},
+		},
+		"ArrayIndex_ORDINAL_Param": {
+			sql: `SELECT [1, 2, 3][ORDINAL(@foo)]`,
+			params: map[string]Value{
+				"foo": makeTestValue(1),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(1)},
+			},
+		},
+
 		"ArrayLiteral_Empty": {
 			sql: `SELECT []`,
 			expected: [][]interface{}{
@@ -2672,6 +2715,12 @@ func TestQueryError(t *testing.T) {
 			sql:  `SELECT 1 FROM Simple WHERE 1 IN UNNEST (true)`,
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`^Second argument of IN UNNEST must be an array but was BOOL`),
+		},
+
+		"NestedArray": {
+			sql:  `SELECT ARRAY(SELECT [1,2,3])`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Cannot use array subquery with column of type ARRAY<INT64> because nested arrays are not supported`),
 		},
 
 		"Limit_InvalidType": {
