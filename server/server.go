@@ -354,12 +354,7 @@ func sendResult(stream spannerpb.Spanner_StreamingReadServer, iter RowIterator) 
 		Transaction: nil, // TODO
 	}
 
-	for {
-		row, ok := iter.Next()
-		if !ok {
-			break
-		}
-
+	err := iter.Do(func(row []interface{}) error {
 		values := make([]*structpb.Value, len(row))
 		for i, x := range row {
 			v, err := spannerValueFromValue(x)
@@ -380,6 +375,10 @@ func sendResult(stream spannerpb.Spanner_StreamingReadServer, iter RowIterator) 
 		// Metadata about the result set, such as row type information.
 		// Only present in the first response.
 		metadata = nil
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	return nil

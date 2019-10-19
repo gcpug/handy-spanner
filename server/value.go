@@ -39,7 +39,7 @@ type Expr struct {
 type RowIterator interface {
 	ResultSet() []ResultItem
 
-	Next() ([]interface{}, bool)
+	Do(func([]interface{}) error) error
 }
 
 type Value struct {
@@ -399,7 +399,39 @@ func (r *rows) ResultSet() []ResultItem {
 	return r.resultItems
 }
 
-func (it *rows) Next() ([]interface{}, bool) {
+func (it *rows) Do(fn func([]interface{}) error) error {
+	var lastErr error
+	for {
+		row, ok := it.next()
+		if !ok {
+			break
+		}
+		if err := fn(row); err != nil {
+			lastErr = err
+			break
+		}
+	}
+	if it.lastErr != nil {
+		if lastErr == nil {
+			lastErr = it.lastErr
+		}
+	}
+
+	if err := it.rows.Err(); err != nil {
+		if lastErr == nil {
+			lastErr = err
+		}
+	}
+	if err := it.rows.Close(); err != nil {
+		if lastErr == nil {
+			lastErr = err
+		}
+	}
+
+	return lastErr
+}
+
+func (it *rows) next() ([]interface{}, bool) {
 	ok := it.rows.Next()
 	if !ok {
 		return nil, false
@@ -433,17 +465,18 @@ func (it *rows) Next() ([]interface{}, bool) {
 				values[i] = reflect.New(reflect.TypeOf(ArrayBytes{}))
 
 			default:
-				panic(fmt.Sprintf("unknown supported type for Array: %v", item.ValueType.ArrayType.Code))
+				it.lastErr = fmt.Errorf("unknown supported type for Array: %v", item.ValueType.ArrayType.Code)
+				return nil, false
 			}
 		case TCStruct:
-			panic(fmt.Sprintf("unknown supported type: %v", item.ValueType.Code))
+			it.lastErr = fmt.Errorf("unknown supported type: %v", item.ValueType.Code)
+			return nil, false
 		}
 		ptrs[i] = values[i].Interface()
 	}
 
 	if err := it.rows.Scan(ptrs...); err != nil {
 		it.lastErr = err
-		panic(err)
 		return nil, false
 	}
 
