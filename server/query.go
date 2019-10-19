@@ -1060,6 +1060,100 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, nil, nil
 
 	case *ast.CastExpr:
+		s, data, err := b.buildExpr(e.Expr)
+		if err != nil {
+			return NullExpr, nil, wrapExprError(err, expr, "Cast")
+		}
+
+		target := astTypeToValueType(e.Type)
+
+		if target.Code == TCStruct {
+			return NullExpr, nil, newExprErrorf(expr, false, "Struct type is not supported in Cast")
+		}
+
+		raw := s.Raw
+		switch s.ValueType.Code {
+		case TCInt64:
+			switch target.Code {
+			case TCBool:
+				raw = fmt.Sprintf("___CAST_INT64_TO_BOOL(%s)", raw)
+			case TCString:
+				raw = fmt.Sprintf("___CAST_INT64_TO_STRING(%s)", raw)
+			case TCInt64:
+				// do nothing
+			case TCFloat64:
+				raw = fmt.Sprintf("___CAST_INT64_TO_FLOAT64(%s)", raw)
+			default:
+				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType.Code, target.Code)
+			}
+		case TCFloat64:
+			switch target.Code {
+			case TCString:
+				raw = fmt.Sprintf("___CAST_FLOAT64_TO_STRING(%s)", raw)
+			case TCInt64:
+				raw = fmt.Sprintf("___CAST_FLOAT64_TO_INT64(%s)", raw)
+			case TCFloat64:
+				// do nothing
+			default:
+				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType.Code, target.Code)
+			}
+
+		case TCBool:
+			switch target.Code {
+			case TCString:
+				raw = fmt.Sprintf("___CAST_BOOL_TO_STRING(%s)", raw)
+			case TCBool:
+				// do nothing
+			case TCInt64:
+				raw = fmt.Sprintf("___CAST_BOOL_TO_INT64(%s)", raw)
+			default:
+				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+			}
+
+		case TCString:
+			switch target.Code {
+			case TCString:
+				// do nothing
+			case TCBool:
+				raw = fmt.Sprintf("___CAST_STRING_TO_BOOL(%s)", raw)
+			case TCInt64:
+				raw = fmt.Sprintf("___CAST_STRING_TO_INT64(%s)", raw)
+			case TCFloat64:
+				raw = fmt.Sprintf("___CAST_STRING_TO_FLOAT64(%s)", raw)
+			default:
+				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+			}
+
+		case TCBytes:
+			switch target.Code {
+			case TCBytes:
+				// do nothing
+			case TCString:
+				// do nothing?
+			default:
+				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+			}
+		case TCArray:
+			if !compareValueType(s.ValueType, target) {
+				if s.ValueType.Code == TCArray && target.Code == TCArray {
+					msg := "Casting between arrays with incompatible element types is not supported: Invalid cast from %s to %s"
+					return NullExpr, nil, newExprErrorf(expr, true, msg, s.ValueType, target)
+				}
+
+				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+			}
+		case TCStruct:
+			if !compareValueType(s.ValueType, target) {
+				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+			}
+			return NullExpr, nil, newExprErrorf(expr, false, "struct is not supported")
+		}
+
+		return Expr{
+			ValueType: target,
+			Raw:       raw,
+		}, data, nil
+
 		return NullExpr, nil, newExprErrorf(expr, false, "Cast not supported yet")
 
 	case *ast.ExtractExpr:
@@ -1303,6 +1397,26 @@ func wrapExprError(err error, expr ast.Expr, msg string) error {
 	}
 
 	return newExprErrorf(expr, false, "%s, %s", msg, err.Error())
+}
+
+func astTypeToValueType(astType ast.Type) ValueType {
+	switch t := astType.(type) {
+	case *ast.SimpleType:
+		return ValueType{Code: astTypeToTypeCode(t.Name)}
+	case *ast.ArrayType:
+		vt := astTypeToValueType(t.Item)
+		return ValueType{
+			Code:      TCArray,
+			ArrayType: &vt,
+		}
+	case *ast.StructType:
+		// TODO
+		return ValueType{
+			Code: TCStruct,
+		}
+	}
+
+	panic("unknown type")
 }
 
 func parseDateLiteral(s string) (time.Time, bool) {
