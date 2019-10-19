@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	structpb "github.com/golang/protobuf/ptypes/struct"
@@ -63,24 +64,12 @@ func (t ValueType) IsStruct() bool {
 
 func (t ValueType) String() string {
 	switch t.Code {
-	case TCBool:
-		return "BOOL"
-	case TCInt64:
-		return "INT64"
-	case TCFloat64:
-		return "FLOAT64"
-	case TCTimestamp:
-		return "TIMESTAMP"
-	case TCDate:
-		return "DATE"
-	case TCString:
-		return "STRING"
-	case TCBytes:
-		return "BYTES"
+	case TCBool, TCInt64, TCFloat64, TCTimestamp, TCDate, TCString, TCBytes:
+		return t.Code.String()
 	case TCArray:
-		return "ARRAY" // TODO
+		return fmt.Sprintf("ARRAY<%s>", t.ArrayType.Code.String())
 	case TCStruct:
-		return "STRUCT" // TODO
+		return "STRUCT<>" // TODO
 	}
 	return "(unknown type)"
 }
@@ -425,6 +414,19 @@ func (it *rows) Do(fn func([]interface{}) error) error {
 	if err := it.rows.Close(); err != nil {
 		if lastErr == nil {
 			lastErr = err
+		}
+	}
+
+	// convert sqlite runtime error as InvalidArgument error if it is SqliteArgumentRuntimeError.
+	if lastErr != nil {
+		msg := lastErr.Error()
+		if strings.HasPrefix(msg, SqliteArgumentRuntimeErrorPrefix) {
+			msg = strings.TrimPrefix(msg, SqliteArgumentRuntimeErrorPrefix)
+			return status.Errorf(codes.InvalidArgument, "%s", msg)
+		}
+		if strings.HasPrefix(msg, SqliteOutOfRangeRuntimeErrorPrefix) {
+			msg = strings.TrimPrefix(msg, SqliteOutOfRangeRuntimeErrorPrefix)
+			return status.Errorf(codes.OutOfRange, "%s", msg)
 		}
 	}
 

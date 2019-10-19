@@ -17,6 +17,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -306,6 +307,12 @@ func makeTestValue(v interface{}) Value {
 				ArrayType: &ValueType{Code: TCInt64},
 			},
 		}
+	case float64:
+		return Value{
+			Data: v,
+			Type: ValueType{Code: TCFloat64},
+		}
+
 	default:
 		panic(fmt.Sprintf("fix makeTestValue to be able to convert interface{} to Value: %T", v))
 	}
@@ -1623,6 +1630,29 @@ func TestQuery(t *testing.T) {
 			},
 		},
 
+		// TODO: To be able to use Ident and Path in FROM clause
+		// "From_Unnest_Join": {
+		// 	sql: `SELECT Id, flatten FROM ArrayTypes, UNNEST (ArrayTypes.ArrayString) AS flatten`,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(1), int64(0)},
+		// 		[]interface{}{int64(1), int64(1)},
+		// 	},
+		// },
+		// "From_Unnest_Join2": {
+		// 	sql: `SELECT Id, flatten FROM ArrayTypes, UNNEST (ArrayString) AS flatten`,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(1), int64(0)},
+		// 		[]interface{}{int64(1), int64(1)},
+		// 	},
+		// },
+		// "From_Unnest_Join3": {
+		// 	sql: `SELECT a.Id, flatten FROM ArrayTypes a, UNNEST (a.ArrayString) AS flatten`,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(1), int64(0)},
+		// 		[]interface{}{int64(1), int64(1)},
+		// 	},
+		// },
+
 		"From_Join_CommaJoin": {
 			sql: `SELECT * FROM Simple a, Simple b`,
 			expected: [][]interface{}{
@@ -2023,6 +2053,307 @@ func TestQuery(t *testing.T) {
 			},
 		},
 
+		"Cast_Int64_String": {
+			sql: `SELECT CAST(100 AS STRING)`,
+			expected: [][]interface{}{
+				[]interface{}{"100"},
+			},
+		},
+		"Cast_Int64_String_Neg": {
+			sql: `SELECT CAST(-100 AS STRING)`,
+			expected: [][]interface{}{
+				[]interface{}{"-100"},
+			},
+		},
+		"Cast_Int64_Bool_True": {
+			sql: `SELECT CAST(100 AS BOOL)`,
+			expected: [][]interface{}{
+				[]interface{}{true},
+			},
+		},
+		"Cast_Int64_Bool_True2": {
+			sql: `SELECT CAST(-100 AS BOOL)`,
+			expected: [][]interface{}{
+				[]interface{}{true},
+			},
+		},
+		"Cast_Int64_Bool_False": {
+			sql: `SELECT CAST(0 AS BOOL)`,
+			expected: [][]interface{}{
+				[]interface{}{false},
+			},
+		},
+		"Cast_Int64_Float64_1": {
+			sql: `SELECT CAST(0 AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{float64(0)},
+			},
+		},
+		"Cast_Int64_Float64_2": {
+			sql: `SELECT CAST(-1 AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{float64(-1.0)},
+			},
+		},
+
+		"Cast_Float64_String_Big_Small": {
+			sql: `SELECT CAST(@foo AS STRING)`,
+			params: map[string]Value{
+				"foo": makeTestValue(2.3),
+			},
+			expected: [][]interface{}{
+				[]interface{}{"2.3"},
+			},
+		},
+		"Cast_Float64_String_Big_Small_neg": {
+			sql: `SELECT CAST(@foo AS STRING)`,
+			params: map[string]Value{
+				"foo": makeTestValue(-2.3),
+			},
+			expected: [][]interface{}{
+				[]interface{}{"-2.3"},
+			},
+		},
+		"Cast_Float64_String_Big": {
+			sql: `SELECT CAST(@foo AS STRING)`,
+			params: map[string]Value{
+				"foo": makeTestValue(383260575764816448.0),
+			},
+			expected: [][]interface{}{
+				[]interface{}{"3.8326057576481645e+17"},
+			},
+		},
+		"Cast_Float64_String_Inf": {
+			sql: `SELECT CAST(@foo AS STRING)`,
+			params: map[string]Value{
+				"foo": makeTestValue(math.Inf(0)),
+			},
+			expected: [][]interface{}{
+				[]interface{}{"inf"},
+			},
+		},
+		"Cast_Float64_String_Inf_Neg": {
+			sql: `SELECT CAST(@foo AS STRING)`,
+			params: map[string]Value{
+				"foo": makeTestValue(math.Inf(-1)),
+			},
+			expected: [][]interface{}{
+				[]interface{}{"-inf"},
+			},
+		},
+		// TODO
+		// "Cast_Float64_String_NaN": {
+		// 	sql: `SELECT CAST(@foo AS STRING)`,
+		// 	params: map[string]Value{
+		// 		"foo": makeTestValue(math.NaN()),
+		// 	},
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{"nan"},
+		// 	},
+		// },
+		"Cast_Float64_Int64_Big_Small": {
+			sql: `SELECT CAST(@foo AS INT64)`,
+			params: map[string]Value{
+				"foo": makeTestValue(2.3),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(2)},
+			},
+		},
+		"Cast_Float64_Int64_Big_Small_neg": {
+			sql: `SELECT CAST(@foo AS INT64)`,
+			params: map[string]Value{
+				"foo": makeTestValue(-2.3),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(-2)},
+			},
+		},
+		"Cast_Float64_Int64_Big": {
+			sql: `SELECT CAST(@foo AS INT64)`,
+			params: map[string]Value{
+				"foo": makeTestValue(383260575764816448.0),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(383260575764816448)},
+			},
+		},
+		"Cast_Float64_Int64_Round_Pos": {
+			sql: `SELECT CAST(@foo AS INT64)`,
+			params: map[string]Value{
+				"foo": makeTestValue(1.5),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(2)},
+			},
+		},
+		"Cast_Float64_Int64_Round_Neg": {
+			sql: `SELECT CAST(@foo AS INT64)`,
+			params: map[string]Value{
+				"foo": makeTestValue(-0.5),
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(-1)},
+			},
+		},
+
+		"Cast_Bool_String_True": {
+			sql: `SELECT CAST(true AS STRING)`,
+			expected: [][]interface{}{
+				[]interface{}{"TRUE"},
+			},
+		},
+		"Cast_Bool_String_False": {
+			sql: `SELECT CAST(false AS STRING)`,
+			expected: [][]interface{}{
+				[]interface{}{"FALSE"},
+			},
+		},
+		"Cast_Bool_Int64_True": {
+			sql: `SELECT CAST(true AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(1)},
+			},
+		},
+		"Cast_Bool_Int64_False": {
+			sql: `SELECT CAST(false AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(0)},
+			},
+		},
+		"Cast_String_Bool_True": {
+			sql: `SELECT CAST("TRUE" AS BOOL)`,
+			expected: [][]interface{}{
+				[]interface{}{true},
+			},
+		},
+		"Cast_String_Bool_True2": {
+			sql: `SELECT CAST("TrUe" AS BOOL)`,
+			expected: [][]interface{}{
+				[]interface{}{true},
+			},
+		},
+		"Cast_String_Bool_False": {
+			sql: `SELECT CAST("FALSE" AS BOOL)`,
+			expected: [][]interface{}{
+				[]interface{}{false},
+			},
+		},
+		"Cast_String_Bool_False2": {
+			sql: `SELECT CAST("faLsE" AS BOOL)`,
+			expected: [][]interface{}{
+				[]interface{}{false},
+			},
+		},
+		"Cast_String_Int64_Base10_1": {
+			sql: `SELECT CAST("100" AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+		"Cast_String_Int64_Base10_2": {
+			sql: `SELECT CAST("-100" AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(-100)},
+			},
+		},
+		"Cast_String_Int64_Base10_3": {
+			sql: `SELECT CAST("+100" AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+		"Cast_String_Int64_Base10_4": {
+			sql: `SELECT CAST("0100" AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+		"Cast_String_Int64_Base10_5": {
+			sql: `SELECT CAST("00100" AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(100)},
+			},
+		},
+		"Cast_String_Int64_Base16_1": {
+			sql: `SELECT CAST("0x100" AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(256)},
+			},
+		},
+		"Cast_String_Int64_Base16_2": {
+			sql: `SELECT CAST("-0x100" AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(-256)},
+			},
+		},
+		"Cast_String_Int64_Base16_3": {
+			sql: `SELECT CAST("0xABC" AS INT64)`,
+			expected: [][]interface{}{
+				[]interface{}{int64(2748)},
+			},
+		},
+		"Cast_String_Float64_1": {
+			sql: `SELECT CAST("123.456e-67" AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{float64(1.23456e-65)},
+			},
+		},
+		"Cast_String_Float64_2": {
+			sql: `SELECT CAST(".1E4" AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{float64(1000)},
+			},
+		},
+		"Cast_String_Float64_3": {
+			sql: `SELECT CAST("58." AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{float64(58)},
+			},
+		},
+		"Cast_String_Float64_4": {
+			sql: `SELECT CAST("4e2" AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{float64(400)},
+			},
+		},
+		// "Cast_String_Float64_Nan1": {
+		// 	sql: `SELECT CAST("NaN" AS FLOAT64)`,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{math.NaN()},
+		// 	},
+		// },
+		// "Cast_String_Float64_Nan2": {
+		// 	sql: `SELECT CAST("nan" AS FLOAT64)`,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{math.NaN()},
+		// 	},
+		// },
+		"Cast_String_Float64_Inf1": {
+			sql: `SELECT CAST("inf" AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{math.Inf(0)},
+			},
+		},
+		"Cast_String_Float64_Inf2": {
+			sql: `SELECT CAST("+inf" AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{math.Inf(0)},
+			},
+		},
+		"Cast_String_Float64_Inf3": {
+			sql: `SELECT CAST("-inf" AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{math.Inf(-1)},
+			},
+		},
+		"Cast_String_Float64_Inf4": {
+			sql: `SELECT CAST("-Inf" AS FLOAT64)`,
+			expected: [][]interface{}{
+				[]interface{}{math.Inf(-1)},
+			},
+		},
+
 		"Function_Count": {
 			sql: `SELECT COUNT(1) FROM Simple`,
 			expected: [][]interface{}{
@@ -2359,6 +2690,53 @@ func TestQueryError(t *testing.T) {
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`^OFFSET expects an integer literal or parameter`),
 		},
+
+		"Cast_Float64_Int64_Inf": {
+			sql: `SELECT CAST(@foo AS INT64)`,
+			params: map[string]Value{
+				"foo": makeTestValue(math.Inf(0)),
+			},
+			code: codes.OutOfRange,
+			msg:  regexp.MustCompile(`^Illegal conversion of non-finite floating point number to an integer: inf`),
+		},
+		"Cast_Float64_Int64_Inf_Neg": {
+			sql: `SELECT CAST(@foo AS INT64)`,
+			params: map[string]Value{
+				"foo": makeTestValue(math.Inf(-1)),
+			},
+			code: codes.OutOfRange,
+			msg:  regexp.MustCompile(`^Illegal conversion of non-finite floating point number to an integer: -inf`),
+		},
+		// TODO
+		// "Cast_Float64_Int64_NaN": {
+		// 	sql: `SELECT CAST(@foo AS INT64)`,
+		// 	params: map[string]Value{
+		// 		"foo": makeTestValue(math.NaN()),
+		// 	},
+		// 	code: codes.OutOfRange,
+		// 	msg:  regexp.MustCompile(`^Illegal conversion of non-finite floating point number to an integer: nan`),
+		// },
+
+		"Cast_String_Bool_Invalid": {
+			sql:  `SELECT CAST("xx" AS BOOL)`,
+			code: codes.OutOfRange,
+			msg:  regexp.MustCompile(`^Bad bool value: xx`),
+		},
+		"Cast_String_Int64_Invalid1": {
+			sql:  `SELECT CAST("- 100" AS INT64)`,
+			code: codes.OutOfRange,
+			msg:  regexp.MustCompile(`^Bad int64 value: - 100`),
+		},
+		"Cast_String_Int64_Invalid2": {
+			sql:  `SELECT CAST("00x100" AS INT64)`,
+			code: codes.OutOfRange,
+			msg:  regexp.MustCompile(`^Bad int64 value: 00x100`),
+		},
+		"Cast_String_Float64_Invalid": {
+			sql:  `SELECT CAST("xx" AS FLOAT64)`,
+			code: codes.OutOfRange,
+			msg:  regexp.MustCompile(`^Bad double value: xx`),
+		},
 	}
 
 	for name, tc := range table {
@@ -2372,7 +2750,12 @@ func TestQueryError(t *testing.T) {
 				t.Fatalf("failed to parse sql: %q %v", tc.sql, err)
 			}
 
-			_, err = db.Query(ctx, stmt, tc.params)
+			it, err := db.Query(ctx, stmt, tc.params)
+			if err == nil {
+				err = it.Do(func([]interface{}) error {
+					return nil
+				})
+			}
 			st := status.Convert(err)
 			if st.Code() != tc.code {
 				t.Errorf("expect code to be %v but got %v", tc.code, st.Code())
