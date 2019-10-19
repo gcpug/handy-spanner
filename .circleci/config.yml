@@ -1,0 +1,34 @@
+version: 2
+
+jobs:
+  test:
+    docker:
+      - image: golang:1.13-stretch
+    environment:
+      GO111MODULE: 'on'
+    working_directory: /go/src/handy-spanner
+    steps:
+      - checkout
+      - restore_cache:
+          key: go-mod-{{ checksum "go.sum" }}
+      - run:
+          name: Install dependencies
+          command: |
+            if [ ! -d 'vendor' ]; then
+              go mod download
+            fi
+      - run:
+          name: build
+          command: |
+            make build
+
+      - run:
+          name: run tests
+          command: |
+            make test
+
+workflows:
+  version: 2
+  build-workflow:
+    jobs:
+      - test
