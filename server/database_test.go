@@ -745,13 +745,12 @@ func TestRead(t *testing.T) {
 			}
 
 			var rows [][]interface{}
-			for {
-				row, ok := it.Next()
-				if !ok {
-					break
-				}
-
+			err = it.Do(func(row []interface{}) error {
 				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
 			}
 
 			if diff := cmp.Diff(tt.expected, rows); diff != "" {
@@ -970,13 +969,12 @@ func TestRead_FullType_Range(t *testing.T) {
 			}
 
 			var rows [][]interface{}
-			for {
-				row, ok := it.Next()
-				if !ok {
-					break
-				}
-
+			err = it.Do(func(row []interface{}) error {
 				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
 			}
 
 			if diff := cmp.Diff(tt.expected, rows); diff != "" {
@@ -2173,13 +2171,12 @@ func TestQuery(t *testing.T) {
 			}
 
 			var rows [][]interface{}
-			for {
-				row, ok := it.Next()
-				if !ok {
-					break
-				}
-
+			err = it.Do(func(row []interface{}) error {
 				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
 			}
 
 			if diff := cmp.Diff(tc.expected, rows); diff != "" {
@@ -2641,13 +2638,12 @@ func TestInsertAndReplace(t *testing.T) {
 					}
 
 					var rows [][]interface{}
-					for {
-						row, ok := it.Next()
-						if !ok {
-							break
-						}
-
+					err = it.Do(func(row []interface{}) error {
 						rows = append(rows, row)
+						return nil
+					})
+					if err != nil {
+						t.Fatalf("unexpected error in iteration: %v", err)
 					}
 
 					if diff := cmp.Diff(tt.expected, rows); diff != "" {
@@ -2715,10 +2711,20 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 			t.Fatalf("Read failed: %v", err)
 		}
 
-		row, ok := it.Next()
-		if !ok {
-			t.Fatalf("unexpected")
+		var rows [][]interface{}
+		err = it.Do(func(row []interface{}) error {
+			rows = append(rows, row)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error in iteration: %v", err)
 		}
+
+		if len(rows) != 1 {
+			t.Fatalf("unexpected numbers of rows: %v", len(rows))
+
+		}
+		row := rows[0]
 
 		var a, b string
 		a = row[0].(string)
@@ -2895,13 +2901,12 @@ func TestReplace(t *testing.T) {
 			}
 
 			var rows [][]interface{}
-			for {
-				row, ok := it.Next()
-				if !ok {
-					break
-				}
-
+			err = it.Do(func(row []interface{}) error {
 				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
 			}
 
 			if diff := cmp.Diff(tt.expected, rows); diff != "" {
@@ -3088,13 +3093,12 @@ func TestUpdate(t *testing.T) {
 			}
 
 			var rows [][]interface{}
-			for {
-				row, ok := it.Next()
-				if !ok {
-					break
-				}
-
+			err = it.Do(func(row []interface{}) error {
 				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
 			}
 
 			if diff := cmp.Diff(tt.expected, rows); diff != "" {
@@ -3260,13 +3264,12 @@ func TestInsertOrUpdate(t *testing.T) {
 			}
 
 			var rows [][]interface{}
-			for {
-				row, ok := it.Next()
-				if !ok {
-					break
-				}
-
+			err = it.Do(func(row []interface{}) error {
 				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
 			}
 
 			if diff := cmp.Diff(tt.expected, rows); diff != "" {
@@ -3423,13 +3426,12 @@ func TestDelete(t *testing.T) {
 			}
 
 			var rows [][]interface{}
-			for {
-				row, ok := it.Next()
-				if !ok {
-					break
-				}
-
+			err = it.Do(func(row []interface{}) error {
 				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
 			}
 
 			if diff := cmp.Diff(tt.expected, rows); diff != "" {

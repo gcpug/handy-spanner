@@ -161,11 +161,19 @@ func TestDatabaseEncDec(t *testing.T) {
 			item := createResultItemFromColumn(&column)
 			iter := rows{rows: r, resultItems: []ResultItem{item}}
 
-			result, next := iter.Next()
-			if !next {
+			var rows [][]interface{}
+			err = iter.Do(func(row []interface{}) error {
+				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
+			}
+
+			if len(rows) != 1 {
 				t.Errorf("there should be only 1 row")
 			}
-			if diff := cmp.Diff(tc.expected, result[0]); diff != "" {
+			if diff := cmp.Diff(tc.expected, rows[0][0]); diff != "" {
 				t.Errorf("(-got, +want)\n%s", diff)
 			}
 		})
