@@ -68,6 +68,7 @@ func TestQuery(t *testing.T) {
 		sql      string
 		params   map[string]Value
 		expected [][]interface{}
+		names    []string
 		code     codes.Code
 		msg      *regexp.Regexp
 	}{
@@ -1057,8 +1058,8 @@ func TestQuery(t *testing.T) {
 				},
 			},
 		},
-		"Subquery": {
 
+		"Subquery": {
 			{
 				name: "SubQuery_Scalar_Simple",
 				sql:  `SELECT Id FROM Simple WHERE 1 = (SELECT 1)`,
@@ -1131,12 +1132,33 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SubQuery_ColumnAlias",
-				sql:  `SELECT Id, foo, bar FROM (SELECT Id, Id AS foo, Id bar FROM Simple)`,
+				name:  "SubQuery_ColumnAlias",
+				sql:   `SELECT Id, foo, bar FROM (SELECT Id, Id AS foo, Id bar FROM Simple)`,
+				names: []string{"Id", "foo", "bar"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100), int64(100), int64(100)},
 					[]interface{}{int64(200), int64(200), int64(200)},
 					[]interface{}{int64(300), int64(300), int64(300)},
+				},
+			},
+			{
+				name:  "SubQuery_ColumnAlias2",
+				sql:   `SELECT Id +1, foo +1, bar +1 FROM (SELECT Id, Id AS foo, Id bar FROM Simple)`,
+				names: []string{"", "", ""},
+				expected: [][]interface{}{
+					[]interface{}{int64(101), int64(101), int64(101)},
+					[]interface{}{int64(201), int64(201), int64(201)},
+					[]interface{}{int64(301), int64(301), int64(301)},
+				},
+			},
+			{
+				name:  "SubQuery_ColumnAlias_AsAlias",
+				sql:   `SELECT x AS y FROM (SELECT Id x FROM Simple)`,
+				names: []string{"y"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100)},
+					[]interface{}{int64(200)},
+					[]interface{}{int64(300)},
 				},
 			},
 			{

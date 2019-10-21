@@ -505,7 +505,9 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 				Name:      alias,
 				ValueType: s.ValueType,
 				Expr: Expr{
-					Raw:       fmt.Sprintf("%s AS %s", s.Raw, alias),
+					// This is a trick. This Expr is referred as subquery.
+					// At the reference, it should be just referred as alias name instead of s.Raw.
+					Raw:       alias,
 					ValueType: s.ValueType,
 				},
 			})
