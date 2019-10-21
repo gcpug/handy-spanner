@@ -26,10 +26,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+var defaultTimeZone = "America/Los_Angeles"
 var parseLocation *time.Location
 
 func init() {
-	loc, err := time.LoadLocation("America/Los_Angeles")
+	loc, err := time.LoadLocation(defaultTimeZone)
 	if err != nil {
 		panic(err)
 	}
@@ -699,7 +700,8 @@ func (b *QueryBuilder) buildIntValue(intValue ast.IntValue, caller string) (Expr
 		return s, d, nil
 
 	case *ast.CastIntValue:
-		return NullExpr, nil, fmt.Errorf("CAST is not supported yet")
+		// CAST expression can be used but it seems not working actually.
+		return NullExpr, nil, newExprErrorf(nil, true, "handy-spanner: CAST in Limit/Offset seems not working in Spanner")
 	default:
 		return NullExpr, nil, fmt.Errorf("unknown LIMIT type")
 	}
@@ -1192,7 +1194,94 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return NullExpr, nil, newExprErrorf(expr, false, "Cast not supported yet")
 
 	case *ast.ExtractExpr:
-		return NullExpr, nil, newExprErrorf(expr, false, "Extract not supported yet")
+		s, data, err := b.buildExpr(e.Expr)
+		if err != nil {
+			return NullExpr, nil, wrapExprError(err, expr, "Paren")
+		}
+
+		var raw string
+		code := TCInt64
+		switch s.ValueType.Code {
+		case TCTimestamp:
+			if e.AtTimeZone == nil {
+				msg := fmt.Sprintf("handy-spanner: please specify timezone explicitly. Use %q for default timezone", defaultTimeZone)
+				return NullExpr, nil, newExprErrorf(expr, true, msg)
+			}
+
+			tz, tzdata, err := b.buildExpr(e.AtTimeZone.Expr)
+			if err != nil {
+				return NullExpr, nil, wrapExprError(err, expr, "AT TIME ZONE")
+			}
+			if tz.ValueType.Code != TCString {
+				msg := "No matching signature for function EXTRACT for argument types: DATE_TIME_PART FROM TIMESTAMP AT TIME ZONE %s. Supported signatures: EXTRACT(DATE_TIME_PART FROM DATE); EXTRACT(DATE_TIME_PART FROM TIMESTAMP [AT TIME ZONE STRING])"
+				return NullExpr, nil, newExprErrorf(expr, true, msg, tz.ValueType)
+			}
+			data = append(data, tzdata...)
+
+			part := strings.ToUpper(e.Part.Name)
+			switch part {
+			case "NANOSECOND",
+				"MICROSECOND",
+				"MILLISECOND",
+				"SECOND",
+				"MINUTE",
+				"HOUR",
+				"DAYOFWEEK",
+				"DAY",
+				"DAYOFYEAR",
+				"WEEK",
+				"ISOWEEK",
+				"MONTH",
+				"QUARTER",
+				"YEAR",
+				"ISOYEAR":
+				raw = fmt.Sprintf("___EXTRACT_FROM_TIMESTAMP(%q, %s, %s)", part, s.Raw, tz.Raw)
+
+			case "DATE":
+				code = TCDate
+				raw = fmt.Sprintf("DATE(%s)", s.Raw)
+			default:
+				return NullExpr, nil, newExprErrorf(expr, true, "A valid date part name is required but found %s", e.Part.Name)
+			}
+
+		case TCDate:
+			if e.AtTimeZone != nil {
+				return NullExpr, nil, newExprErrorf(expr, true, "EXTRACT from DATE does not support AT TIME ZONE")
+			}
+
+			part := strings.ToUpper(e.Part.Name)
+			switch part {
+			case "DAYOFWEEK",
+				"DAY",
+				"DAYOFYEAR",
+				"WEEK",
+				"ISOWEEK",
+				"MONTH",
+				"QUARTER",
+				"YEAR",
+				"ISOYEAR":
+				raw = fmt.Sprintf("___EXTRACT_FROM_DATE(%q, %s)", part, s.Raw)
+
+			case "NANOSECOND",
+				"MICROSECOND",
+				"MILLISECOND",
+				"SECOND",
+				"MINUTE",
+				"HOUR",
+				"DATE":
+				return NullExpr, nil, newExprErrorf(expr, true, "EXTRACT from DATE does not support the %s date part", part)
+			default:
+				return NullExpr, nil, newExprErrorf(expr, true, "A valid date part name is required but found %s", e.Part.Name)
+			}
+
+		default:
+			return NullExpr, nil, newExprErrorf(expr, true, "EXTRACT does not support literal %s arguments", s.ValueType)
+		}
+
+		return Expr{
+			ValueType: ValueType{Code: code},
+			Raw:       raw,
+		}, data, nil
 
 	case *ast.CaseExpr:
 		return NullExpr, nil, newExprErrorf(expr, false, "Case not supported yet")
