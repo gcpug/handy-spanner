@@ -68,6 +68,7 @@ func TestQuery(t *testing.T) {
 		sql      string
 		params   map[string]Value
 		expected [][]interface{}
+		names    []string
 		code     codes.Code
 		msg      *regexp.Regexp
 	}{
@@ -1057,8 +1058,8 @@ func TestQuery(t *testing.T) {
 				},
 			},
 		},
-		"Subquery": {
 
+		"Subquery": {
 			{
 				name: "SubQuery_Scalar_Simple",
 				sql:  `SELECT Id FROM Simple WHERE 1 = (SELECT 1)`,
@@ -1131,12 +1132,33 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SubQuery_ColumnAlias",
-				sql:  `SELECT Id, foo, bar FROM (SELECT Id, Id AS foo, Id bar FROM Simple)`,
+				name:  "SubQuery_ColumnAlias",
+				sql:   `SELECT Id, foo, bar FROM (SELECT Id, Id AS foo, Id bar FROM Simple)`,
+				names: []string{"Id", "foo", "bar"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100), int64(100), int64(100)},
 					[]interface{}{int64(200), int64(200), int64(200)},
 					[]interface{}{int64(300), int64(300), int64(300)},
+				},
+			},
+			{
+				name:  "SubQuery_ColumnAlias2",
+				sql:   `SELECT Id +1, foo +1, bar +1 FROM (SELECT Id, Id AS foo, Id bar FROM Simple)`,
+				names: []string{"", "", ""},
+				expected: [][]interface{}{
+					[]interface{}{int64(101), int64(101), int64(101)},
+					[]interface{}{int64(201), int64(201), int64(201)},
+					[]interface{}{int64(301), int64(301), int64(301)},
+				},
+			},
+			{
+				name:  "SubQuery_ColumnAlias_AsAlias",
+				sql:   `SELECT x AS y FROM (SELECT Id x FROM Simple)`,
+				names: []string{"y"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100)},
+					[]interface{}{int64(200)},
+					[]interface{}{int64(300)},
 				},
 			},
 			{
@@ -2018,6 +2040,228 @@ func TestQuery(t *testing.T) {
 					[]interface{}{"xxyy"},
 				},
 			},
+
+			{
+				name: "Function_Extract_Timestamp",
+				sql: `SELECT` +
+					` EXTRACT(NANOSECOND  FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(MICROSECOND FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(MILLISECOND FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(SECOND      FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(MINUTE      FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(HOUR        FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(DAYOFWEEK   FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(DAY         FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(DAYOFYEAR   FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(ISOWEEK     FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(QUARTER     FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(YEAR        FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(ISOYEAR     FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(DATE        FROM t AT TIME ZONE "UTC")` +
+					` FROM (SELECT TIMESTAMP '2012-01-02 12:34:56.987654321Z' t)`,
+				expected: [][]interface{}{
+					[]interface{}{
+						int64(987654321), int64(987654), int64(987),
+						int64(56), int64(34), int64(12), // sec,min,hour
+						int64(1), int64(2), int64(2), // dayofweek, day, dayofyear
+						int64(1),                           // isoweek
+						int64(1), int64(2012), int64(2012), // quarter, year, isoyear
+						"2012-01-02", // date
+					},
+				},
+			},
+			{
+				name: "Function_Extract_TimeZone",
+				sql: `SELECT` +
+					` EXTRACT(DAY  FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(HOUR FROM t AT TIME ZONE "UTC"),` +
+					` EXTRACT(DAY  FROM t AT TIME ZONE "Asia/Tokyo"),` +
+					` EXTRACT(HOUR FROM t AT TIME ZONE "Asia/Tokyo"),` +
+					` EXTRACT(DAY  FROM t AT TIME ZONE "America/Los_Angeles"),` +
+					` EXTRACT(HOUR FROM t AT TIME ZONE "America/Los_Angeles")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 00:00:00.999999999Z' t)`,
+				expected: [][]interface{}{
+					[]interface{}{int64(1), int64(0), int64(1), int64(9), int64(31), int64(16)},
+				},
+			},
+			{
+				name: "Function_Extract_TimeZone_Invalid",
+				sql: `SELECT EXTRACT(HOUR FROM t AT TIME ZONE "xxx")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 00:00:00.999999999Z' t)`,
+				code: codes.OutOfRange,
+				msg:  regexp.MustCompile(`^Invalid time zone: xxx`),
+			},
+			{
+				name: "Function_Extract_FixedTimeZone",
+				sql: `SELECT` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "+01:20"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "+01:20"),` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "-01:20"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "-01:20")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				expected: [][]interface{}{
+					[]interface{}{int64(13), int64(20), int64(10), int64(40)},
+				},
+			},
+			{
+				name: "Function_Extract_FixedTimeZone2",
+				sql: `SELECT` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "+1"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "+1"),` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "-1"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "-1")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				expected: [][]interface{}{
+					[]interface{}{int64(13), int64(0), int64(11), int64(0)},
+				},
+			},
+			{
+				name: "Function_Extract_FixedTimeZone3",
+				sql: `SELECT` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "+11"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "+11"),` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "-11"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "-11")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				expected: [][]interface{}{
+					[]interface{}{int64(23), int64(0), int64(1), int64(0)},
+				},
+			},
+			{
+				name: "Function_Extract_FixedTimeZone4",
+				sql: `SELECT` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "+11:3"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "+11:3"),` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "-11:3"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "-11:3")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				expected: [][]interface{}{
+					[]interface{}{int64(23), int64(3), int64(0), int64(57)},
+				},
+			},
+			{
+				name: "Function_Extract_FixedTimeZone5",
+				sql: `SELECT` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "+1:35"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "+1:35"),` +
+					` EXTRACT(HOUR   FROM t AT TIME ZONE "-1:35"),` +
+					` EXTRACT(MINUTE FROM t AT TIME ZONE "-1:35")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				expected: [][]interface{}{
+					[]interface{}{int64(13), int64(35), int64(10), int64(25)},
+				},
+			},
+			{
+				name: "Function_Extract_FixedTimeZone_Invalid",
+				sql: `SELECT EXTRACT(HOUR FROM t AT TIME ZONE "11:11")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				code: codes.OutOfRange,
+				msg:  regexp.MustCompile(`^Invalid time zone: 11:11`),
+			},
+			{
+				name: "Function_Extract_FixedTimeZone_Invalid2",
+				sql: `SELECT EXTRACT(HOUR FROM t AT TIME ZONE "+:11")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				code: codes.OutOfRange,
+				msg:  regexp.MustCompile(`^Invalid time zone: \+:11`),
+			},
+			{
+				name: "Function_Extract_FixedTimeZone_Invalid3",
+				sql: `SELECT EXTRACT(HOUR FROM t AT TIME ZONE "+11:")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				code: codes.OutOfRange,
+				msg:  regexp.MustCompile(`^Invalid time zone: \+11:`),
+			},
+			{
+				name: "Function_Extract_FixedTimeZone_Invalid4",
+				sql: `SELECT EXTRACT(HOUR FROM t AT TIME ZONE "+")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				code: codes.OutOfRange,
+				msg:  regexp.MustCompile(`^Invalid time zone: \+`),
+			},
+			{
+				name: "Function_Extract_FixedTimeZone_Invalid5",
+				sql: `SELECT EXTRACT(HOUR FROM t AT TIME ZONE "+25:00")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				code: codes.OutOfRange,
+				msg:  regexp.MustCompile(`^Invalid time zone: \+25:00`),
+			},
+			{
+				name: "Function_Extract_FixedTimeZone_Invalid6",
+				sql: `SELECT EXTRACT(HOUR FROM t AT TIME ZONE "+10:61")` +
+					` FROM (SELECT TIMESTAMP '2012-01-01 12:00:00.999999999Z' t)`,
+				code: codes.OutOfRange,
+				msg:  regexp.MustCompile(`^Invalid time zone: \+10:61`),
+			},
+			{
+				name: "Function_Extract_Timestamp_WithoutTimezone",
+				sql: `SELECT EXTRACT(HOUR FROM t)` +
+					` FROM (SELECT TIMESTAMP '2012-01-02 12:34:56.987654321Z' t)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^handy-spanner: please specify timezone explicitly.`),
+			},
+			{
+				name: "Function_Extract_Timestamp_TimeZone_ByParam",
+				sql: `SELECT EXTRACT(HOUR FROM t AT TIME ZONE @foo)` +
+					` FROM (SELECT TIMESTAMP '2012-01-02 12:34:56.987654321Z' t)`,
+				params: map[string]Value{
+					"foo": makeTestValue("UTC"),
+				},
+				expected: [][]interface{}{
+					[]interface{}{int64(12)},
+				},
+			},
+			{
+				name: "Function_Extract_Timestamp_TimeZone_InvalidType",
+				sql: `SELECT EXTRACT(HOUR FROM t AT TIME ZONE @foo)` +
+					` FROM (SELECT TIMESTAMP '2012-01-02 12:34:56.987654321Z' t)`,
+				params: map[string]Value{
+					"foo": makeTestValue(int64(100)),
+				},
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for function EXTRACT for argument types: DATE_TIME_PART FROM TIMESTAMP AT TIME ZONE INT64. Supported signatures`),
+			},
+
+			{
+				name: "Function_Extract_Date",
+				sql: `SELECT` +
+					` EXTRACT(DAYOFWEEK FROM t),` +
+					` EXTRACT(DAY       FROM t),` +
+					` EXTRACT(DAYOFYEAR FROM t),` +
+					` EXTRACT(ISOWEEK   FROM t),` +
+					` EXTRACT(QUARTER   FROM t),` +
+					` EXTRACT(YEAR      FROM t),` +
+					` EXTRACT(ISOYEAR   FROM t)` +
+					` FROM (SELECT DATE '2012-01-02' t)`,
+				expected: [][]interface{}{
+					[]interface{}{
+						int64(1), int64(2), int64(2), // dayofweek, day, dayofyear
+						int64(1),                           // isoweek
+						int64(1), int64(2012), int64(2012), // quarter, year, isoyear
+					},
+				},
+			},
+			{
+				name: "Function_Extract_Date_InvalidPart_Nano",
+				sql: `SELECT EXTRACT(NANOSECOND FROM t)` +
+					` FROM (SELECT DATE '2012-01-02' t)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^EXTRACT from DATE does not support the NANOSECOND date part`),
+			},
+			{
+				name: "Function_Extract_Date_InvalidPart_Date",
+				sql: `SELECT EXTRACT(DATE FROM t)` +
+					` FROM (SELECT DATE '2012-01-02' t)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^EXTRACT from DATE does not support the DATE date part`),
+			},
+			{
+				name: "Function_Extract_Date_WithTimeZone",
+				sql: `SELECT EXTRACT(DAY FROM t AT TIME ZONE "UTC")` +
+					` FROM (SELECT DATE '2012-01-02' t)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^EXTRACT from DATE does not support AT TIME ZONE`),
+			},
 		},
 	}
 
@@ -2056,6 +2300,18 @@ func TestQuery(t *testing.T) {
 
 						if diff := cmp.Diff(tc.expected, rows); diff != "" {
 							t.Errorf("(-got, +want)\n%s", diff)
+						}
+
+						// TODO: add names to all test cases. now this is optional check
+						if tc.names != nil {
+							var gotnames []string
+							for _, item := range it.ResultSet() {
+								gotnames = append(gotnames, item.Name)
+							}
+
+							if diff := cmp.Diff(tc.names, gotnames); diff != "" {
+								t.Errorf("(-got, +want)\n%s", diff)
+							}
 						}
 					} else {
 						it, err := db.Query(ctx, stmt, tc.params)

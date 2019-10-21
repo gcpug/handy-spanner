@@ -20,6 +20,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	sqlite "github.com/mattn/go-sqlite3"
 )
@@ -230,6 +231,29 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 		},
 	},
 
+	"___EXTRACT_FROM_TIMESTAMP": {
+		Func:  sqlite3FnExtractFromTimestamp,
+		NArgs: 3,
+		ArgTypes: func(vts []ValueType) bool {
+			return vts[0].Code == TCString &&
+				vts[1].Code == TCTimestamp &&
+				vts[2].Code == TCString
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCInt64}
+		},
+	},
+	"___EXTRACT_FROM_DATE": {
+		Func:  sqlite3FnExtractFromDate,
+		NArgs: 2,
+		ArgTypes: func(vts []ValueType) bool {
+			return vts[0].Code == TCString && vts[1].Code == TCDate
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCInt64}
+		},
+	},
+
 	"___CAST_INT64_TO_BOOL": {
 		Func:  sqlite3FnCastInt64ToBool,
 		NArgs: 1,
@@ -352,6 +376,163 @@ func sqlite3FnEndsWith(a, b string) bool {
 
 func sqlite3FnConcat(xs ...string) string {
 	return strings.Join(xs, "")
+}
+
+// sqlite3FnExtractFromTimestamp is simulation function of EXTRACT.
+// It supports except DATE part.
+func sqlite3FnExtractFromTimestamp(part string, timestamp string, tz string) (int64, error) {
+	tzErr := &sqliteOutOfRangeRuntimeError{msg: fmt.Sprintf("Invalid time zone: %s", tz)}
+	if len(tz) == 0 {
+		return 0, tzErr
+	}
+
+	var location *time.Location
+
+	// (+|-)H[H][:M[M]]
+	if tz[0] == '-' || tz[0] == '+' {
+		s := tz
+		var neg bool
+		if s[0] == '-' {
+			neg = true
+		}
+
+		s = s[1:]
+
+		var colonFound bool
+		hour := -1
+		min := 0
+		for _, c := range s {
+			if c == ':' {
+				min = -1
+				colonFound = true
+				continue
+			}
+			if c < '0' && '9' < c {
+				return 0, tzErr
+			}
+
+			n := int(c - '0')
+
+			if colonFound {
+				if min == -1 {
+					min = n
+				} else {
+					min = 10*min + n
+				}
+			} else {
+				if hour == -1 {
+					hour = n
+				} else {
+					hour = 10*hour + n
+				}
+			}
+		}
+
+		if hour == -1 || min == -1 {
+			return 0, tzErr
+		}
+		if hour > 24 || min > 60 {
+			return 0, tzErr
+		}
+
+		offset := hour*3600 + min*60
+		if neg {
+			offset = -offset
+		}
+		location = time.FixedZone(tz, offset)
+	} else {
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			return 0, tzErr
+		}
+		location = loc
+	}
+
+	t, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		// Must not happen
+		return 0, fmt.Errorf("___EXTRACT_FROM_TIMESTAMP: unexpected format %q as timestamp: %v", timestamp, err)
+	}
+	t = t.In(location)
+
+	switch strings.ToUpper(part) {
+	case "NANOSECOND":
+		return int64(t.Nanosecond()), nil
+	case "MICROSECOND":
+		return int64(t.Nanosecond() / 1000), nil
+	case "MILLISECOND":
+		return int64(t.Nanosecond() / 1000000), nil
+	case "SECOND":
+		return int64(t.Second()), nil
+	case "MINUTE":
+		return int64(t.Minute()), nil
+	case "HOUR":
+		return int64(t.Hour()), nil
+	case "DAYOFWEEK":
+		return int64(t.Weekday()), nil
+	case "DAY":
+		return int64(t.Day()), nil
+	case "DAYOFYEAR":
+		return int64(t.YearDay()), nil
+	case "WEEK":
+		// TODO: calculate week from timestamp
+		return 0, fmt.Errorf("___EXTRACT_FROM_TIMESTAMP: WEEK not supported for now")
+	case "ISOWEEK":
+		_, w := t.ISOWeek()
+		return int64(w), nil
+	case "MONTH":
+		return int64(t.Month()), nil
+	case "QUARTER":
+		// 1 for Jan-Mar, 2 for Apr-Jun, 3 for Jul-Sep, 4 for Oct-Dec
+		m := t.Month()
+		return int64(m/4 + 1), nil
+	case "YEAR":
+		return int64(t.Year()), nil
+	case "ISOYEAR":
+		y, _ := t.ISOWeek()
+		return int64(y), nil
+	default:
+		// Must not happen
+		return 0, fmt.Errorf("___EXTRACT_FROM_TIMESTAMP: unexpected part: %s", part)
+	}
+}
+
+// sqlite3FnExtractFromDate is simulation function of EXTRACT.
+func sqlite3FnExtractFromDate(part string, date string) (int64, error) {
+	t, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		// Must not happen
+		return 0, fmt.Errorf("___EXTRACT_FROM_DATE: unexpected format %q as date: %v", date, err)
+	}
+
+	switch strings.ToUpper(part) {
+	case "DAYOFWEEK":
+		return int64(t.Weekday()), nil
+	case "DAY":
+		return int64(t.Day()), nil
+	case "DAYOFYEAR":
+		return int64(t.YearDay()), nil
+	case "WEEK":
+		// TODO: calculate week from timestamp
+		return 0, fmt.Errorf("___EXTRACT_FROM_DATE: WEEK not supported for now")
+	case "ISOWEEK":
+		_, w := t.ISOWeek()
+		return int64(w), nil
+	case "MONTH":
+		return int64(t.Month()), nil
+	case "QUARTER":
+		// 1 for Jan-Mar, 2 for Apr-Jun, 3 for Jul-Sep, 4 for Oct-Dec
+		m := t.Month()
+		return int64(m/4 + 1), nil
+	case "YEAR":
+		return int64(t.Year()), nil
+	case "ISOYEAR":
+		y, _ := t.ISOWeek()
+		return int64(y), nil
+	default:
+		// Must not happen
+		return 0, fmt.Errorf("___EXTRACT_FROM_DATE: unexpected part: %s", part)
+	}
 }
 
 func sqlite3FnCastInt64ToBool(i int64) bool {
