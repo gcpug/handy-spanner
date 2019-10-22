@@ -137,7 +137,7 @@ func decideArrayElementsValueType(vts ...ValueType) (ValueType, error) {
 
 type StructType struct {
 	FieldNames []string
-	FieldTypes map[string]*ValueType
+	FieldTypes []*ValueType
 }
 
 type TypeCode int32
@@ -389,6 +389,34 @@ func (a *ArrayBytes) Scan(src interface{}) error {
 	return nil
 }
 
+type ArrayStruct struct {
+	Values  []*StructValue
+	Invalid bool `json:"-"`
+}
+
+type StructValue struct {
+	Keys   []string      `json:"keys"`
+	Values []interface{} `json:"values"`
+}
+
+func (a *ArrayStruct) Scan(src interface{}) error {
+	if src == nil {
+		a.Invalid = true
+		return nil
+	}
+
+	v, ok := src.(string)
+	if !ok {
+		return fmt.Errorf("unexpected type %T for %T", src, a)
+	}
+
+	if err := json.Unmarshal([]byte(v), &a.Values); err != nil {
+		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
+	}
+
+	return nil
+}
+
 type rows struct {
 	rows        *sql.Rows
 	resultItems []ResultItem
@@ -477,9 +505,11 @@ func (it *rows) next() ([]interface{}, bool) {
 				values[i] = reflect.New(reflect.TypeOf(ArrayString{}))
 			case TCBytes:
 				values[i] = reflect.New(reflect.TypeOf(ArrayBytes{}))
+			case TCStruct:
+				values[i] = reflect.New(reflect.TypeOf(ArrayStruct{}))
 
 			default:
-				it.lastErr = fmt.Errorf("unknown supported type for Array: %v", item.ValueType.ArrayType.Code)
+				it.lastErr = fmt.Errorf("unknownn supported type for Array: %v", item.ValueType.ArrayType.Code)
 				return nil, false
 			}
 		case TCStruct:
