@@ -477,10 +477,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			case *ast.Ident:
 				alias = e.Name
 			case *ast.Path:
-				if len(e.Idents) != 2 {
-					return nil, "", status.Errorf(codes.Unimplemented, "path expression not supported")
-				}
-				alias = e.Idents[1].Name
+				alias = e.Idents[len(e.Idents)-1].Name
 			}
 			s, d, err := b.buildExpr(i.Expr)
 			if err != nil {
@@ -849,6 +846,30 @@ func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, []interface{}, 
 	return NullExpr, nil, fmt.Errorf("unexpected parameter type for expandParamByPlaceholders: %T", v)
 }
 
+func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
+	if expr.ValueType.Code != TCStruct {
+		msg := "Cannot access field %s on a value with type %s"
+		return NullExpr, newExprErrorf(nil, true, msg, name, expr.ValueType)
+	}
+
+	idx := -1
+	for i := range expr.ValueType.StructType.FieldNames {
+		if expr.ValueType.StructType.FieldNames[i] == name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		msg := "Field name %s does not exist in %s"
+		return NullExpr, newExprErrorf(nil, true, msg, name, expr.ValueType)
+	}
+
+	return Expr{
+		ValueType: *expr.ValueType.StructType.FieldTypes[idx],
+		Raw:       fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", expr.Raw, idx),
+	}, nil
+}
+
 func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 	switch e := expr.(type) {
 	case *ast.UnaryExpr:
@@ -968,7 +989,17 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.SelectorExpr:
-		return NullExpr, nil, newExprErrorf(expr, false, "Selector not supported yet")
+		s, d, err := b.buildExpr(e.Expr)
+		if err != nil {
+			return NullExpr, nil, wrapExprError(err, expr, "Expr")
+		}
+
+		s2, err := b.accessField(s, e.Ident.Name)
+		if err != nil {
+			return NullExpr, nil, wrapExprError(err, expr, "Expr")
+		}
+
+		return s2, d, nil
 
 	case *ast.IndexExpr:
 		var data []interface{}
@@ -1300,7 +1331,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 	case *ast.ScalarSubQuery:
 		query, data, items, err := BuildQuery(b.db, e.Query, b.params)
 		if err != nil {
-			return NullExpr, nil, newExprErrorf(expr, false, "BuildQuery error for ScalarSubquery: %v", err)
+			return NullExpr, nil, wrapExprError(err, expr, "Scalar")
 		}
 		if len(items) != 1 {
 			return NullExpr, nil, newExprErrorf(expr, true, "Scalar subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
@@ -1313,7 +1344,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 	case *ast.ArraySubQuery:
 		query, data, items, err := BuildQuery(b.db, e.Query, b.params)
 		if err != nil {
-			return NullExpr, nil, newExprErrorf(expr, false, "BuildQuery error for %T: %v", err, e)
+			return NullExpr, nil, wrapExprError(err, expr, "Array")
 		}
 		if len(items) != 1 {
 			return NullExpr, nil, newExprErrorf(expr, true, "ARRAY subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
@@ -1374,7 +1405,65 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.StructLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "StructLiteral not supported yet")
+		var names []string
+		var vt ValueType
+		var typedef bool
+
+		if e.Fields == nil {
+			for i := 0; i < len(e.Values); i++ {
+				names = append(names, `""`)
+			}
+
+			// just initialize here. The values will be populated later.
+			vt = ValueType{
+				Code:       TCStruct,
+				StructType: &StructType{},
+			}
+		} else {
+			if len(e.Fields) != len(e.Values) {
+				return NullExpr, nil, newExprErrorf(expr, true, "STRUCT type has %d fields but constructor call has %d fields", len(e.Fields), len(e.Values))
+			}
+
+			typedef = true
+			vt = astTypeToValueType(&ast.StructType{
+				Fields: e.Fields,
+			})
+			for _, name := range vt.StructType.FieldNames {
+				names = append(names, `"`+name+`"`)
+			}
+		}
+
+		namesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(names, ", "))
+
+		var data []interface{}
+		var values []string
+		for i, v := range e.Values {
+			s, d, err := b.buildExpr(v)
+			if err != nil {
+				return NullExpr, nil, wrapExprError(err, expr, "Values")
+			}
+			data = append(data, d...)
+
+			// If types of fields are defined, check type compatibility with the value
+			// otherwise use the type of the value as is
+			if typedef {
+				if !compareValueType(s.ValueType, *vt.StructType.FieldTypes[i]) {
+					msg := "Struct field %d has type literal %s which does not coerce to %s"
+					return NullExpr, nil, newExprErrorf(expr, true, msg, i+1, s.ValueType, *vt.StructType.FieldTypes[i])
+				}
+			} else {
+				vt.StructType.FieldNames = append(vt.StructType.FieldNames, "")
+				vt.StructType.FieldTypes = append(vt.StructType.FieldTypes, &s.ValueType)
+			}
+			values = append(values, s.Raw)
+		}
+		valuesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(values, ", "))
+		raw := fmt.Sprintf(`JSON_OBJECT("keys", %s, "values", %s)`, namesObj, valuesObj)
+
+		return Expr{
+			Raw:       raw,
+			ValueType: vt,
+		}, data, nil
 
 	case *ast.NullLiteral:
 		return Expr{
@@ -1462,25 +1551,56 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", e.Name)
 		}
 		return item.Expr, nil, nil
-	case *ast.Path:
-		if len(e.Idents) != 2 {
-			return NullExpr, nil, newExprErrorf(expr, false, "path expression not supported")
-		}
-		first := e.Idents[0]
-		second := e.Idents[1]
 
-		tbl, ok := b.views[first.Name]
-		if !ok {
-			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", first.Name)
+	case *ast.Path:
+		firstName := e.Idents[0].Name
+		var remains []*ast.Ident
+		var curExpr Expr
+
+		// Look tables first
+		tbl, ok := b.views[firstName]
+		if ok {
+			// If the identifier found in tables, look the result items
+			secondName := e.Idents[1].Name
+			item, ok := tbl.ResultItemsMap[secondName]
+			if !ok {
+				return NullExpr, nil, newExprErrorf(expr, true, "Name %s not found inside %s", secondName, firstName)
+			}
+
+			curExpr = Expr{
+				ValueType: item.Expr.ValueType,
+				Raw:       firstName + "." + secondName,
+			}
+			remains = e.Idents[2:]
+
+		} else {
+			// If not found in tables, look the results items of root
+			if b.rootView == nil {
+				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", firstName)
+			}
+
+			item, ambiguous, notfound := b.rootView.Get(firstName)
+			if notfound {
+				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", firstName)
+			}
+			if ambiguous {
+				return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", firstName)
+			}
+
+			curExpr = item.Expr
+			remains = e.Idents[1:]
 		}
-		item, ok := tbl.ResultItemsMap[second.Name]
-		if !ok {
-			return NullExpr, nil, newExprErrorf(expr, true, "Name %s not found inside %s", second.Name, first.Name)
+
+		for _, ident := range remains {
+			next, err := b.accessField(curExpr, ident.Name)
+			if err != nil {
+				return NullExpr, nil, wrapExprError(err, expr, "Path")
+			}
+
+			curExpr = next
 		}
-		return Expr{
-			ValueType: item.Expr.ValueType,
-			Raw:       fmt.Sprintf("%s.%s", first.Name, item.Name),
-		}, nil, nil
+
+		return curExpr, nil, nil
 	default:
 		return NullExpr, nil, newExprErrorf(expr, false, "unknown expression")
 	}
@@ -1538,9 +1658,26 @@ func astTypeToValueType(astType ast.Type) ValueType {
 			ArrayType: &vt,
 		}
 	case *ast.StructType:
-		// TODO
+		names := make([]string, 0, len(t.Fields))
+		types := make([]*ValueType, 0, len(t.Fields))
+
+		for _, field := range t.Fields {
+			var name string
+			if field.Ident != nil {
+				name = field.Ident.Name
+			}
+			names = append(names, name)
+
+			vt := astTypeToValueType(field.Type)
+			types = append(types, &vt)
+
+		}
 		return ValueType{
 			Code: TCStruct,
+			StructType: &StructType{
+				FieldNames: names,
+				FieldTypes: types,
+			},
 		}
 	}
 

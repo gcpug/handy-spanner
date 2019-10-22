@@ -176,6 +176,12 @@ func TestQuery(t *testing.T) {
 				msg:  regexp.MustCompile(`Unrecognized name: x`),
 			},
 			{
+				name: "PathIdentifer_InvalidFieldAccess",
+				sql:  "SELECT a.Id.zzz FROM Simple a",
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`Cannot access field zzz on a value with type INT64`),
+			},
+			{
 				name: "PathIdentifer_NotFound_WithoutFromClause",
 				sql:  "SELECT x.*",
 				code: codes.InvalidArgument,
@@ -948,6 +954,104 @@ func TestQuery(t *testing.T) {
 			// 		[]interface{}{int64(1), int64(1)},
 			// 	},
 			// },
+		},
+
+		"Struct": {
+			{
+				name: "StructLiteral",
+				sql:  `SELECT ARRAY(SELECT (1,"xx") x)`,
+				expected: [][]interface{}{
+					[]interface{}{ArrayStruct{
+						Values: []*StructValue{
+							{
+								Keys:   []string{"", ""},
+								Values: []interface{}{float64(1), string("xx")},
+							},
+						},
+					},
+					},
+				},
+			},
+			{
+				name: "StructLiteral_WithField",
+				sql:  `SELECT ARRAY(SELECT STRUCT<Id int64, Value string>(1,"xx") x)`,
+				expected: [][]interface{}{
+					[]interface{}{ArrayStruct{
+						Values: []*StructValue{
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(1), string("xx")},
+							},
+						},
+					},
+					},
+				},
+			},
+			{
+				name: "StructLiteral_WithField_WithoutName",
+				sql:  `SELECT ARRAY(SELECT STRUCT<int64, Value string>(1,"xx") x)`,
+				expected: [][]interface{}{
+					[]interface{}{ArrayStruct{
+						Values: []*StructValue{
+							{
+								Keys:   []string{"", "Value"},
+								Values: []interface{}{float64(1), string("xx")},
+							},
+						},
+					},
+					},
+				},
+			},
+			// Parse error
+			// {
+			// 	name: "StructLiteral_WithField_WithoutType",
+			// 	sql:  `SELECT ARRAY(SELECT STRUCT<Id, Value string>(1,"xx") x)`,
+			// },
+			{
+				name: "StructLiteral_InvalidFieldSize",
+				sql:  `SELECT ARRAY(SELECT STRUCT<Id INT64>(1,"xx") x)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^STRUCT type has 1 fields but constructor call has 2 fields`),
+			},
+			{
+				name: "StructLiteral_InvalidFieldSize",
+				sql:  `SELECT ARRAY(SELECT STRUCT<>(1,"xx") x)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^STRUCT type has 0 fields but constructor call has 2 fields`),
+			},
+			{
+				name: "StructLiteral_IncompatibleType",
+				sql:  `SELECT ARRAY(SELECT STRUCT<Id INT64, Value INT64>(1,"xx") x)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Struct field 2 has type literal STRING which does not coerce to INT64`),
+			},
+			{
+				name: "PathIdentifier_StructField_BeginFromTableAlias",
+				sql:  `SELECT y.x.Id, y.x.Value FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x) y`,
+				expected: [][]interface{}{
+					[]interface{}{int64(1), string("xx")},
+				},
+			},
+			{
+				name: "PathIdentifier_StructField_BeginFromStructColumnAlias",
+				sql:  `SELECT x.Id, x.Value FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x)`,
+				expected: [][]interface{}{
+					[]interface{}{int64(1), string("xx")},
+				},
+			},
+			{
+				name: "PathIdentifier_StructField_Subquery_NotFound",
+				sql:  `SELECT y.x.zzz FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x) y`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Field name zzz does not exist in STRUCT<Id INT64, Value STRING>`),
+			},
+			{
+				name: "Selector_ArrayOfStruct",
+				sql:  `SELECT z.y[OFFSET(0)].Id FROM (SELECT ARRAY(SELECT STRUCT<Id int64, Value string>(1,"xx") x) y) z`,
+				expected: [][]interface{}{
+					[]interface{}{int64(1)},
+				},
+			},
 		},
 
 		"FromJoin": {

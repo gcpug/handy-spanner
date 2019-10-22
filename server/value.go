@@ -69,7 +69,19 @@ func (t ValueType) String() string {
 	case TCArray:
 		return fmt.Sprintf("ARRAY<%s>", t.ArrayType.Code.String())
 	case TCStruct:
-		return "STRUCT<>" // TODO
+		n := len(t.StructType.FieldTypes)
+		ss := make([]string, n)
+		for i := 0; i < n; i++ {
+			name := t.StructType.FieldNames[i]
+			vt := t.StructType.FieldTypes[i]
+			if name == "" {
+				ss[i] = vt.String()
+			} else {
+				ss[i] = name + " " + vt.String()
+
+			}
+		}
+		return fmt.Sprintf("STRUCT<%s>", strings.Join(ss, ", "))
 	}
 	return "(unknown type)"
 }
