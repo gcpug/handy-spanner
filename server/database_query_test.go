@@ -1052,6 +1052,20 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(1)},
 				},
 			},
+			{
+				name: "DotStar_Ident_StructField",
+				sql:  `SELECT x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x)`,
+				expected: [][]interface{}{
+					[]interface{}{int64(1), string("xx")},
+				},
+			},
+			{
+				name: "DotStar_Path_StructField",
+				sql:  `SELECT y.x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x) y`,
+				expected: [][]interface{}{
+					[]interface{}{int64(1), string("xx")},
+				},
+			},
 		},
 
 		"FromJoin": {

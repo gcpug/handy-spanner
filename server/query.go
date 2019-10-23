@@ -460,13 +460,60 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			switch e := i.Expr.(type) {
 			case *ast.Ident:
 				view, ok := b.views[e.Name]
-				if !ok {
-					return nil, "", status.Errorf(codes.InvalidArgument, "Unrecognized name: %s", e.Name)
+				if ok {
+					items = append(items, view.AllItems()...)
+					exprs = append(exprs, fmt.Sprintf("%s.*", e.Name))
+				} else {
+					s, d, err := b.buildExpr(i.Expr)
+					if err != nil {
+						return nil, "", wrapExprError(err, i.Expr, "Ident")
+					}
+					data = append(data, d...)
+
+					if s.ValueType.Code != TCStruct {
+						return nil, "", status.Errorf(codes.InvalidArgument, "Dot-star is not supported for type %s", s.ValueType)
+
+					}
+					n := len(s.ValueType.StructType.FieldTypes)
+					for i := 0; i < n; i++ {
+						name := s.ValueType.StructType.FieldNames[i]
+						vt := s.ValueType.StructType.FieldTypes[i]
+						items = append(items, ResultItem{
+							Name:      name,
+							ValueType: *vt,
+							Expr: Expr{
+								Raw:       name,
+								ValueType: *vt,
+							},
+						})
+						exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", s.Raw, i))
+					}
 				}
-				items = append(items, view.AllItems()...)
-				exprs = append(exprs, fmt.Sprintf("%s.*", e.Name))
 			case *ast.Path:
-				return nil, "", status.Errorf(codes.Unimplemented, "%T is not supported in buildResultSet ", e)
+				s, d, err := b.buildExpr(i.Expr)
+				if err != nil {
+					return nil, "", wrapExprError(err, i.Expr, "Path")
+				}
+				data = append(data, d...)
+
+				if s.ValueType.Code != TCStruct {
+					return nil, "", status.Errorf(codes.InvalidArgument, "Dot-star is not supported for type %s", s.ValueType)
+
+				}
+				n := len(s.ValueType.StructType.FieldTypes)
+				for i := 0; i < n; i++ {
+					name := s.ValueType.StructType.FieldNames[i]
+					vt := s.ValueType.StructType.FieldTypes[i]
+					items = append(items, ResultItem{
+						Name:      name,
+						ValueType: *vt,
+						Expr: Expr{
+							Raw:       name,
+							ValueType: *vt,
+						},
+					})
+					exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", s.Raw, i))
+				}
 			default:
 				return nil, "", status.Errorf(codes.Unimplemented, "unknown expression %T in result set for DotStar", e)
 			}
