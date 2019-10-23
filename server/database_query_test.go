@@ -1066,6 +1066,73 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(1), string("xx")},
 				},
 			},
+			{
+				name: "SelectAsStruct",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT Id, Value FROM Simple)`,
+				expected: [][]interface{}{
+					[]interface{}{ArrayStruct{
+						Values: []*StructValue{
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(100), string("xxx")},
+							},
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(200), string("yyy")},
+							},
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(300), string("zzz")},
+							},
+						},
+					}},
+				},
+			},
+			{
+				name: "SelectAsStruct_NoColumnName",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT Id+1, Value FROM Simple)`,
+				expected: [][]interface{}{
+					[]interface{}{ArrayStruct{
+						Values: []*StructValue{
+							{
+								Keys:   []string{"", "Value"},
+								Values: []interface{}{float64(101), string("xxx")},
+							},
+							{
+								Keys:   []string{"", "Value"},
+								Values: []interface{}{float64(201), string("yyy")},
+							},
+							{
+								Keys:   []string{"", "Value"},
+								Values: []interface{}{float64(301), string("zzz")},
+							},
+						},
+					},
+					},
+				},
+			},
+			{
+				name: "SelectAsStruct_WithColumnAlias",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT Id+1 AS XX, Value FROM Simple)`,
+				expected: [][]interface{}{
+					[]interface{}{ArrayStruct{
+						Values: []*StructValue{
+							{
+								Keys:   []string{"XX", "Value"},
+								Values: []interface{}{float64(101), string("xxx")},
+							},
+							{
+								Keys:   []string{"XX", "Value"},
+								Values: []interface{}{float64(201), string("yyy")},
+							},
+							{
+								Keys:   []string{"XX", "Value"},
+								Values: []interface{}{float64(301), string("zzz")},
+							},
+						},
+					}},
+				},
+			},
 		},
 
 		"FromJoin": {
@@ -1244,9 +1311,29 @@ func TestQuery(t *testing.T) {
 			},
 			{
 				name: "SubQuery_Array",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT 100))`,
+				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id FROM Simple))`,
 				expected: [][]interface{}{
 					[]interface{}{int64(100)},
+					[]interface{}{int64(200)},
+					[]interface{}{int64(300)},
+				},
+			},
+			{
+				name: "SubQuery_Array_WithoutColumnAlias",
+				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id+1 FROM Simple))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(101)},
+					[]interface{}{int64(201)},
+					[]interface{}{int64(301)},
+				},
+			},
+			{
+				name: "SubQuery_Array_WithColumnAlias",
+				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id As x FROM Simple))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100)},
+					[]interface{}{int64(200)},
+					[]interface{}{int64(300)},
 				},
 			},
 			{

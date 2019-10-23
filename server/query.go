@@ -51,14 +51,20 @@ type QueryBuilder struct {
 
 	unnestViewNum   int
 	subqueryViewNum int
+
+	// forceColumnAlias is used only for array subquery.
+	// array subquery requires column name for the result item.
+	// When forceColumnAlias is specified, random column names is used if the item does not have name.
+	forceColumnAlias bool
 }
 
-func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value) (string, []interface{}, []ResultItem, error) {
+func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value, forceColumnAlias bool) (string, []interface{}, []ResultItem, error) {
 	b := &QueryBuilder{
-		db:     db,
-		stmt:   stmt,
-		views:  make(map[string]*TableView),
-		params: params,
+		db:               db,
+		stmt:             stmt,
+		views:            make(map[string]*TableView),
+		params:           params,
+		forceColumnAlias: forceColumnAlias,
 	}
 	return b.Build()
 }
@@ -109,7 +115,7 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 		b.rootView = view
 	}
 
-	resultItems, selectQuery, err := b.buildResultSet(selectStmt.Results)
+	resultItems, selectQuery, err := b.buildResultSet(selectStmt.Results, selectStmt.AsStruct)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -131,7 +137,7 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 }
 
 func (b *QueryBuilder) buildSubQuery(sub *ast.SubQuery) (string, []interface{}, []ResultItem, error) {
-	s, data, items, err := BuildQuery(b.db, sub.Query, b.params)
+	s, data, items, err := BuildQuery(b.db, sub.Query, b.params, b.forceColumnAlias)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -197,7 +203,7 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 		}
 	}
 
-	s, data, items, err := BuildQuery(b.db, compound.Queries[0], b.params)
+	s, data, items, err := BuildQuery(b.db, compound.Queries[0], b.params, b.forceColumnAlias)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -217,7 +223,7 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 	ss = append(ss, fmt.Sprintf("SELECT * FROM (%s)", s))
 
 	for i, query := range compound.Queries[1:] {
-		s, d, items2, err := BuildQuery(b.db, query, b.params)
+		s, d, items2, err := BuildQuery(b.db, query, b.params, false)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -353,7 +359,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 		return b.buildUnnestView(src)
 
 	case *ast.SubQueryTableExpr:
-		query, data, items, err := BuildQuery(b.db, src.Query, b.params)
+		query, data, items, err := BuildQuery(b.db, src.Query, b.params, false)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("Subquery error: %v", err)
 		}
@@ -440,7 +446,7 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []i
 	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), data, nil
 }
 
-func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultItem, string, error) {
+func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem, asStruct bool) ([]ResultItem, string, error) {
 	var data []interface{}
 	n := len(selectItems)
 	if b.rootView != nil {
@@ -448,7 +454,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 	}
 	items := make([]ResultItem, 0, n)
 	exprs := make([]string, 0, len(selectItems))
-	for _, item := range selectItems {
+	for itemIdx, item := range selectItems {
 		switch i := item.(type) {
 		case *ast.Star:
 			if b.rootView == nil {
@@ -486,19 +492,36 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 				alias = e.Name
 			case *ast.Path:
 				alias = e.Idents[len(e.Idents)-1].Name
+			default:
+				if b.forceColumnAlias && !asStruct {
+					alias = fmt.Sprintf("___column%d", itemIdx)
+				}
 			}
 			s, d, err := b.buildExpr(i.Expr)
 			if err != nil {
 				return nil, "", wrapExprError(err, i.Expr, "Path")
 			}
 
+			var raw string
+			if b.forceColumnAlias && !asStruct {
+				raw = fmt.Sprintf("%s AS %s", s.Raw, alias)
+			} else {
+				raw = s.Raw
+			}
+
 			data = append(data, d...)
 			items = append(items, ResultItem{
 				Name:      alias,
 				ValueType: s.ValueType,
-				Expr:      s,
+				Expr: Expr{
+					// This is a trick. This Expr is referred as subquery.
+					// At the reference, it should be just referred as alias name instead of s.Raw.
+					Raw:       alias,
+					ValueType: s.ValueType,
+				},
 			})
-			exprs = append(exprs, s.Raw)
+
+			exprs = append(exprs, raw)
 
 		case *ast.Alias:
 			alias := i.As.Alias.Name
@@ -517,7 +540,11 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 					ValueType: s.ValueType,
 				},
 			})
-			exprs = append(exprs, fmt.Sprintf("%s AS %s", s.Raw, alias))
+			if asStruct {
+				exprs = append(exprs, s.Raw)
+			} else {
+				exprs = append(exprs, fmt.Sprintf("%s AS %s", s.Raw, alias))
+			}
 
 		default:
 			return nil, "", status.Errorf(codes.Unimplemented, "not supported %T in result set", item)
@@ -525,9 +552,43 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 	}
 
 	b.args = append(b.args, data...)
-	seletQuery := strings.Join(exprs, ", ")
+	if asStruct {
+		names := make([]string, len(items))
+		quotedNames := make([]string, len(items))
+		vts := make([]*ValueType, len(items))
+		for i := range items {
+			names[i] = items[i].Name
+			quotedNames[i] = fmt.Sprintf("'%s'", items[i].Name)
+			vts[i] = &items[i].ValueType
+		}
 
-	return items, seletQuery, nil
+		vt := ValueType{
+			Code: TCStruct,
+			StructType: &StructType{
+				FieldNames: names,
+				FieldTypes: vts,
+			},
+		}
+
+		result := ResultItem{
+			Name:      "",
+			ValueType: vt,
+			Expr: Expr{
+				Raw:       "___AsStruct",
+				ValueType: vt,
+			},
+		}
+
+		namesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(quotedNames, ", "))
+		valuesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(exprs, ", "))
+		selectQuery := fmt.Sprintf(`JSON_OBJECT("keys", %s, "values", %s) AS ___AsStruct`, namesObj, valuesObj)
+
+		return []ResultItem{result}, selectQuery, nil
+	} else {
+		seletQuery := strings.Join(exprs, ", ")
+
+		return items, seletQuery, nil
+	}
 }
 
 func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {
@@ -732,7 +793,7 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface
 		}, data, nil
 
 	case *ast.SubQueryInCondition:
-		query, data, items, err := BuildQuery(b.db, c.Query, b.params)
+		query, data, items, err := BuildQuery(b.db, c.Query, b.params, false)
 		if err != nil {
 			return NullExpr, nil, newExprErrorf(nil, false, "BuildQuery error for SubqueryInCondition: %v", err)
 		}
@@ -1355,7 +1416,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.ScalarSubQuery:
-		query, data, items, err := BuildQuery(b.db, e.Query, b.params)
+		query, data, items, err := BuildQuery(b.db, e.Query, b.params, false)
 		if err != nil {
 			return NullExpr, nil, wrapExprError(err, expr, "Scalar")
 		}
@@ -1368,7 +1429,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.ArraySubQuery:
-		query, data, items, err := BuildQuery(b.db, e.Query, b.params)
+		query, data, items, err := BuildQuery(b.db, e.Query, b.params, true)
 		if err != nil {
 			return NullExpr, nil, wrapExprError(err, expr, "Array")
 		}
@@ -1385,11 +1446,11 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				Code:      TCArray,
 				ArrayType: &items[0].ValueType,
 			},
-			Raw: fmt.Sprintf("(SELECT JSON_GROUP_ARRAY( (%s) ))", query),
+			Raw: fmt.Sprintf("(SELECT JSON_GROUP_ARRAY(%s) FROM (%s))", items[0].Expr.Raw, query),
 		}, data, nil
 
 	case *ast.ExistsSubQuery:
-		query, data, _, err := BuildQuery(b.db, e.Query, b.params)
+		query, data, _, err := BuildQuery(b.db, e.Query, b.params, false)
 		if err != nil {
 			return NullExpr, nil, newExprErrorf(expr, false, "BuildQuery error for %T: %v", err, e)
 		}

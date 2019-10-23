@@ -179,7 +179,7 @@ func (d *database) Read(ctx context.Context, tbl, idx string, cols []string, key
 }
 
 func (d *database) Query(ctx context.Context, stmt *ast.QueryStatement, params map[string]Value) (RowIterator, error) {
-	query, args, resultItems, err := BuildQuery(d, stmt.Query, params)
+	query, args, resultItems, err := BuildQuery(d, stmt.Query, params, false)
 	if err != nil {
 		return nil, err
 	}
