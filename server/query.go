@@ -457,65 +457,26 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			items = append(items, b.rootView.AllItems()...)
 			exprs = append(exprs, "*")
 		case *ast.DotStar:
-			switch e := i.Expr.(type) {
-			case *ast.Ident:
-				view, ok := b.views[e.Name]
-				if ok {
-					items = append(items, view.AllItems()...)
-					exprs = append(exprs, fmt.Sprintf("%s.*", e.Name))
-				} else {
-					s, d, err := b.buildExpr(i.Expr)
-					if err != nil {
-						return nil, "", wrapExprError(err, i.Expr, "Ident")
-					}
-					data = append(data, d...)
+			s, d, err := b.buildExpr(i.Expr)
+			if err != nil {
+				return nil, "", wrapExprError(err, i.Expr, "DotStar")
+			}
+			data = append(data, d...)
 
-					if s.ValueType.Code != TCStruct {
-						return nil, "", status.Errorf(codes.InvalidArgument, "Dot-star is not supported for type %s", s.ValueType)
+			if s.ValueType.Code != TCStruct {
+				return nil, "", status.Errorf(codes.InvalidArgument, "Dot-star is not supported for type %s", s.ValueType)
 
-					}
-					n := len(s.ValueType.StructType.FieldTypes)
-					for i := 0; i < n; i++ {
-						name := s.ValueType.StructType.FieldNames[i]
-						vt := s.ValueType.StructType.FieldTypes[i]
-						items = append(items, ResultItem{
-							Name:      name,
-							ValueType: *vt,
-							Expr: Expr{
-								Raw:       name,
-								ValueType: *vt,
-							},
-						})
-						exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", s.Raw, i))
-					}
-				}
-			case *ast.Path:
-				s, d, err := b.buildExpr(i.Expr)
-				if err != nil {
-					return nil, "", wrapExprError(err, i.Expr, "Path")
-				}
-				data = append(data, d...)
+			}
+			st := s.ValueType.StructType
 
-				if s.ValueType.Code != TCStruct {
-					return nil, "", status.Errorf(codes.InvalidArgument, "Dot-star is not supported for type %s", s.ValueType)
-
-				}
-				n := len(s.ValueType.StructType.FieldTypes)
+			items = append(items, st.AllItems()...)
+			if st.IsTable {
+				exprs = append(exprs, fmt.Sprintf("%s.*", s.Raw))
+			} else {
+				n := len(st.FieldTypes)
 				for i := 0; i < n; i++ {
-					name := s.ValueType.StructType.FieldNames[i]
-					vt := s.ValueType.StructType.FieldTypes[i]
-					items = append(items, ResultItem{
-						Name:      name,
-						ValueType: *vt,
-						Expr: Expr{
-							Raw:       name,
-							ValueType: *vt,
-						},
-					})
 					exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", s.Raw, i))
 				}
-			default:
-				return nil, "", status.Errorf(codes.Unimplemented, "unknown expression %T in result set for DotStar", e)
 			}
 
 		case *ast.ExprSelectItem:
@@ -669,6 +630,7 @@ func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, view *Table
 	var data []interface{}
 
 	for _, item := range orderby.Items {
+		// TODO: use b.buildExpr()
 		var expr Expr
 		switch e := item.Expr.(type) {
 		case *ast.Ident:
@@ -899,21 +861,38 @@ func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
 		return NullExpr, newExprErrorf(nil, true, msg, name, expr.ValueType)
 	}
 
+	st := expr.ValueType.StructType
+
 	idx := -1
-	for i := range expr.ValueType.StructType.FieldNames {
-		if expr.ValueType.StructType.FieldNames[i] == name {
+	for i := range st.FieldNames {
+		if st.FieldNames[i] == name {
+			if idx != -1 {
+				return NullExpr, newExprErrorf(nil, true, "Column name %s is ambiguous", name)
+			}
+
 			idx = i
-			break
 		}
 	}
 	if idx == -1 {
-		msg := "Field name %s does not exist in %s"
-		return NullExpr, newExprErrorf(nil, true, msg, name, expr.ValueType)
+		if st.IsTable {
+			msg := "Name %s not found inside %s"
+			return NullExpr, newExprErrorf(nil, true, msg, name, expr.Raw)
+		} else {
+			msg := "Field name %s does not exist in %s"
+			return NullExpr, newExprErrorf(nil, true, msg, name, expr.ValueType)
+		}
+	}
+
+	var raw string
+	if st.IsTable {
+		raw = fmt.Sprintf("%s.%s", expr.Raw, name)
+	} else {
+		raw = fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", expr.Raw, idx)
 	}
 
 	return Expr{
-		ValueType: *expr.ValueType.StructType.FieldTypes[idx],
-		Raw:       fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", expr.Raw, idx),
+		ValueType: *st.FieldTypes[idx],
+		Raw:       raw,
 	}, nil
 }
 
@@ -1586,19 +1565,29 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return b.expandParamByPlaceholders(v)
 
 	case *ast.Ident:
-		if b.rootView == nil {
-			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
-		}
+		tbl, ok := b.views[e.Name]
+		if ok {
+			return Expr{
+				ValueType: ValueType{
+					Code:       TCStruct,
+					StructType: tbl.ToStruct(),
+				},
+				Raw: e.Name,
+			}, nil, nil
+		} else {
+			if b.rootView == nil {
+				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
+			}
 
-		item, ambiguous, notfound := b.rootView.Get(e.Name)
-		if notfound {
-			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
+			item, ambiguous, notfound := b.rootView.Get(e.Name)
+			if notfound {
+				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
+			}
+			if ambiguous {
+				return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", e.Name)
+			}
+			return item.Expr, nil, nil
 		}
-		if ambiguous {
-			return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", e.Name)
-		}
-		return item.Expr, nil, nil
-
 	case *ast.Path:
 		firstName := e.Idents[0].Name
 		var remains []*ast.Ident
@@ -1607,19 +1596,13 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		// Look tables first
 		tbl, ok := b.views[firstName]
 		if ok {
-			// If the identifier found in tables, look the result items
-			secondName := e.Idents[1].Name
-			item, ok := tbl.ResultItemsMap[secondName]
-			if !ok {
-				return NullExpr, nil, newExprErrorf(expr, true, "Name %s not found inside %s", secondName, firstName)
-			}
-
 			curExpr = Expr{
-				ValueType: item.Expr.ValueType,
-				Raw:       firstName + "." + secondName,
+				ValueType: ValueType{
+					Code:       TCStruct,
+					StructType: tbl.ToStruct(),
+				},
+				Raw: firstName,
 			}
-			remains = e.Idents[2:]
-
 		} else {
 			// If not found in tables, look the results items of root
 			if b.rootView == nil {
@@ -1635,8 +1618,8 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			}
 
 			curExpr = item.Expr
-			remains = e.Idents[1:]
 		}
+		remains = e.Idents[1:]
 
 		for _, ident := range remains {
 			next, err := b.accessField(curExpr, ident.Name)

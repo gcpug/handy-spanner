@@ -138,6 +138,29 @@ func decideArrayElementsValueType(vts ...ValueType) (ValueType, error) {
 type StructType struct {
 	FieldNames []string
 	FieldTypes []*ValueType
+
+	// Table can be struct but it behaves differently.
+	// So a struct created from table should be marked.
+	IsTable bool
+}
+
+func (s *StructType) AllItems() []ResultItem {
+	n := len(s.FieldTypes)
+	items := make([]ResultItem, n)
+	for i := 0; i < n; i++ {
+		name := s.FieldNames[i]
+		vt := s.FieldTypes[i]
+		items[i] = ResultItem{
+			Name:      name,
+			ValueType: *vt,
+			Expr: Expr{
+				Raw:       name,
+				ValueType: *vt,
+			},
+		}
+	}
+
+	return items
 }
 
 type TypeCode int32
