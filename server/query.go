@@ -115,7 +115,7 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 		b.rootView = view
 	}
 
-	resultItems, selectQuery, err := b.buildResultSet(selectStmt.Results, selectStmt.AsStruct)
+	resultItems, selectQuery, err := b.buildResultSet(selectStmt.Results)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -132,6 +132,61 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 	}
 
 	query := fmt.Sprintf(`SELECT %s %s %s`, selectQuery, fromClause, whereClause)
+
+	var originalNames []string
+	if b.forceColumnAlias || selectStmt.AsStruct {
+		newResultItems := make([]ResultItem, len(resultItems))
+		names := make([]string, len(resultItems))
+		originalNames = make([]string, len(resultItems))
+		for i := range resultItems {
+			name := fmt.Sprintf("___column%d", i)
+			names[i] = name
+			originalNames[i] = resultItems[i].Name
+			newResultItems[i] = ResultItem{
+				Name:      name,
+				ValueType: resultItems[i].ValueType,
+				Expr: Expr{
+					Raw:       name,
+					ValueType: resultItems[i].ValueType,
+				},
+			}
+		}
+		query = fmt.Sprintf(`WITH ___CTE(%s) as (%s) select * from ___CTE`, strings.Join(names, ", "), query)
+		resultItems = newResultItems
+	}
+
+	if selectStmt.AsStruct {
+		names := make([]string, len(resultItems))
+		quotedNames := make([]string, len(resultItems))
+		vts := make([]*ValueType, len(resultItems))
+		for i := range resultItems {
+			names[i] = resultItems[i].Name
+			quotedNames[i] = fmt.Sprintf("'%s'", originalNames[i])
+			vts[i] = &resultItems[i].ValueType
+		}
+
+		vt := ValueType{
+			Code: TCStruct,
+			StructType: &StructType{
+				FieldNames: names,
+				FieldTypes: vts,
+			},
+		}
+
+		result := ResultItem{
+			Name:      "",
+			ValueType: vt,
+			Expr: Expr{
+				Raw:       "___AsStruct",
+				ValueType: vt,
+			},
+		}
+
+		namesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(quotedNames, ", "))
+		valuesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(names, ", "))
+		query = fmt.Sprintf(`SELECT JSON_OBJECT("keys", %s, "values", %s) AS ___AsStruct FROM (%s)`, namesObj, valuesObj, query)
+		resultItems = []ResultItem{result}
+	}
 
 	return query, b.args, resultItems, nil
 }
@@ -446,7 +501,7 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []i
 	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), data, nil
 }
 
-func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem, asStruct bool) ([]ResultItem, string, error) {
+func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultItem, string, error) {
 	var data []interface{}
 	n := len(selectItems)
 	if b.rootView != nil {
@@ -454,7 +509,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem, asStruct boo
 	}
 	items := make([]ResultItem, 0, n)
 	exprs := make([]string, 0, len(selectItems))
-	for itemIdx, item := range selectItems {
+	for _, item := range selectItems {
 		switch i := item.(type) {
 		case *ast.Star:
 			if b.rootView == nil {
@@ -492,21 +547,10 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem, asStruct boo
 				alias = e.Name
 			case *ast.Path:
 				alias = e.Idents[len(e.Idents)-1].Name
-			default:
-				if b.forceColumnAlias && !asStruct {
-					alias = fmt.Sprintf("___column%d", itemIdx)
-				}
 			}
 			s, d, err := b.buildExpr(i.Expr)
 			if err != nil {
 				return nil, "", wrapExprError(err, i.Expr, "Path")
-			}
-
-			var raw string
-			if b.forceColumnAlias && !asStruct {
-				raw = fmt.Sprintf("%s AS %s", s.Raw, alias)
-			} else {
-				raw = s.Raw
 			}
 
 			data = append(data, d...)
@@ -521,7 +565,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem, asStruct boo
 				},
 			})
 
-			exprs = append(exprs, raw)
+			exprs = append(exprs, s.Raw)
 
 		case *ast.Alias:
 			alias := i.As.Alias.Name
@@ -540,11 +584,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem, asStruct boo
 					ValueType: s.ValueType,
 				},
 			})
-			if asStruct {
-				exprs = append(exprs, s.Raw)
-			} else {
-				exprs = append(exprs, fmt.Sprintf("%s AS %s", s.Raw, alias))
-			}
+			exprs = append(exprs, fmt.Sprintf("%s AS %s", s.Raw, alias))
 
 		default:
 			return nil, "", status.Errorf(codes.Unimplemented, "not supported %T in result set", item)
@@ -552,43 +592,9 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem, asStruct boo
 	}
 
 	b.args = append(b.args, data...)
-	if asStruct {
-		names := make([]string, len(items))
-		quotedNames := make([]string, len(items))
-		vts := make([]*ValueType, len(items))
-		for i := range items {
-			names[i] = items[i].Name
-			quotedNames[i] = fmt.Sprintf("'%s'", items[i].Name)
-			vts[i] = &items[i].ValueType
-		}
+	seletQuery := strings.Join(exprs, ", ")
 
-		vt := ValueType{
-			Code: TCStruct,
-			StructType: &StructType{
-				FieldNames: names,
-				FieldTypes: vts,
-			},
-		}
-
-		result := ResultItem{
-			Name:      "",
-			ValueType: vt,
-			Expr: Expr{
-				Raw:       "___AsStruct",
-				ValueType: vt,
-			},
-		}
-
-		namesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(quotedNames, ", "))
-		valuesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(exprs, ", "))
-		selectQuery := fmt.Sprintf(`JSON_OBJECT("keys", %s, "values", %s) AS ___AsStruct`, namesObj, valuesObj)
-
-		return []ResultItem{result}, selectQuery, nil
-	} else {
-		seletQuery := strings.Join(exprs, ", ")
-
-		return items, seletQuery, nil
-	}
+	return items, seletQuery, nil
 }
 
 func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {

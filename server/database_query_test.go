@@ -1089,6 +1089,72 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
+				name: "SelectAsStruct_Star",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM Simple)`,
+				expected: [][]interface{}{
+					[]interface{}{ArrayStruct{
+						Values: []*StructValue{
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(100), string("xxx")},
+							},
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(200), string("yyy")},
+							},
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(300), string("zzz")},
+							},
+						},
+					}},
+				},
+			},
+			{
+				name: "SelectAsStruct_Star_SubQuery",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM (SELECT Id+1, CONCAT(Value, "a") FROM Simple))`,
+				expected: [][]interface{}{
+					[]interface{}{ArrayStruct{
+						Values: []*StructValue{
+							{
+								Keys:   []string{"", ""},
+								Values: []interface{}{float64(101), string("xxxa")},
+							},
+							{
+								Keys:   []string{"", ""},
+								Values: []interface{}{float64(201), string("yyya")},
+							},
+							{
+								Keys:   []string{"", ""},
+								Values: []interface{}{float64(301), string("zzza")},
+							},
+						},
+					}},
+				},
+			},
+			{
+				name: "SelectAsStruct_DotStar",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT a.* FROM Simple a)`,
+				expected: [][]interface{}{
+					[]interface{}{ArrayStruct{
+						Values: []*StructValue{
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(100), string("xxx")},
+							},
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(200), string("yyy")},
+							},
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{float64(300), string("zzz")},
+							},
+						},
+					}},
+				},
+			},
+			{
 				name: "SelectAsStruct_NoColumnName",
 				sql:  `SELECT ARRAY(SELECT AS STRUCT Id+1, Value FROM Simple)`,
 				expected: [][]interface{}{
