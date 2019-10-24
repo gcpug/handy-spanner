@@ -576,7 +576,21 @@ func makeSpannerTypeFromValueType(typ ValueType) *spannerpb.Type {
 		}
 	}
 	if code == spannerpb.TypeCode_STRUCT {
-		panic("struct type not supported")
+		n := len(typ.StructType.FieldTypes)
+		fields := make([]*spannerpb.StructType_Field, n)
+		for i := 0; i < n; i++ {
+			fields[i] = &spannerpb.StructType_Field{
+				Name: typ.StructType.FieldNames[i],
+				Type: makeSpannerTypeFromValueType(*typ.StructType.FieldTypes[i]),
+			}
+		}
+
+		st = &spannerpb.Type{
+			Code: code,
+			StructType: &spannerpb.StructType{
+				Fields: fields,
+			},
+		}
 	}
 	return st
 }
@@ -692,6 +706,38 @@ func spannerValueFromValue(x interface{}) (*structpb.Value, error) {
 
 	case ArrayValue:
 		return spannerValueFromValue(x.Elements())
+
+	case ArrayStruct:
+		n := len(x.Values)
+		vs := make([]*structpb.Value, n)
+		for i := 0; i < n; i++ {
+			elem := x.Values[i]
+			v, err := spannerValueFromValue(elem)
+			if err != nil {
+				return nil, err
+			}
+			vs[i] = v
+		}
+		return &structpb.Value{Kind: &structpb.Value_ListValue{
+			&structpb.ListValue{Values: vs},
+		}}, nil
+
+	case *StructValue:
+		n := len(x.Values)
+		fields := make(map[string]*structpb.Value)
+		for i := 0; i < n; i++ {
+			elem := x.Values[i]
+			v, err := spannerValueFromValue(elem)
+			if err != nil {
+				return nil, err
+			}
+			fields[x.Keys[i]] = v
+		}
+		return &structpb.Value{Kind: &structpb.Value_StructValue{
+			StructValue: &structpb.Struct{
+				Fields: fields,
+			},
+		}}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown database value type %T", x)

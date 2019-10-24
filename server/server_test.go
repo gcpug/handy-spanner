@@ -456,6 +456,19 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 				{makeStringValue("3"), makeStringValue("bbb"), makeStringValue("3")},
 			},
 		},
+		"ArrayOfStruct": {
+			sql: `SELECT ARRAY(SELECT STRUCT<Id int64, Value string>(1,"xx") x)`,
+			expected: [][]*structpb.Value{
+				{
+					makeListValueAsValue(makeListValue(
+						makeStructValue(map[string]*structpb.Value{
+							"Id":    makeNumberValue(1),
+							"Value": makeStringValue("xx"),
+						}),
+					)),
+				},
+			},
+		},
 	}
 
 	for name, tc := range table {

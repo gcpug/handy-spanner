@@ -261,8 +261,10 @@ func makeBoolValue(b bool) *structpb.Value {
 	return &structpb.Value{Kind: &structpb.Value_BoolValue{BoolValue: b}}
 }
 
-func makeStructValue(s *structpb.Struct) *structpb.Value {
-	return &structpb.Value{Kind: &structpb.Value_StructValue{StructValue: s}}
+func makeStructValue(v map[string]*structpb.Value) *structpb.Value {
+	return &structpb.Value{Kind: &structpb.Value_StructValue{StructValue: &structpb.Struct{
+		Fields: v,
+	}}}
 }
 
 func makeListValue(vs ...*structpb.Value) *structpb.ListValue {

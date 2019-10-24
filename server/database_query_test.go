@@ -1403,6 +1403,13 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
+				name: "SubQuery_Array_Star",
+				sql:  `SELECT x FROM (SELECT ARRAY(SELECT * FROM (SELECT Id FROM Simple)) x)`,
+				expected: [][]interface{}{
+					[]interface{}{makeTestArray(TCInt64, int64(100), int64(200), int64(300))},
+				},
+			},
+			{
 				name:  "SubQuery_ColumnAlias",
 				sql:   `SELECT Id, foo, bar FROM (SELECT Id, Id AS foo, Id bar FROM Simple)`,
 				names: []string{"Id", "foo", "bar"},
