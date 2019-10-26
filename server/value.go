@@ -254,24 +254,6 @@ func (a *ArrayBool) Value() (driver.Value, error) {
 	return driver.Value(string(b)), nil
 }
 
-func (a *ArrayBool) Scan(src interface{}) error {
-	if src == nil {
-		a.Invalid = true
-		return nil
-	}
-
-	v, ok := src.(string)
-	if !ok {
-		return fmt.Errorf("unexpected type %T for %T", src, a)
-	}
-
-	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
-		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
-	}
-
-	return nil
-}
-
 func (a *ArrayString) Elements() interface{} {
 	return a.Data
 }
@@ -287,24 +269,6 @@ func (a *ArrayString) Value() (driver.Value, error) {
 	}
 
 	return driver.Value(string(b)), nil
-}
-
-func (a *ArrayString) Scan(src interface{}) error {
-	if src == nil {
-		a.Invalid = true
-		return nil
-	}
-
-	v, ok := src.(string)
-	if !ok {
-		return fmt.Errorf("unexpected type %T for %T", src, a)
-	}
-
-	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
-		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
-	}
-
-	return nil
 }
 
 func (a *ArrayFloat64) Elements() interface{} {
@@ -324,24 +288,6 @@ func (a *ArrayFloat64) Value() (driver.Value, error) {
 	return driver.Value(string(b)), nil
 }
 
-func (a *ArrayFloat64) Scan(src interface{}) error {
-	if src == nil {
-		a.Invalid = true
-		return nil
-	}
-
-	v, ok := src.(string)
-	if !ok {
-		return fmt.Errorf("unexpected type %T for %T", src, a)
-	}
-
-	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
-		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
-	}
-
-	return nil
-}
-
 func (a *ArrayInt64) Elements() interface{} {
 	return a.Data
 }
@@ -357,24 +303,6 @@ func (a *ArrayInt64) Value() (driver.Value, error) {
 	}
 
 	return driver.Value(string(b)), nil
-}
-
-func (a *ArrayInt64) Scan(src interface{}) error {
-	if src == nil {
-		a.Invalid = true
-		return nil
-	}
-
-	v, ok := src.(string)
-	if !ok {
-		return fmt.Errorf("unexpected type %T for %T", src, a)
-	}
-
-	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
-		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
-	}
-
-	return nil
 }
 
 func (a *ArrayBytes) Elements() interface{} {
@@ -394,7 +322,42 @@ func (a *ArrayBytes) Value() (driver.Value, error) {
 	return driver.Value(string(b)), nil
 }
 
-func (a *ArrayBytes) Scan(src interface{}) error {
+type BoolDecoder struct {
+	Bool *bool
+}
+
+func (b *BoolDecoder) UnmarshalJSON(data []byte) error {
+	if len(data) == 1 {
+		var v bool
+		if data[0] == '0' {
+			v = false
+			b.Bool = &v
+			return nil
+		} else if data[0] == '1' {
+			v = true
+			b.Bool = &v
+			return nil
+		}
+	}
+
+	if err := json.Unmarshal(data, &b.Bool); err != nil {
+		return fmt.Errorf("json.Unmarshal failed for bool: %v", err)
+	}
+
+	return nil
+}
+
+type ArrayValueDecoder struct {
+	Values  interface{}
+	Type    ValueType
+	Invalid bool `json:"-"`
+}
+
+func (a *ArrayValueDecoder) Value() interface{} {
+	return a.Values
+}
+
+func (a *ArrayValueDecoder) Scan(src interface{}) error {
 	if src == nil {
 		a.Invalid = true
 		return nil
@@ -405,39 +368,147 @@ func (a *ArrayBytes) Scan(src interface{}) error {
 		return fmt.Errorf("unexpected type %T for %T", src, a)
 	}
 
-	if err := json.Unmarshal([]byte(v), &a.Data); err != nil {
-		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
+	return a.UnmarshalJSON([]byte(v))
+}
+
+func (a *ArrayValueDecoder) UnmarshalJSON(b []byte) error {
+	if a.Type.ArrayType.Code == TCStruct {
+		var arr []json.RawMessage
+		if err := json.Unmarshal(b, &arr); err != nil {
+			return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
+		}
+
+		var svs []*StructValue
+		for _, b2 := range arr {
+			vv, err := a.decodeStruct(b2, a.Type.ArrayType.StructType)
+			if err != nil {
+				return err
+			}
+
+			svs = append(svs, vv)
+		}
+
+		a.Values = svs
+	} else {
+		v, err := a.decodeValue(b, a.Type)
+		if err != nil {
+			return err
+		}
+
+		a.Values = v
 	}
 
 	return nil
 }
 
-type ArrayStruct struct {
-	Values  []*StructValue
-	Invalid bool `json:"-"`
+func (a *ArrayValueDecoder) decodeStruct(b []byte, typ *StructType) (*StructValue, error) {
+	var vv struct {
+		Keys   []string          `json:"keys"`
+		Values []json.RawMessage `json:"values"`
+	}
+
+	if err := json.Unmarshal(b, &vv); err != nil {
+		return nil, fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
+	}
+
+	var values []interface{}
+	for i, value := range vv.Values {
+		typ := typ.FieldTypes[i]
+		vvv, err := a.decodeValue(value, *typ)
+		if err != nil {
+			return nil, err
+		}
+
+		values = append(values, vvv)
+	}
+
+	return &StructValue{
+		Keys:   vv.Keys,
+		Values: values,
+	}, nil
+}
+
+func (a *ArrayValueDecoder) decodeValue(b []byte, typ ValueType) (interface{}, error) {
+	var rv reflect.Value
+	switch typ.Code {
+	case TCBool:
+		rv = reflect.New(reflect.TypeOf(BoolDecoder{}))
+	case TCInt64:
+		rv = reflect.New(reflect.TypeOf(int64(0)))
+	case TCFloat64:
+		rv = reflect.New(reflect.TypeOf(float64(0)))
+	case TCTimestamp, TCDate, TCString:
+		rv = reflect.New(reflect.TypeOf(string("")))
+	case TCBytes:
+		rv = reflect.New(reflect.TypeOf([]byte{}))
+	case TCArray:
+		switch typ.ArrayType.Code {
+		case TCBool:
+			rv = reflect.New(reflect.TypeOf([]*BoolDecoder{}))
+		case TCInt64:
+			rv = reflect.New(reflect.TypeOf([]*int64{}))
+		case TCFloat64:
+			rv = reflect.New(reflect.TypeOf([]*float64{}))
+		case TCTimestamp, TCDate, TCString:
+			rv = reflect.New(reflect.TypeOf([]*string{}))
+		case TCBytes:
+			rv = reflect.New(reflect.TypeOf([][]byte{}))
+		case TCStruct:
+			v := reflect.New(reflect.TypeOf(ArrayValueDecoder{}))
+			reflect.Indirect(v).FieldByName("Type").Set(reflect.ValueOf(*typ.ArrayType))
+			rv = v
+
+		default:
+			return nil, fmt.Errorf("unknownn supported type for Array: %v", typ.ArrayType.Code)
+		}
+	case TCStruct:
+		return nil, fmt.Errorf("unknown supported type: %v", typ.Code)
+	}
+
+	fmt.Printf("json %s\n", string(b))
+
+	rvv := rv.Interface()
+	if err := json.Unmarshal([]byte(b), rvv); err != nil {
+		return nil, fmt.Errorf("json.Unmarshalll failed for %T in %T: %v", rvv, a, err)
+	}
+
+	var value interface{}
+	switch typ.Code {
+	case TCBool:
+		vv := rv.Interface().(*BoolDecoder)
+		value = *vv.Bool
+	case TCArray:
+		switch typ.ArrayType.Code {
+		case TCBool:
+			vv := rv.Interface().(*[]*BoolDecoder)
+			if vv == nil {
+				value = nil
+			} else {
+				vv := *vv
+				vs := make([]*bool, len(vv))
+				for i := 0; i < len(vv); i++ {
+					if vv[i] == nil {
+						vs[i] = nil
+					} else {
+						vs[i] = vv[i].Bool
+					}
+				}
+				value = vs
+			}
+
+		default:
+			value = reflect.Indirect(rv).Interface()
+		}
+	default:
+		value = reflect.Indirect(rv).Interface()
+	}
+
+	return value, nil
 }
 
 type StructValue struct {
 	Keys   []string      `json:"keys"`
 	Values []interface{} `json:"values"`
-}
-
-func (a *ArrayStruct) Scan(src interface{}) error {
-	if src == nil {
-		a.Invalid = true
-		return nil
-	}
-
-	v, ok := src.(string)
-	if !ok {
-		return fmt.Errorf("unexpected type %T for %T", src, a)
-	}
-
-	if err := json.Unmarshal([]byte(v), &a.Values); err != nil {
-		return fmt.Errorf("json.Unmarshal failed in %T: %v", a, err)
-	}
-
-	return nil
 }
 
 type rows struct {
@@ -517,24 +588,9 @@ func (it *rows) next() ([]interface{}, bool) {
 		case TCBytes:
 			values[i] = reflect.New(reflect.TypeOf(&[]byte{}))
 		case TCArray:
-			switch item.ValueType.ArrayType.Code {
-			case TCBool:
-				values[i] = reflect.New(reflect.TypeOf(ArrayBool{}))
-			case TCInt64:
-				values[i] = reflect.New(reflect.TypeOf(ArrayInt64{}))
-			case TCFloat64:
-				values[i] = reflect.New(reflect.TypeOf(ArrayFloat64{}))
-			case TCTimestamp, TCDate, TCString:
-				values[i] = reflect.New(reflect.TypeOf(ArrayString{}))
-			case TCBytes:
-				values[i] = reflect.New(reflect.TypeOf(ArrayBytes{}))
-			case TCStruct:
-				values[i] = reflect.New(reflect.TypeOf(ArrayStruct{}))
-
-			default:
-				it.lastErr = fmt.Errorf("unknownn supported type for Array: %v", item.ValueType.ArrayType.Code)
-				return nil, false
-			}
+			v := reflect.New(reflect.TypeOf(ArrayValueDecoder{}))
+			reflect.Indirect(v).FieldByName("Type").Set(reflect.ValueOf(item.ValueType))
+			values[i] = v
 		case TCStruct:
 			it.lastErr = fmt.Errorf("unknown supported type: %v", item.ValueType.Code)
 			return nil, false
@@ -583,35 +639,11 @@ func (it *rows) next() ([]interface{}, bool) {
 			} else {
 				data[i] = *vv
 			}
-		case ArrayBool:
+		case ArrayValueDecoder:
 			if vv.Invalid {
 				data[i] = nil
 			} else {
-				data[i] = &vv
-			}
-		case ArrayString:
-			if vv.Invalid {
-				data[i] = nil
-			} else {
-				data[i] = &vv
-			}
-		case ArrayFloat64:
-			if vv.Invalid {
-				data[i] = nil
-			} else {
-				data[i] = &vv
-			}
-		case ArrayInt64:
-			if vv.Invalid {
-				data[i] = nil
-			} else {
-				data[i] = &vv
-			}
-		case ArrayBytes:
-			if vv.Invalid {
-				data[i] = nil
-			} else {
-				data[i] = &vv
+				data[i] = vv.Value()
 			}
 		default:
 			data[i] = v

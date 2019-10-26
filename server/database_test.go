@@ -319,7 +319,7 @@ func makeTestValue(v interface{}) Value {
 	}
 }
 
-func makeTestArray(code TypeCode, vs ...interface{}) interface{} {
+func makeTestWrappedArray(code TypeCode, vs ...interface{}) interface{} {
 	switch code {
 	case TCBool:
 		arr := make([]*bool, len(vs))
@@ -383,6 +383,75 @@ func makeTestArray(code TypeCode, vs ...interface{}) interface{} {
 			}
 		}
 		return &ArrayBytes{Data: arr}
+	default:
+		panic(fmt.Sprintf("fix makeTestArray to be able to convert interface{}: %v", code))
+	}
+}
+
+func makeTestArray(code TypeCode, vs ...interface{}) interface{} {
+	switch code {
+	case TCBool:
+		arr := make([]*bool, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				s := new(bool)
+				*s = vs[i].(bool)
+				arr[i] = s
+			}
+		}
+		return arr
+	case TCString:
+		arr := make([]*string, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				s := new(string)
+				*s = vs[i].(string)
+				arr[i] = s
+			}
+		}
+		return arr
+	case TCInt64:
+		arr := make([]*int64, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				s := new(int64)
+				vv, ok := vs[i].(int64)
+				if !ok {
+					vv = int64(vs[i].(int))
+				}
+				*s = vv
+				arr[i] = s
+			}
+		}
+		return arr
+	case TCFloat64:
+		arr := make([]*float64, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				s := new(float64)
+				*s = vs[i].(float64)
+				arr[i] = s
+			}
+		}
+		return arr
+	case TCBytes:
+		arr := make([][]byte, len(vs))
+		for i := range vs {
+			if vs[i] == nil {
+				arr[i] = nil
+			} else {
+				arr[i] = vs[i].([]byte)
+			}
+		}
+		return arr
 	default:
 		panic(fmt.Sprintf("fix makeTestArray to be able to convert interface{}: %v", code))
 	}

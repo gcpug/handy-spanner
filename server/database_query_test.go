@@ -48,6 +48,25 @@ func TestQuery(t *testing.T) {
 		`INSERT INTO CompositePrimaryKeys VALUES(4, "ccc", 3, 0, "x2", "y4", "z")`,
 		`INSERT INTO CompositePrimaryKeys VALUES(5, "ccc", 4, 0, "x2", "y5", "z")`,
 
+		`INSERT INTO FullTypes VALUES("xxx",
+            "xxx", "xxx",
+            true, true,
+            "eHl6", "eHl6",
+            "2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.123456789Z",
+            100, 100,
+            0.5, 0.5,
+            "2012-03-04", "2012-03-04"
+        )`,
+		`INSERT INTO FullTypes VALUES("yyy",
+            "yyy", "yyy",
+            false, false,
+            "eHl6", "eHl6",
+            "2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.123456789Z",
+            200, 200,
+            0.5, 0.5,
+            "2012-03-05", "2012-03-05"
+        )`,
+
 		`INSERT INTO ArrayTypes VALUES(100,
            json_array("xxx1", "xxx2"),
            json_array(true, false),
@@ -208,6 +227,46 @@ func TestQuery(t *testing.T) {
 				sql:  "SELECT Id FROM Simple a, Simple b",
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`Column name Id is ambiguous`),
+			},
+			{
+				name: "ValueTypes_FullTypes",
+				sql:  `SELECT * FROM FullTypes`,
+				expected: [][]interface{}{
+					{
+						"xxx", "xxx", "xxx",
+						true, true,
+						[]byte("eHl6"), []byte("eHl6"),
+						"2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.123456789Z",
+						int64(100), int64(100),
+						float64(0.5), float64(0.5),
+						"2012-03-04", "2012-03-04",
+					},
+					{
+						"yyy", "yyy", "yyy",
+						false, false,
+						[]byte("eHl6"), []byte("eHl6"),
+						"2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.123456789Z",
+						int64(200), int64(200),
+						float64(0.5), float64(0.5),
+						"2012-03-05", "2012-03-05",
+					},
+				},
+			},
+			{
+				name: "ValueTypes_ArrayTypes",
+				sql:  `SELECT * FROM ArrayTypes`,
+				expected: [][]interface{}{
+					{
+						int64(100),
+						makeTestArray(TCString, "xxx1", "xxx2"),
+						makeTestArray(TCBool, true, false),
+						[][]uint8{{0x78, 0x79, 0x7a}, {0x78, 0x79, 0x7a}},
+						makeTestArray(TCString, "2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.999999999Z"),
+						makeTestArray(TCInt64, int64(1), int64(2)),
+						makeTestArray(TCFloat64, float64(0.1), float64(0.2)),
+						makeTestArray(TCString, "2012-03-04", "2012-03-05"),
+					},
+				},
 			},
 		},
 		"SimpleWhere": {
@@ -961,14 +1020,13 @@ func TestQuery(t *testing.T) {
 				name: "StructLiteral",
 				sql:  `SELECT ARRAY(SELECT (1,"xx") x)`,
 				expected: [][]interface{}{
-					[]interface{}{ArrayStruct{
-						Values: []*StructValue{
+					[]interface{}{
+						[]*StructValue{
 							{
 								Keys:   []string{"", ""},
-								Values: []interface{}{float64(1), string("xx")},
+								Values: []interface{}{int64(1), string("xx")},
 							},
 						},
-					},
 					},
 				},
 			},
@@ -976,14 +1034,13 @@ func TestQuery(t *testing.T) {
 				name: "StructLiteral_WithField",
 				sql:  `SELECT ARRAY(SELECT STRUCT<Id int64, Value string>(1,"xx") x)`,
 				expected: [][]interface{}{
-					[]interface{}{ArrayStruct{
-						Values: []*StructValue{
+					[]interface{}{
+						[]*StructValue{
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(1), string("xx")},
+								Values: []interface{}{int64(1), string("xx")},
 							},
 						},
-					},
 					},
 				},
 			},
@@ -991,14 +1048,13 @@ func TestQuery(t *testing.T) {
 				name: "StructLiteral_WithField_WithoutName",
 				sql:  `SELECT ARRAY(SELECT STRUCT<int64, Value string>(1,"xx") x)`,
 				expected: [][]interface{}{
-					[]interface{}{ArrayStruct{
-						Values: []*StructValue{
+					[]interface{}{
+						[]*StructValue{
 							{
 								Keys:   []string{"", "Value"},
-								Values: []interface{}{float64(1), string("xx")},
+								Values: []interface{}{int64(1), string("xx")},
 							},
 						},
-					},
 					},
 				},
 			},
@@ -1070,110 +1126,109 @@ func TestQuery(t *testing.T) {
 				name: "SelectAsStruct",
 				sql:  `SELECT ARRAY(SELECT AS STRUCT Id, Value FROM Simple)`,
 				expected: [][]interface{}{
-					[]interface{}{ArrayStruct{
-						Values: []*StructValue{
+					[]interface{}{
+						[]*StructValue{
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(100), string("xxx")},
+								Values: []interface{}{int64(100), string("xxx")},
 							},
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(200), string("yyy")},
+								Values: []interface{}{int64(200), string("yyy")},
 							},
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(300), string("zzz")},
+								Values: []interface{}{int64(300), string("zzz")},
 							},
 						},
-					}},
+					},
 				},
 			},
 			{
 				name: "SelectAsStruct_Star",
 				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM Simple)`,
 				expected: [][]interface{}{
-					[]interface{}{ArrayStruct{
-						Values: []*StructValue{
+					[]interface{}{
+						[]*StructValue{
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(100), string("xxx")},
+								Values: []interface{}{int64(100), string("xxx")},
 							},
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(200), string("yyy")},
+								Values: []interface{}{int64(200), string("yyy")},
 							},
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(300), string("zzz")},
+								Values: []interface{}{int64(300), string("zzz")},
 							},
 						},
-					}},
+					},
 				},
 			},
 			{
 				name: "SelectAsStruct_Star_SubQuery",
 				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM (SELECT Id+1, CONCAT(Value, "a") FROM Simple))`,
 				expected: [][]interface{}{
-					[]interface{}{ArrayStruct{
-						Values: []*StructValue{
+					[]interface{}{
+						[]*StructValue{
 							{
 								Keys:   []string{"", ""},
-								Values: []interface{}{float64(101), string("xxxa")},
+								Values: []interface{}{int64(101), string("xxxa")},
 							},
 							{
 								Keys:   []string{"", ""},
-								Values: []interface{}{float64(201), string("yyya")},
+								Values: []interface{}{int64(201), string("yyya")},
 							},
 							{
 								Keys:   []string{"", ""},
-								Values: []interface{}{float64(301), string("zzza")},
+								Values: []interface{}{int64(301), string("zzza")},
 							},
 						},
-					}},
+					},
 				},
 			},
 			{
 				name: "SelectAsStruct_DotStar",
 				sql:  `SELECT ARRAY(SELECT AS STRUCT a.* FROM Simple a)`,
 				expected: [][]interface{}{
-					[]interface{}{ArrayStruct{
-						Values: []*StructValue{
+					[]interface{}{
+						[]*StructValue{
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(100), string("xxx")},
+								Values: []interface{}{int64(100), string("xxx")},
 							},
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(200), string("yyy")},
+								Values: []interface{}{int64(200), string("yyy")},
 							},
 							{
 								Keys:   []string{"Id", "Value"},
-								Values: []interface{}{float64(300), string("zzz")},
+								Values: []interface{}{int64(300), string("zzz")},
 							},
 						},
-					}},
+					},
 				},
 			},
 			{
 				name: "SelectAsStruct_NoColumnName",
 				sql:  `SELECT ARRAY(SELECT AS STRUCT Id+1, Value FROM Simple)`,
 				expected: [][]interface{}{
-					[]interface{}{ArrayStruct{
-						Values: []*StructValue{
+					[]interface{}{
+						[]*StructValue{
 							{
 								Keys:   []string{"", "Value"},
-								Values: []interface{}{float64(101), string("xxx")},
+								Values: []interface{}{int64(101), string("xxx")},
 							},
 							{
 								Keys:   []string{"", "Value"},
-								Values: []interface{}{float64(201), string("yyy")},
+								Values: []interface{}{int64(201), string("yyy")},
 							},
 							{
 								Keys:   []string{"", "Value"},
-								Values: []interface{}{float64(301), string("zzz")},
+								Values: []interface{}{int64(301), string("zzz")},
 							},
 						},
-					},
 					},
 				},
 			},
@@ -1181,22 +1236,79 @@ func TestQuery(t *testing.T) {
 				name: "SelectAsStruct_WithColumnAlias",
 				sql:  `SELECT ARRAY(SELECT AS STRUCT Id+1 AS XX, Value FROM Simple)`,
 				expected: [][]interface{}{
-					[]interface{}{ArrayStruct{
-						Values: []*StructValue{
+					[]interface{}{
+						[]*StructValue{
 							{
 								Keys:   []string{"XX", "Value"},
-								Values: []interface{}{float64(101), string("xxx")},
+								Values: []interface{}{int64(101), string("xxx")},
 							},
 							{
 								Keys:   []string{"XX", "Value"},
-								Values: []interface{}{float64(201), string("yyy")},
+								Values: []interface{}{int64(201), string("yyy")},
 							},
 							{
 								Keys:   []string{"XX", "Value"},
-								Values: []interface{}{float64(301), string("zzz")},
+								Values: []interface{}{int64(301), string("zzz")},
 							},
 						},
-					}},
+					},
+				},
+			},
+			{
+				name: "ValueTypes_FullTypes",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM FullTypes)`,
+				expected: [][]interface{}{
+					[]interface{}{
+						[]*StructValue{
+							{
+								Keys: fullTypesKeys,
+								Values: []interface{}{
+									"xxx", "xxx", "xxx",
+									true, true,
+									[]byte("xyz"), []byte("xyz"),
+									"2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.123456789Z",
+									int64(100), int64(100),
+									float64(0.5), float64(0.5),
+									"2012-03-04", "2012-03-04",
+								},
+							},
+							{
+								Keys: fullTypesKeys,
+								Values: []interface{}{
+									"yyy", "yyy", "yyy",
+									false, false,
+									[]byte("xyz"), []byte("xyz"),
+									"2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.123456789Z",
+									int64(200), int64(200),
+									float64(0.5), float64(0.5),
+									"2012-03-05", "2012-03-05",
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				name: "ValueTypes_ArrayTypes",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM ArrayTypes)`,
+				expected: [][]interface{}{
+					[]interface{}{
+						[]*StructValue{
+							{
+								Keys: arrayTypesKeys,
+								Values: []interface{}{
+									int64(100),
+									makeTestArray(TCString, "xxx1", "xxx2"),
+									makeTestArray(TCBool, true, false),
+									[][]uint8{{0x78, 0x79, 0x7a}, {0x78, 0x79, 0x7a}},
+									makeTestArray(TCString, "2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.999999999Z"),
+									makeTestArray(TCInt64, int64(1), int64(2)),
+									makeTestArray(TCFloat64, float64(0.1), float64(0.2)),
+									makeTestArray(TCString, "2012-03-04", "2012-03-05"),
+								},
+							},
+						},
+					},
 				},
 			},
 		},
