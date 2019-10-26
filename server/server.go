@@ -576,7 +576,21 @@ func makeSpannerTypeFromValueType(typ ValueType) *spannerpb.Type {
 		}
 	}
 	if code == spannerpb.TypeCode_STRUCT {
-		panic("struct type not supported")
+		n := len(typ.StructType.FieldTypes)
+		fields := make([]*spannerpb.StructType_Field, n)
+		for i := 0; i < n; i++ {
+			fields[i] = &spannerpb.StructType_Field{
+				Name: typ.StructType.FieldNames[i],
+				Type: makeSpannerTypeFromValueType(*typ.StructType.FieldTypes[i]),
+			}
+		}
+
+		st = &spannerpb.Type{
+			Code: code,
+			StructType: &spannerpb.StructType{
+				Fields: fields,
+			},
+		}
 	}
 	return st
 }
@@ -634,6 +648,9 @@ func makeValueTypeFromSpannerType(typ *spannerpb.Type) (ValueType, error) {
 
 func spannerValueFromValue(x interface{}) (*structpb.Value, error) {
 	switch x := x.(type) {
+	case nil:
+		return &structpb.Value{Kind: &structpb.Value_NullValue{}}, nil
+
 	case bool:
 		return &structpb.Value{Kind: &structpb.Value_BoolValue{x}}, nil
 	case int64:
@@ -650,9 +667,24 @@ func spannerValueFromValue(x interface{}) (*structpb.Value, error) {
 		} else {
 			return &structpb.Value{Kind: &structpb.Value_StringValue{encodeBase64(x)}}, nil
 		}
-	case nil:
-		return &structpb.Value{Kind: &structpb.Value_NullValue{}}, nil
-	case []*bool, []*int64, []*float64, []*string:
+	case StructValue:
+		n := len(x.Values)
+		fields := make(map[string]*structpb.Value)
+		for i := 0; i < n; i++ {
+			elem := x.Values[i]
+			v, err := spannerValueFromValue(elem)
+			if err != nil {
+				return nil, err
+			}
+			fields[x.Keys[i]] = v
+		}
+		return &structpb.Value{Kind: &structpb.Value_StructValue{
+			StructValue: &structpb.Struct{
+				Fields: fields,
+			},
+		}}, nil
+
+	case []*bool, []*int64, []*float64, []*string, []*StructValue, [][]byte:
 		rv := reflect.ValueOf(x)
 		n := rv.Len()
 		vs := make([]*structpb.Value, n)
@@ -673,25 +705,6 @@ func spannerValueFromValue(x interface{}) (*structpb.Value, error) {
 		return &structpb.Value{Kind: &structpb.Value_ListValue{
 			&structpb.ListValue{Values: vs},
 		}}, nil
-
-	case [][]byte:
-		rv := reflect.ValueOf(x)
-		n := rv.Len()
-		vs := make([]*structpb.Value, n)
-		for i := 0; i < n; i++ {
-			elem := rv.Index(i).Interface()
-			v, err := spannerValueFromValue(elem)
-			if err != nil {
-				return nil, err
-			}
-			vs[i] = v
-		}
-		return &structpb.Value{Kind: &structpb.Value_ListValue{
-			&structpb.ListValue{Values: vs},
-		}}, nil
-
-	case ArrayValue:
-		return spannerValueFromValue(x.Elements())
 
 	default:
 		return nil, fmt.Errorf("unknown database value type %T", x)

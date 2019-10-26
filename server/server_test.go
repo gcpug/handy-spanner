@@ -456,6 +456,19 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 				{makeStringValue("3"), makeStringValue("bbb"), makeStringValue("3")},
 			},
 		},
+		"ArrayOfStruct": {
+			sql: `SELECT ARRAY(SELECT STRUCT<Id int64, Value string>(1,"xx") x)`,
+			expected: [][]*structpb.Value{
+				{
+					makeListValueAsValue(makeListValue(
+						makeStructValue(map[string]*structpb.Value{
+							"Id":    makeStringValue("1"),
+							"Value": makeStringValue("xx"),
+						}),
+					)),
+				},
+			},
+		},
 	}
 
 	for name, tc := range table {
@@ -1042,7 +1055,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: makeTestArray(TCInt64, 100, 101),
+				Data: makeTestWrappedArray(TCInt64, 100, 101),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -1063,7 +1076,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: makeTestArray(TCString, "xxx", "yyy"),
+				Data: makeTestWrappedArray(TCString, "xxx", "yyy"),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -1102,7 +1115,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: makeTestArray(TCBool, true, false),
+				Data: makeTestWrappedArray(TCBool, true, false),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -1141,7 +1154,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: makeTestArray(TCFloat64, 0.123, 1.123),
+				Data: makeTestWrappedArray(TCFloat64, 0.123, 1.123),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -1180,7 +1193,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: makeTestArray(TCString,
+				Data: makeTestWrappedArray(TCString,
 					"2012-03-04T00:00:00.123456789Z",
 					"2012-03-04T00:00:00.000000000Z",
 				),
@@ -1222,7 +1235,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: makeTestArray(TCString, "2012-03-04", "2012-03-05"),
+				Data: makeTestWrappedArray(TCString, "2012-03-04", "2012-03-05"),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{
@@ -1261,7 +1274,7 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 				},
 			},
 			expected: Value{
-				Data: makeTestArray(TCBytes, []byte("xxxxx"), []byte("yyyyy")),
+				Data: makeTestWrappedArray(TCBytes, []byte("xxxxx"), []byte("yyyyy")),
 				Type: ValueType{
 					Code: TCArray,
 					ArrayType: &ValueType{

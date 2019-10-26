@@ -468,6 +468,21 @@ func (v *TableView) Get(id string) (ResultItem, bool, bool) {
 	return item, false, false
 }
 
+func (v *TableView) ToStruct() *StructType {
+	names := make([]string, len(v.ResultItems))
+	vts := make([]*ValueType, len(v.ResultItems))
+	for i := range v.ResultItems {
+		names[i] = v.ResultItems[i].Name
+		vts[i] = &v.ResultItems[i].ValueType
+	}
+
+	return &StructType{
+		FieldNames: names,
+		FieldTypes: vts,
+		IsTable:    true,
+	}
+}
+
 func createTableViewFromItems(items1 []ResultItem, items2 []ResultItem) *TableView {
 	newItems := make([]ResultItem, 0, len(items1)+len(items2))
 	newItemsMap := make(map[string]ResultItem, len(items1)+len(items2))

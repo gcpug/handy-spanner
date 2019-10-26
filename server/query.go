@@ -51,14 +51,20 @@ type QueryBuilder struct {
 
 	unnestViewNum   int
 	subqueryViewNum int
+
+	// forceColumnAlias is used only for array subquery.
+	// array subquery requires column name for the result item.
+	// When forceColumnAlias is specified, random column names is used if the item does not have name.
+	forceColumnAlias bool
 }
 
-func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value) (string, []interface{}, []ResultItem, error) {
+func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value, forceColumnAlias bool) (string, []interface{}, []ResultItem, error) {
 	b := &QueryBuilder{
-		db:     db,
-		stmt:   stmt,
-		views:  make(map[string]*TableView),
-		params: params,
+		db:               db,
+		stmt:             stmt,
+		views:            make(map[string]*TableView),
+		params:           params,
+		forceColumnAlias: forceColumnAlias,
 	}
 	return b.Build()
 }
@@ -127,11 +133,75 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 
 	query := fmt.Sprintf(`SELECT %s %s %s`, selectQuery, fromClause, whereClause)
 
+	var originalNames []string
+	if b.forceColumnAlias || selectStmt.AsStruct {
+		newResultItems := make([]ResultItem, len(resultItems))
+		names := make([]string, len(resultItems))
+		originalNames = make([]string, len(resultItems))
+		for i := range resultItems {
+			name := fmt.Sprintf("___column%d", i)
+			names[i] = name
+			originalNames[i] = resultItems[i].Name
+			newResultItems[i] = ResultItem{
+				Name:      name,
+				ValueType: resultItems[i].ValueType,
+				Expr: Expr{
+					Raw:       name,
+					ValueType: resultItems[i].ValueType,
+				},
+			}
+		}
+		query = fmt.Sprintf(`WITH ___CTE(%s) as (%s) select * from ___CTE`, strings.Join(names, ", "), query)
+		resultItems = newResultItems
+	}
+
+	if selectStmt.AsStruct {
+		values := make([]string, len(resultItems))
+		names := make([]string, len(resultItems))
+		quotedNames := make([]string, len(resultItems))
+		vts := make([]*ValueType, len(resultItems))
+		for i := range resultItems {
+			names[i] = resultItems[i].Name
+			if resultItems[i].ValueType.Code == TCArray {
+				// column with JSON type needs converting to JSON explictly when reading from table
+				// otherwise it is parsed as string
+				// TODO: do this in referring timing
+				values[i] = fmt.Sprintf("JSON(%s)", resultItems[i].Name)
+			} else {
+				values[i] = resultItems[i].Name
+			}
+			quotedNames[i] = fmt.Sprintf("'%s'", originalNames[i])
+			vts[i] = &resultItems[i].ValueType
+		}
+
+		vt := ValueType{
+			Code: TCStruct,
+			StructType: &StructType{
+				FieldNames: names,
+				FieldTypes: vts,
+			},
+		}
+
+		result := ResultItem{
+			Name:      "",
+			ValueType: vt,
+			Expr: Expr{
+				Raw:       "___AsStruct",
+				ValueType: vt,
+			},
+		}
+
+		namesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(quotedNames, ", "))
+		valuesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(values, ", "))
+		query = fmt.Sprintf(`SELECT JSON_OBJECT("keys", %s, "values", %s) AS ___AsStruct FROM (%s)`, namesObj, valuesObj, query)
+		resultItems = []ResultItem{result}
+	}
+
 	return query, b.args, resultItems, nil
 }
 
 func (b *QueryBuilder) buildSubQuery(sub *ast.SubQuery) (string, []interface{}, []ResultItem, error) {
-	s, data, items, err := BuildQuery(b.db, sub.Query, b.params)
+	s, data, items, err := BuildQuery(b.db, sub.Query, b.params, b.forceColumnAlias)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -197,7 +267,7 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 		}
 	}
 
-	s, data, items, err := BuildQuery(b.db, compound.Queries[0], b.params)
+	s, data, items, err := BuildQuery(b.db, compound.Queries[0], b.params, b.forceColumnAlias)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -217,7 +287,7 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 	ss = append(ss, fmt.Sprintf("SELECT * FROM (%s)", s))
 
 	for i, query := range compound.Queries[1:] {
-		s, d, items2, err := BuildQuery(b.db, query, b.params)
+		s, d, items2, err := BuildQuery(b.db, query, b.params, false)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -353,7 +423,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 		return b.buildUnnestView(src)
 
 	case *ast.SubQueryTableExpr:
-		query, data, items, err := BuildQuery(b.db, src.Query, b.params)
+		query, data, items, err := BuildQuery(b.db, src.Query, b.params, false)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("Subquery error: %v", err)
 		}
@@ -457,18 +527,26 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			items = append(items, b.rootView.AllItems()...)
 			exprs = append(exprs, "*")
 		case *ast.DotStar:
-			switch e := i.Expr.(type) {
-			case *ast.Ident:
-				view, ok := b.views[e.Name]
-				if !ok {
-					return nil, "", status.Errorf(codes.InvalidArgument, "Unrecognized name: %s", e.Name)
+			s, d, err := b.buildExpr(i.Expr)
+			if err != nil {
+				return nil, "", wrapExprError(err, i.Expr, "DotStar")
+			}
+			data = append(data, d...)
+
+			if s.ValueType.Code != TCStruct {
+				return nil, "", status.Errorf(codes.InvalidArgument, "Dot-star is not supported for type %s", s.ValueType)
+
+			}
+			st := s.ValueType.StructType
+
+			items = append(items, st.AllItems()...)
+			if st.IsTable {
+				exprs = append(exprs, fmt.Sprintf("%s.*", s.Raw))
+			} else {
+				n := len(st.FieldTypes)
+				for i := 0; i < n; i++ {
+					exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", s.Raw, i))
 				}
-				items = append(items, view.AllItems()...)
-				exprs = append(exprs, fmt.Sprintf("%s.*", e.Name))
-			case *ast.Path:
-				return nil, "", status.Errorf(codes.Unimplemented, "%T is not supported in buildResultSet ", e)
-			default:
-				return nil, "", status.Errorf(codes.Unimplemented, "unknown expression %T in result set for DotStar", e)
 			}
 
 		case *ast.ExprSelectItem:
@@ -477,10 +555,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			case *ast.Ident:
 				alias = e.Name
 			case *ast.Path:
-				if len(e.Idents) != 2 {
-					return nil, "", status.Errorf(codes.Unimplemented, "path expression not supported")
-				}
-				alias = e.Idents[1].Name
+				alias = e.Idents[len(e.Idents)-1].Name
 			}
 			s, d, err := b.buildExpr(i.Expr)
 			if err != nil {
@@ -491,8 +566,14 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			items = append(items, ResultItem{
 				Name:      alias,
 				ValueType: s.ValueType,
-				Expr:      s,
+				Expr: Expr{
+					// This is a trick. This Expr is referred as subquery.
+					// At the reference, it should be just referred as alias name instead of s.Raw.
+					Raw:       alias,
+					ValueType: s.ValueType,
+				},
 			})
+
 			exprs = append(exprs, s.Raw)
 
 		case *ast.Alias:
@@ -625,6 +706,7 @@ func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, view *Table
 	var data []interface{}
 
 	for _, item := range orderby.Items {
+		// TODO: use b.buildExpr()
 		var expr Expr
 		switch e := item.Expr.(type) {
 		case *ast.Ident:
@@ -726,7 +808,7 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface
 		}, data, nil
 
 	case *ast.SubQueryInCondition:
-		query, data, items, err := BuildQuery(b.db, c.Query, b.params)
+		query, data, items, err := BuildQuery(b.db, c.Query, b.params, false)
 		if err != nil {
 			return NullExpr, nil, newExprErrorf(nil, false, "BuildQuery error for SubqueryInCondition: %v", err)
 		}
@@ -849,6 +931,47 @@ func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, []interface{}, 
 	return NullExpr, nil, fmt.Errorf("unexpected parameter type for expandParamByPlaceholders: %T", v)
 }
 
+func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
+	if expr.ValueType.Code != TCStruct {
+		msg := "Cannot access field %s on a value with type %s"
+		return NullExpr, newExprErrorf(nil, true, msg, name, expr.ValueType)
+	}
+
+	st := expr.ValueType.StructType
+
+	idx := -1
+	for i := range st.FieldNames {
+		if st.FieldNames[i] == name {
+			if idx != -1 {
+				return NullExpr, newExprErrorf(nil, true, "Column name %s is ambiguous", name)
+			}
+
+			idx = i
+		}
+	}
+	if idx == -1 {
+		if st.IsTable {
+			msg := "Name %s not found inside %s"
+			return NullExpr, newExprErrorf(nil, true, msg, name, expr.Raw)
+		} else {
+			msg := "Field name %s does not exist in %s"
+			return NullExpr, newExprErrorf(nil, true, msg, name, expr.ValueType)
+		}
+	}
+
+	var raw string
+	if st.IsTable {
+		raw = fmt.Sprintf("%s.%s", expr.Raw, name)
+	} else {
+		raw = fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", expr.Raw, idx)
+	}
+
+	return Expr{
+		ValueType: *st.FieldTypes[idx],
+		Raw:       raw,
+	}, nil
+}
+
 func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 	switch e := expr.(type) {
 	case *ast.UnaryExpr:
@@ -968,7 +1091,17 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.SelectorExpr:
-		return NullExpr, nil, newExprErrorf(expr, false, "Selector not supported yet")
+		s, d, err := b.buildExpr(e.Expr)
+		if err != nil {
+			return NullExpr, nil, wrapExprError(err, expr, "Expr")
+		}
+
+		s2, err := b.accessField(s, e.Ident.Name)
+		if err != nil {
+			return NullExpr, nil, wrapExprError(err, expr, "Expr")
+		}
+
+		return s2, d, nil
 
 	case *ast.IndexExpr:
 		var data []interface{}
@@ -1298,9 +1431,9 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.ScalarSubQuery:
-		query, data, items, err := BuildQuery(b.db, e.Query, b.params)
+		query, data, items, err := BuildQuery(b.db, e.Query, b.params, false)
 		if err != nil {
-			return NullExpr, nil, newExprErrorf(expr, false, "BuildQuery error for ScalarSubquery: %v", err)
+			return NullExpr, nil, wrapExprError(err, expr, "Scalar")
 		}
 		if len(items) != 1 {
 			return NullExpr, nil, newExprErrorf(expr, true, "Scalar subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
@@ -1311,9 +1444,9 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.ArraySubQuery:
-		query, data, items, err := BuildQuery(b.db, e.Query, b.params)
+		query, data, items, err := BuildQuery(b.db, e.Query, b.params, true)
 		if err != nil {
-			return NullExpr, nil, newExprErrorf(expr, false, "BuildQuery error for %T: %v", err, e)
+			return NullExpr, nil, wrapExprError(err, expr, "Array")
 		}
 		if len(items) != 1 {
 			return NullExpr, nil, newExprErrorf(expr, true, "ARRAY subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
@@ -1328,11 +1461,11 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				Code:      TCArray,
 				ArrayType: &items[0].ValueType,
 			},
-			Raw: fmt.Sprintf("(SELECT JSON_GROUP_ARRAY( (%s) ))", query),
+			Raw: fmt.Sprintf("(SELECT JSON_GROUP_ARRAY(%s) FROM (%s))", items[0].Expr.Raw, query),
 		}, data, nil
 
 	case *ast.ExistsSubQuery:
-		query, data, _, err := BuildQuery(b.db, e.Query, b.params)
+		query, data, _, err := BuildQuery(b.db, e.Query, b.params, false)
 		if err != nil {
 			return NullExpr, nil, newExprErrorf(expr, false, "BuildQuery error for %T: %v", err, e)
 		}
@@ -1374,7 +1507,65 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		}, data, nil
 
 	case *ast.StructLiteral:
-		return NullExpr, nil, newExprErrorf(expr, false, "StructLiteral not supported yet")
+		var names []string
+		var vt ValueType
+		var typedef bool
+
+		if e.Fields == nil {
+			for i := 0; i < len(e.Values); i++ {
+				names = append(names, `""`)
+			}
+
+			// just initialize here. The values will be populated later.
+			vt = ValueType{
+				Code:       TCStruct,
+				StructType: &StructType{},
+			}
+		} else {
+			if len(e.Fields) != len(e.Values) {
+				return NullExpr, nil, newExprErrorf(expr, true, "STRUCT type has %d fields but constructor call has %d fields", len(e.Fields), len(e.Values))
+			}
+
+			typedef = true
+			vt = astTypeToValueType(&ast.StructType{
+				Fields: e.Fields,
+			})
+			for _, name := range vt.StructType.FieldNames {
+				names = append(names, `"`+name+`"`)
+			}
+		}
+
+		namesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(names, ", "))
+
+		var data []interface{}
+		var values []string
+		for i, v := range e.Values {
+			s, d, err := b.buildExpr(v)
+			if err != nil {
+				return NullExpr, nil, wrapExprError(err, expr, "Values")
+			}
+			data = append(data, d...)
+
+			// If types of fields are defined, check type compatibility with the value
+			// otherwise use the type of the value as is
+			if typedef {
+				if !compareValueType(s.ValueType, *vt.StructType.FieldTypes[i]) {
+					msg := "Struct field %d has type literal %s which does not coerce to %s"
+					return NullExpr, nil, newExprErrorf(expr, true, msg, i+1, s.ValueType, *vt.StructType.FieldTypes[i])
+				}
+			} else {
+				vt.StructType.FieldNames = append(vt.StructType.FieldNames, "")
+				vt.StructType.FieldTypes = append(vt.StructType.FieldTypes, &s.ValueType)
+			}
+			values = append(values, s.Raw)
+		}
+		valuesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(values, ", "))
+		raw := fmt.Sprintf(`JSON_OBJECT("keys", %s, "values", %s)`, namesObj, valuesObj)
+
+		return Expr{
+			Raw:       raw,
+			ValueType: vt,
+		}, data, nil
 
 	case *ast.NullLiteral:
 		return Expr{
@@ -1450,37 +1641,72 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return b.expandParamByPlaceholders(v)
 
 	case *ast.Ident:
-		if b.rootView == nil {
-			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
-		}
+		tbl, ok := b.views[e.Name]
+		if ok {
+			return Expr{
+				ValueType: ValueType{
+					Code:       TCStruct,
+					StructType: tbl.ToStruct(),
+				},
+				Raw: e.Name,
+			}, nil, nil
+		} else {
+			if b.rootView == nil {
+				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
+			}
 
-		item, ambiguous, notfound := b.rootView.Get(e.Name)
-		if notfound {
-			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
+			item, ambiguous, notfound := b.rootView.Get(e.Name)
+			if notfound {
+				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
+			}
+			if ambiguous {
+				return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", e.Name)
+			}
+			return item.Expr, nil, nil
 		}
-		if ambiguous {
-			return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", e.Name)
-		}
-		return item.Expr, nil, nil
 	case *ast.Path:
-		if len(e.Idents) != 2 {
-			return NullExpr, nil, newExprErrorf(expr, false, "path expression not supported")
-		}
-		first := e.Idents[0]
-		second := e.Idents[1]
+		firstName := e.Idents[0].Name
+		var remains []*ast.Ident
+		var curExpr Expr
 
-		tbl, ok := b.views[first.Name]
-		if !ok {
-			return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", first.Name)
+		// Look tables first
+		tbl, ok := b.views[firstName]
+		if ok {
+			curExpr = Expr{
+				ValueType: ValueType{
+					Code:       TCStruct,
+					StructType: tbl.ToStruct(),
+				},
+				Raw: firstName,
+			}
+		} else {
+			// If not found in tables, look the results items of root
+			if b.rootView == nil {
+				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", firstName)
+			}
+
+			item, ambiguous, notfound := b.rootView.Get(firstName)
+			if notfound {
+				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", firstName)
+			}
+			if ambiguous {
+				return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", firstName)
+			}
+
+			curExpr = item.Expr
 		}
-		item, ok := tbl.ResultItemsMap[second.Name]
-		if !ok {
-			return NullExpr, nil, newExprErrorf(expr, true, "Name %s not found inside %s", second.Name, first.Name)
+		remains = e.Idents[1:]
+
+		for _, ident := range remains {
+			next, err := b.accessField(curExpr, ident.Name)
+			if err != nil {
+				return NullExpr, nil, wrapExprError(err, expr, "Path")
+			}
+
+			curExpr = next
 		}
-		return Expr{
-			ValueType: item.Expr.ValueType,
-			Raw:       fmt.Sprintf("%s.%s", first.Name, item.Name),
-		}, nil, nil
+
+		return curExpr, nil, nil
 	default:
 		return NullExpr, nil, newExprErrorf(expr, false, "unknown expression")
 	}
@@ -1538,9 +1764,26 @@ func astTypeToValueType(astType ast.Type) ValueType {
 			ArrayType: &vt,
 		}
 	case *ast.StructType:
-		// TODO
+		names := make([]string, 0, len(t.Fields))
+		types := make([]*ValueType, 0, len(t.Fields))
+
+		for _, field := range t.Fields {
+			var name string
+			if field.Ident != nil {
+				name = field.Ident.Name
+			}
+			names = append(names, name)
+
+			vt := astTypeToValueType(field.Type)
+			types = append(types, &vt)
+
+		}
 		return ValueType{
 			Code: TCStruct,
+			StructType: &StructType{
+				FieldNames: names,
+				FieldTypes: types,
+			},
 		}
 	}
 
