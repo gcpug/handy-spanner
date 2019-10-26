@@ -156,11 +156,20 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 	}
 
 	if selectStmt.AsStruct {
+		values := make([]string, len(resultItems))
 		names := make([]string, len(resultItems))
 		quotedNames := make([]string, len(resultItems))
 		vts := make([]*ValueType, len(resultItems))
 		for i := range resultItems {
 			names[i] = resultItems[i].Name
+			if resultItems[i].ValueType.Code == TCArray {
+				// column with JSON type needs converting to JSON explictly when reading from table
+				// otherwise it is parsed as string
+				// TODO: do this in referring timing
+				values[i] = fmt.Sprintf("JSON(%s)", resultItems[i].Name)
+			} else {
+				values[i] = resultItems[i].Name
+			}
 			quotedNames[i] = fmt.Sprintf("'%s'", originalNames[i])
 			vts[i] = &resultItems[i].ValueType
 		}
@@ -183,7 +192,7 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 		}
 
 		namesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(quotedNames, ", "))
-		valuesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(names, ", "))
+		valuesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(values, ", "))
 		query = fmt.Sprintf(`SELECT JSON_OBJECT("keys", %s, "values", %s) AS ___AsStruct FROM (%s)`, namesObj, valuesObj, query)
 		resultItems = []ResultItem{result}
 	}
