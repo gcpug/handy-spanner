@@ -455,7 +455,7 @@ func (a *ArrayValueDecoder) decodeValue(b []byte, typ ValueType) (interface{}, e
 			rv = reflect.New(reflect.TypeOf([][]byte{}))
 		case TCStruct:
 			v := reflect.New(reflect.TypeOf(ArrayValueDecoder{}))
-			reflect.Indirect(v).FieldByName("Type").Set(reflect.ValueOf(*typ.ArrayType))
+			reflect.Indirect(v).FieldByName("Type").Set(reflect.ValueOf(typ))
 			rv = v
 
 		default:
@@ -465,40 +465,32 @@ func (a *ArrayValueDecoder) decodeValue(b []byte, typ ValueType) (interface{}, e
 		return nil, fmt.Errorf("unknown supported type: %v", typ.Code)
 	}
 
-	fmt.Printf("json %s\n", string(b))
-
 	rvv := rv.Interface()
 	if err := json.Unmarshal([]byte(b), rvv); err != nil {
 		return nil, fmt.Errorf("json.Unmarshalll failed for %T in %T: %v", rvv, a, err)
 	}
 
 	var value interface{}
-	switch typ.Code {
-	case TCBool:
-		vv := rv.Interface().(*BoolDecoder)
+	switch vv := rv.Interface().(type) {
+	case *BoolDecoder:
 		value = *vv.Bool
-	case TCArray:
-		switch typ.ArrayType.Code {
-		case TCBool:
-			vv := rv.Interface().(*[]*BoolDecoder)
-			if vv == nil {
-				value = nil
-			} else {
-				vv := *vv
-				vs := make([]*bool, len(vv))
-				for i := 0; i < len(vv); i++ {
-					if vv[i] == nil {
-						vs[i] = nil
-					} else {
-						vs[i] = vv[i].Bool
-					}
+	case *[]*BoolDecoder:
+		if vv == nil {
+			value = nil
+		} else {
+			vv := *vv
+			vs := make([]*bool, len(vv))
+			for i := 0; i < len(vv); i++ {
+				if vv[i] == nil {
+					vs[i] = nil
+				} else {
+					vs[i] = vv[i].Bool
 				}
-				value = vs
 			}
-
-		default:
-			value = reflect.Indirect(rv).Interface()
+			value = vs
 		}
+	case *ArrayValueDecoder:
+		value = vv.Value()
 	default:
 		value = reflect.Indirect(rv).Interface()
 	}
