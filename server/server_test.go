@@ -606,6 +606,62 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 			},
 		},
 
+		"FromUnnest_ArrayLiteral": {
+			sql: `SELECT x, y FROM UNNEST (["xxx", "yyy"]) AS x WITH OFFSET y`,
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "x",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_STRING,
+					},
+				},
+				{
+					Name: "y",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
+			expected: [][]*structpb.Value{
+				{makeStringValue("xxx"), makeStringValue("0")},
+				{makeStringValue("yyy"), makeStringValue("1")},
+			},
+		},
+		"FromUnnest_Params": {
+			sql: `SELECT x, y FROM UNNEST (@foo) AS x WITH OFFSET y`,
+			types: map[string]*spannerpb.Type{
+				"foo": &spannerpb.Type{
+					Code: spannerpb.TypeCode_ARRAY,
+					ArrayElementType: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
+			params: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"foo": makeListValueAsValue(makeListValue(makeStringValue("100"), makeStringValue("200"))),
+				},
+			},
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "x",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+				{
+					Name: "y",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
+			expected: [][]*structpb.Value{
+				{makeStringValue("100"), makeStringValue("0")},
+				{makeStringValue("200"), makeStringValue("1")},
+			},
+		},
+
 		"Simple_Unnest_Array": {
 			sql:    `SELECT * FROM Simple WHERE Id IN UNNEST([100, 200])`,
 			fields: simpleFields,
@@ -816,7 +872,6 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 
 	for name, tc := range table {
 		t.Run(name, func(t *testing.T) {
-			fmt.Printf("%s\n", name)
 			fake := &fakeExecuteStreamingSqlServer{}
 			if err := s.ExecuteStreamingSql(&spannerpb.ExecuteSqlRequest{
 				Session:     session.Name,

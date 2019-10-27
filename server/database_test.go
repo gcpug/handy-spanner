@@ -332,7 +332,7 @@ func makeTestWrappedArray(code TypeCode, vs ...interface{}) interface{} {
 				arr[i] = s
 			}
 		}
-		return &ArrayBool{Data: arr}
+		return &ArrayValueEncoder{Values: arr}
 	case TCString:
 		arr := make([]*string, len(vs))
 		for i := range vs {
@@ -344,7 +344,7 @@ func makeTestWrappedArray(code TypeCode, vs ...interface{}) interface{} {
 				arr[i] = s
 			}
 		}
-		return &ArrayString{Data: arr}
+		return &ArrayValueEncoder{Values: arr}
 	case TCInt64:
 		arr := make([]*int64, len(vs))
 		for i := range vs {
@@ -360,7 +360,7 @@ func makeTestWrappedArray(code TypeCode, vs ...interface{}) interface{} {
 				arr[i] = s
 			}
 		}
-		return &ArrayInt64{Data: arr}
+		return &ArrayValueEncoder{Values: arr}
 	case TCFloat64:
 		arr := make([]*float64, len(vs))
 		for i := range vs {
@@ -372,7 +372,7 @@ func makeTestWrappedArray(code TypeCode, vs ...interface{}) interface{} {
 				arr[i] = s
 			}
 		}
-		return &ArrayFloat64{Data: arr}
+		return &ArrayValueEncoder{Values: arr}
 	case TCBytes:
 		arr := make([][]byte, len(vs))
 		for i := range vs {
@@ -382,7 +382,7 @@ func makeTestWrappedArray(code TypeCode, vs ...interface{}) interface{} {
 				arr[i] = vs[i].([]byte)
 			}
 		}
-		return &ArrayBytes{Data: arr}
+		return &ArrayValueEncoder{Values: arr}
 	default:
 		panic(fmt.Sprintf("fix makeTestArray to be able to convert interface{}: %v", code))
 	}

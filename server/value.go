@@ -206,47 +206,17 @@ type ArrayValue interface {
 	Elements() interface{}
 }
 
-var _ ArrayValue = (*ArrayBool)(nil)
-var _ ArrayValue = (*ArrayString)(nil)
-var _ ArrayValue = (*ArrayFloat64)(nil)
-var _ ArrayValue = (*ArrayInt64)(nil)
-var _ ArrayValue = (*ArrayBytes)(nil)
-
-type ArrayBool struct {
-	Data    []*bool
+type ArrayValueEncoder struct {
+	Values  interface{}
 	Invalid bool
 }
 
-type ArrayString struct {
-	Data    []*string
-	Invalid bool
-}
-
-type ArrayFloat64 struct {
-	Data    []*float64
-	Invalid bool
-}
-
-type ArrayInt64 struct {
-	Data    []*int64
-	Invalid bool
-}
-
-type ArrayBytes struct {
-	Data    [][]byte
-	Invalid bool
-}
-
-func (a *ArrayBool) Elements() interface{} {
-	return a.Data
-}
-
-func (a *ArrayBool) Value() (driver.Value, error) {
+func (a *ArrayValueEncoder) Value() (driver.Value, error) {
 	if a.Invalid {
 		return nil, fmt.Errorf("cannot use invalid value")
 	}
 
-	b, err := json.Marshal(a.Data)
+	b, err := json.Marshal(a.Values)
 	if err != nil {
 		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
 	}
@@ -254,72 +224,8 @@ func (a *ArrayBool) Value() (driver.Value, error) {
 	return driver.Value(string(b)), nil
 }
 
-func (a *ArrayString) Elements() interface{} {
-	return a.Data
-}
-
-func (a *ArrayString) Value() (driver.Value, error) {
-	if a.Invalid {
-		return nil, fmt.Errorf("cannot use invalid value")
-	}
-
-	b, err := json.Marshal(a.Data)
-	if err != nil {
-		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
-	}
-
-	return driver.Value(string(b)), nil
-}
-
-func (a *ArrayFloat64) Elements() interface{} {
-	return a.Data
-}
-
-func (a *ArrayFloat64) Value() (driver.Value, error) {
-	if a.Invalid {
-		return nil, fmt.Errorf("cannot use invalid value")
-	}
-
-	b, err := json.Marshal(a.Data)
-	if err != nil {
-		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
-	}
-
-	return driver.Value(string(b)), nil
-}
-
-func (a *ArrayInt64) Elements() interface{} {
-	return a.Data
-}
-
-func (a *ArrayInt64) Value() (driver.Value, error) {
-	if a.Invalid {
-		return nil, fmt.Errorf("cannot use invalid value")
-	}
-
-	b, err := json.Marshal(a.Data)
-	if err != nil {
-		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
-	}
-
-	return driver.Value(string(b)), nil
-}
-
-func (a *ArrayBytes) Elements() interface{} {
-	return a.Data
-}
-
-func (a *ArrayBytes) Value() (driver.Value, error) {
-	if a.Invalid {
-		return nil, fmt.Errorf("cannot use invalid value")
-	}
-
-	b, err := json.Marshal(a.Data)
-	if err != nil {
-		return nil, fmt.Errorf("json.Marshal failed in %T: %v", a, err)
-	}
-
-	return driver.Value(string(b)), nil
+func (a *ArrayValueEncoder) Elements() interface{} {
+	return a.Values
 }
 
 type BoolDecoder struct {
