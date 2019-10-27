@@ -764,7 +764,7 @@ func makeDataFromSpannerValue(v *structpb.Value, typ ValueType) (interface{}, er
 					ret[i] = &vvvv
 				}
 			}
-			return &ArrayBool{Data: ret}, nil
+			return &ArrayValueEncoder{Values: ret}, nil
 		case TCInt64:
 			ret := make([]*int64, n)
 			for i, vv := range vv.ListValue.Values {
@@ -782,7 +782,7 @@ func makeDataFromSpannerValue(v *structpb.Value, typ ValueType) (interface{}, er
 					ret[i] = &vvvv
 				}
 			}
-			return &ArrayInt64{Data: ret}, nil
+			return &ArrayValueEncoder{Values: ret}, nil
 		case TCFloat64:
 			ret := make([]*float64, n)
 			for i, vv := range vv.ListValue.Values {
@@ -800,7 +800,7 @@ func makeDataFromSpannerValue(v *structpb.Value, typ ValueType) (interface{}, er
 					ret[i] = &vvvv
 				}
 			}
-			return &ArrayFloat64{Data: ret}, nil
+			return &ArrayValueEncoder{Values: ret}, nil
 		case TCTimestamp, TCDate, TCString:
 			ret := make([]*string, n)
 			for i, vv := range vv.ListValue.Values {
@@ -818,7 +818,7 @@ func makeDataFromSpannerValue(v *structpb.Value, typ ValueType) (interface{}, er
 					ret[i] = &vvvv
 				}
 			}
-			return &ArrayString{Data: ret}, nil
+			return &ArrayValueEncoder{Values: ret}, nil
 		case TCBytes:
 			ret := make([][]byte, n)
 			for i, vv := range vv.ListValue.Values {
@@ -836,7 +836,7 @@ func makeDataFromSpannerValue(v *structpb.Value, typ ValueType) (interface{}, er
 					ret[i] = vvvv
 				}
 			}
-			return &ArrayBytes{Data: ret}, nil
+			return &ArrayValueEncoder{Values: ret}, nil
 		case TCArray, TCStruct:
 			return nil, fmt.Errorf("nested Array or Struct for Array is not supported yet")
 		default:

@@ -28,6 +28,186 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+var (
+	simpleFields = []*spannerpb.StructType_Field{
+		{
+			Name: "Id",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_INT64,
+			},
+		},
+		{
+			Name: "Value",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_STRING,
+			},
+		},
+	}
+	fullTypesFields = []*spannerpb.StructType_Field{
+		{
+			Name: "PKey",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_STRING,
+			},
+		},
+		{
+			Name: "FTString",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_STRING,
+			},
+		},
+		{
+			Name: "FTStringNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_STRING,
+			},
+		},
+		{
+			Name: "FTBool",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BOOL,
+			},
+		},
+		{
+			Name: "FTBoolNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BOOL,
+			},
+		},
+		{
+			Name: "FTBytes",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BYTES,
+			},
+		},
+		{
+			Name: "FTBytesNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_BYTES,
+			},
+		},
+		{
+			Name: "FTTimestamp",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_TIMESTAMP,
+			},
+		},
+		{
+			Name: "FTTimestampNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_TIMESTAMP,
+			},
+		},
+		{
+			Name: "FTInt",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_INT64,
+			},
+		},
+		{
+			Name: "FTIntNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_INT64,
+			},
+		},
+		{
+			Name: "FTFloat",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_FLOAT64,
+			},
+		},
+		{
+			Name: "FTFloatNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_FLOAT64,
+			},
+		},
+		{
+			Name: "FTDate",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_DATE,
+			},
+		},
+		{
+			Name: "FTDateNull",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_DATE,
+			},
+		},
+	}
+	arrayTypesFields = []*spannerpb.StructType_Field{
+		{
+			Name: "Id",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_INT64,
+			},
+		},
+		{
+			Name: "ArrayString",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_STRING,
+				},
+			},
+		},
+		{
+			Name: "ArrayBool",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_BOOL,
+				},
+			},
+		},
+		{
+			Name: "ArrayBytes",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_BYTES,
+				},
+			},
+		},
+		{
+			Name: "ArrayTimestamp",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_TIMESTAMP,
+				},
+			},
+		},
+		{
+			Name: "ArrayInt",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_INT64,
+				},
+			},
+		},
+		{
+			Name: "ArrayFloat",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_FLOAT64,
+				},
+			},
+		},
+		{
+			Name: "ArrayDate",
+			Type: &spannerpb.Type{
+				Code: spannerpb.TypeCode_ARRAY,
+				ArrayElementType: &spannerpb.Type{
+					Code: spannerpb.TypeCode_DATE,
+				},
+			},
+		},
+	}
+)
+
 func newTestServer() *server {
 	return NewFakeServer().(*server)
 }
@@ -360,6 +540,26 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 		`INSERT INTO CompositePrimaryKeys VALUES(3, "bbb", 3, 0, "x1", "y3", "z")`,
 		`INSERT INTO CompositePrimaryKeys VALUES(4, "ccc", 3, 0, "x2", "y4", "z")`,
 		`INSERT INTO CompositePrimaryKeys VALUES(5, "ccc", 4, 0, "x2", "y5", "z")`,
+
+		`INSERT INTO FullTypes VALUES("xxx",
+            "xxx", "xxx",
+            true, true,
+            "eHl6", "eHl6",
+            "2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.123456789Z",
+            100, 100,
+            0.5, 0.5,
+            "2012-03-04", "2012-03-04"
+        )`,
+
+		`INSERT INTO ArrayTypes VALUES(100,
+           json_array("xxx1", "xxx2"),
+           json_array(true, false),
+           json_array("eHl6", "eHl6"),
+           json_array("2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.999999999Z"),
+           json_array(1, 2),
+           json_array(0.1, 0.2),
+           json_array("2012-03-04", "2012-03-05")
+        )`,
 	} {
 		if _, err := db.db.ExecContext(ctx, query); err != nil {
 			t.Fatalf("Insert failed: %v", err)
@@ -370,10 +570,12 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 		sql      string
 		types    map[string]*spannerpb.Type
 		params   *structpb.Struct
+		fields   []*spannerpb.StructType_Field
 		expected [][]*structpb.Value
 	}{
 		"Simple": {
-			sql: `SELECT * FROM Simple`,
+			sql:    `SELECT * FROM Simple`,
+			fields: simpleFields,
 			expected: [][]*structpb.Value{
 				{makeStringValue("100"), makeStringValue("xxx")},
 				{makeStringValue("200"), makeStringValue("yyy")},
@@ -397,14 +599,72 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 					"bar": makeStringValue("200"),
 				},
 			},
+			fields: simpleFields,
 			expected: [][]*structpb.Value{
 				{makeStringValue("100"), makeStringValue("xxx")},
 				{makeStringValue("200"), makeStringValue("yyy")},
 			},
 		},
 
+		"FromUnnest_ArrayLiteral": {
+			sql: `SELECT x, y FROM UNNEST (["xxx", "yyy"]) AS x WITH OFFSET y`,
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "x",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_STRING,
+					},
+				},
+				{
+					Name: "y",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
+			expected: [][]*structpb.Value{
+				{makeStringValue("xxx"), makeStringValue("0")},
+				{makeStringValue("yyy"), makeStringValue("1")},
+			},
+		},
+		"FromUnnest_Params": {
+			sql: `SELECT x, y FROM UNNEST (@foo) AS x WITH OFFSET y`,
+			types: map[string]*spannerpb.Type{
+				"foo": &spannerpb.Type{
+					Code: spannerpb.TypeCode_ARRAY,
+					ArrayElementType: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
+			params: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"foo": makeListValueAsValue(makeListValue(makeStringValue("100"), makeStringValue("200"))),
+				},
+			},
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "x",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+				{
+					Name: "y",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
+			expected: [][]*structpb.Value{
+				{makeStringValue("100"), makeStringValue("0")},
+				{makeStringValue("200"), makeStringValue("1")},
+			},
+		},
+
 		"Simple_Unnest_Array": {
-			sql: `SELECT * FROM Simple WHERE Id IN UNNEST([100, 200])`,
+			sql:    `SELECT * FROM Simple WHERE Id IN UNNEST([100, 200])`,
+			fields: simpleFields,
 			expected: [][]*structpb.Value{
 				{makeStringValue("100"), makeStringValue("xxx")},
 				{makeStringValue("200"), makeStringValue("yyy")},
@@ -426,6 +686,7 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 					"ids": makeListValueAsValue(makeListValue(makeStringValue("100"), makeStringValue("200"))),
 				},
 			},
+			fields: simpleFields,
 			expected: [][]*structpb.Value{
 				{makeStringValue("100"), makeStringValue("xxx")},
 				{makeStringValue("200"), makeStringValue("yyy")},
@@ -447,23 +708,161 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 					"ids": makeNullValue(),
 				},
 			},
+			fields:   nil,
 			expected: nil,
 		},
 
 		"CompositePrimaryKeys_Condition": {
 			sql: `SELECT Id, PKey1, PKey2 FROM CompositePrimaryKeys WHERE PKey1 = "bbb" AND (PKey2 = 3 OR PKey2 = 4)`,
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "Id",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+				{
+					Name: "PKey1",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_STRING,
+					},
+				},
+				{
+					Name: "PKey2",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
 			expected: [][]*structpb.Value{
 				{makeStringValue("3"), makeStringValue("bbb"), makeStringValue("3")},
 			},
 		},
 		"ArrayOfStruct": {
 			sql: `SELECT ARRAY(SELECT STRUCT<Id int64, Value string>(1,"xx") x)`,
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_ARRAY,
+						ArrayElementType: &spannerpb.Type{
+							Code: spannerpb.TypeCode_STRUCT,
+							StructType: &spannerpb.StructType{
+								Fields: []*spannerpb.StructType_Field{
+									{
+										Name: "Id",
+										Type: &spannerpb.Type{
+											Code: spannerpb.TypeCode_INT64,
+										},
+									},
+									{
+										Name: "Value",
+										Type: &spannerpb.Type{
+											Code: spannerpb.TypeCode_STRING,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 			expected: [][]*structpb.Value{
 				{
 					makeListValueAsValue(makeListValue(
 						makeStructValue(map[string]*structpb.Value{
 							"Id":    makeStringValue("1"),
 							"Value": makeStringValue("xx"),
+						}),
+					)),
+				},
+			},
+		},
+		"ArrayOfStruct_FullTypes": {
+			sql: `SELECT ARRAY(SELECT AS STRUCT * FROM FullTypes)`,
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_ARRAY,
+						ArrayElementType: &spannerpb.Type{
+							Code: spannerpb.TypeCode_STRUCT,
+							StructType: &spannerpb.StructType{
+								Fields: fullTypesFields,
+							},
+						},
+					},
+				},
+			},
+			// fields: simpleFields,
+			expected: [][]*structpb.Value{
+				{
+					makeListValueAsValue(makeListValue(
+						makeStructValue(map[string]*structpb.Value{
+							"PKey":            makeStringValue("xxx"),
+							"FTString":        makeStringValue("xxx"),
+							"FTStringNull":    makeStringValue("xxx"),
+							"FTBool":          makeBoolValue(true),
+							"FTBoolNull":      makeBoolValue(true),
+							"FTBytes":         makeStringValue("eHl6"),
+							"FTBytesNull":     makeStringValue("eHl6"),
+							"FTTimestamp":     makeStringValue("2012-03-04T12:34:56.123456789Z"),
+							"FTTimestampNull": makeStringValue("2012-03-04T12:34:56.123456789Z"),
+							"FTInt":           makeStringValue("100"),
+							"FTIntNull":       makeStringValue("100"),
+							"FTFloat":         makeNumberValue(0.5),
+							"FTFloatNull":     makeNumberValue(0.5),
+							"FTDate":          makeStringValue("2012-03-04"),
+							"FTDateNull":      makeStringValue("2012-03-04"),
+						}),
+					)),
+				},
+			},
+		},
+		"ArrayOfStruct_ArrayTypes": {
+			sql: `SELECT ARRAY(SELECT AS STRUCT * FROM ArrayTypes)`,
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_ARRAY,
+						ArrayElementType: &spannerpb.Type{
+							Code: spannerpb.TypeCode_STRUCT,
+							StructType: &spannerpb.StructType{
+								Fields: arrayTypesFields,
+							},
+						},
+					},
+				},
+			},
+			// fields: simpleFields,
+			expected: [][]*structpb.Value{
+				{
+					makeListValueAsValue(makeListValue(
+						makeStructValue(map[string]*structpb.Value{
+							"Id": makeStringValue("100"),
+							"ArrayString": makeListValueAsValue(makeListValue(
+								makeStringValue("xxx1"), makeStringValue("xxx2"),
+							)),
+							"ArrayBool": makeListValueAsValue(makeListValue(
+								makeBoolValue(true), makeBoolValue(false),
+							)),
+							"ArrayBytes": makeListValueAsValue(makeListValue(
+								makeStringValue("eHl6"), makeStringValue("eHl6"),
+							)),
+							"ArrayTimestamp": makeListValueAsValue(makeListValue(
+								makeStringValue("2012-03-04T12:34:56.123456789Z"),
+								makeStringValue("2012-03-04T12:34:56.999999999Z"),
+							)),
+							"ArrayInt": makeListValueAsValue(makeListValue(
+								makeStringValue("1"), makeStringValue("2"),
+							)),
+							"ArrayFloat": makeListValueAsValue(makeListValue(
+								makeNumberValue(0.1), makeNumberValue(0.2),
+							)),
+							"ArrayDate": makeListValueAsValue(makeListValue(
+								makeStringValue("2012-03-04"), makeStringValue("2012-03-05"),
+							)),
 						}),
 					)),
 				},
@@ -489,6 +888,15 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 				results = append(results, set.Values)
 			}
 
+			if tc.fields != nil {
+				if len(results) == 0 {
+					t.Fatalf("unexpected number of results")
+				}
+				if diff := cmp.Diff(tc.fields, fake.sets[0].Metadata.RowType.Fields); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			}
+
 			if diff := cmp.Diff(tc.expected, results); diff != "" {
 				t.Errorf("(-got, +want)\n%s", diff)
 			}
@@ -497,171 +905,6 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 }
 
 func TestStreamingRead_ValueType(t *testing.T) {
-	fullTypesFields := []*spannerpb.StructType_Field{
-		{
-			Name: "PKey",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_STRING,
-			},
-		},
-		{
-			Name: "FTString",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_STRING,
-			},
-		},
-		{
-			Name: "FTStringNull",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_STRING,
-			},
-		},
-		{
-			Name: "FTBool",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_BOOL,
-			},
-		},
-		{
-			Name: "FTBoolNull",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_BOOL,
-			},
-		},
-		{
-			Name: "FTBytes",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_BYTES,
-			},
-		},
-		{
-			Name: "FTBytesNull",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_BYTES,
-			},
-		},
-		{
-			Name: "FTTimestamp",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_TIMESTAMP,
-			},
-		},
-		{
-			Name: "FTTimestampNull",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_TIMESTAMP,
-			},
-		},
-		{
-			Name: "FTInt",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_INT64,
-			},
-		},
-		{
-			Name: "FTIntNull",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_INT64,
-			},
-		},
-		{
-			Name: "FTFloat",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_FLOAT64,
-			},
-		},
-		{
-			Name: "FTFloatNull",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_FLOAT64,
-			},
-		},
-		{
-			Name: "FTDate",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_DATE,
-			},
-		},
-		{
-			Name: "FTDateNull",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_DATE,
-			},
-		},
-	}
-
-	arrayTypesFields := []*spannerpb.StructType_Field{
-		{
-			Name: "Id",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_INT64,
-			},
-		},
-		{
-			Name: "ArrayString",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_STRING,
-				},
-			},
-		},
-		{
-			Name: "ArrayBool",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_BOOL,
-				},
-			},
-		},
-		{
-			Name: "ArrayBytes",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_BYTES,
-				},
-			},
-		},
-		{
-			Name: "ArrayTimestamp",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_TIMESTAMP,
-				},
-			},
-		},
-		{
-			Name: "ArrayInt",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_INT64,
-				},
-			},
-		},
-		{
-			Name: "ArrayFloat",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_FLOAT64,
-				},
-			},
-		},
-		{
-			Name: "ArrayDate",
-			Type: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_DATE,
-				},
-			},
-		},
-	}
-
 	table := map[string]struct {
 		table    string
 		wcols    []string

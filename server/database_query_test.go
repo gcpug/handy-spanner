@@ -668,10 +668,30 @@ func TestQuery(t *testing.T) {
 			// 	},
 			// },
 			{
-				name: "NestedArray",
+				name: "ArraySubquery_Simple",
+				sql:  `SELECT ARRAY(SELECT Id FROM Simple)`,
+				expected: [][]interface{}{
+					[]interface{}{makeTestArray(TCInt64, int64(100), int64(200), int64(300))},
+				},
+			},
+			{
+				name: "ArraySubquery_Star",
+				sql:  `SELECT x FROM (SELECT ARRAY(SELECT * FROM (SELECT Id FROM Simple)) x)`,
+				expected: [][]interface{}{
+					[]interface{}{makeTestArray(TCInt64, int64(100), int64(200), int64(300))},
+				},
+			},
+			{
+				name: "ArraySubquery_NestedArray",
 				sql:  `SELECT ARRAY(SELECT [1,2,3])`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Cannot use array subquery with column of type ARRAY<INT64> because nested arrays are not supported`),
+			},
+			{
+				name: "ArrayLiteral_NestedArray",
+				sql:  `SELECT [(SELECT [1,2,3])]`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Cannot construct array with element type ARRAY<INT64> because nested arrays are not supported`),
 			},
 		},
 		"Timestamp": {
@@ -875,6 +895,13 @@ func TestQuery(t *testing.T) {
 				sql:      `SELECT Id FROM ArrayTypes WHERE 1 NOT IN UNNEST (ArrayInt)`,
 				expected: nil,
 			},
+			{
+				name: "Path",
+				sql:  `SELECT Id FROM ArrayTypes a WHERE 1 IN UNNEST (a.ArrayInt)`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100)},
+				},
+			},
 		},
 		"FromUnnest": {
 			{
@@ -1013,6 +1040,33 @@ func TestQuery(t *testing.T) {
 			// 		[]interface{}{int64(1), int64(1)},
 			// 	},
 			// },
+			{
+				name: "SubQuery_Array",
+				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id FROM Simple))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100)},
+					[]interface{}{int64(200)},
+					[]interface{}{int64(300)},
+				},
+			},
+			{
+				name: "SubQuery_Array_WithoutColumnAlias",
+				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id+1 FROM Simple))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(101)},
+					[]interface{}{int64(201)},
+					[]interface{}{int64(301)},
+				},
+			},
+			{
+				name: "SubQuery_Array_WithColumnAlias",
+				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id As x FROM Simple))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100)},
+					[]interface{}{int64(200)},
+					[]interface{}{int64(300)},
+				},
+			},
 		},
 
 		"Struct": {
@@ -1052,6 +1106,35 @@ func TestQuery(t *testing.T) {
 						[]*StructValue{
 							{
 								Keys:   []string{"", "Value"},
+								Values: []interface{}{int64(1), string("xx")},
+							},
+						},
+					},
+				},
+			},
+			{
+				name: "StructLiteral_WithArrayLiteral_OK",
+				sql:  `SELECT [(SELECT STRUCT<Id int64, Value string>(1,"xx"))]`,
+				expected: [][]interface{}{
+					[]interface{}{
+						[]*StructValue{
+							{
+								Keys:   []string{"Id", "Value"},
+								Values: []interface{}{int64(1), string("xx")},
+							},
+						},
+					},
+				},
+			},
+			// TODO: this should be error in spanner
+			{
+				name: "StructLiteral_WithArrayLiteral_NG",
+				sql:  `SELECT [STRUCT<Id int64, Value string>(1,"xx")]`,
+				expected: [][]interface{}{
+					[]interface{}{
+						[]*StructValue{
+							{
+								Keys:   []string{"Id", "Value"},
 								Values: []interface{}{int64(1), string("xx")},
 							},
 						},
@@ -1311,6 +1394,65 @@ func TestQuery(t *testing.T) {
 					},
 				},
 			},
+			{
+				name: "ValueTypes_ArrayTypes",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM ArrayTypes)`,
+				expected: [][]interface{}{
+					[]interface{}{
+						[]*StructValue{
+							{
+								Keys: arrayTypesKeys,
+								Values: []interface{}{
+									int64(100),
+									makeTestArray(TCString, "xxx1", "xxx2"),
+									makeTestArray(TCBool, true, false),
+									[][]uint8{{0x78, 0x79, 0x7a}, {0x78, 0x79, 0x7a}},
+									makeTestArray(TCString, "2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.999999999Z"),
+									makeTestArray(TCInt64, int64(1), int64(2)),
+									makeTestArray(TCFloat64, float64(0.1), float64(0.2)),
+									makeTestArray(TCString, "2012-03-04", "2012-03-05"),
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				name: "ValueTypes_NestedArrayOfStruct",
+				sql:  `SELECT ARRAY(SELECT AS STRUCT ARRAY(SELECT AS STRUCT * FROM ArrayTypes) xx) yy`,
+				expected: [][]interface{}{
+					[]interface{}{
+						[]*StructValue{
+							{
+								Keys: []string{"xx"},
+								Values: []interface{}{
+									[]*StructValue{
+										{
+											Keys: arrayTypesKeys,
+											Values: []interface{}{
+												int64(100),
+												makeTestArray(TCString, "xxx1", "xxx2"),
+												makeTestArray(TCBool, true, false),
+												[][]uint8{{0x78, 0x79, 0x7a}, {0x78, 0x79, 0x7a}},
+												makeTestArray(TCString, "2012-03-04T12:34:56.123456789Z", "2012-03-04T12:34:56.999999999Z"),
+												makeTestArray(TCInt64, int64(1), int64(2)),
+												makeTestArray(TCFloat64, float64(0.1), float64(0.2)),
+												makeTestArray(TCString, "2012-03-04", "2012-03-05"),
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				name: "StructOfStruct",
+				sql:  `SELECT [(SELECT STRUCT<Id INT64, STRUCT<Id INT64>>(1, (SELECT AS STRUCT Id FROM Simple)))]`,
+				code: codes.Unimplemented,
+				msg:  regexp.MustCompile(`^Unsupported query shape: A struct value cannot be returned as a column value. Rewrite the query to flatten the struct fields in the result.`),
+			},
 		},
 
 		"FromJoin": {
@@ -1486,40 +1628,6 @@ func TestQuery(t *testing.T) {
 				name:     "SubQuery_EXISTS_NoMatch",
 				sql:      `SELECT Id FROM Simple WHERE EXISTS(SELECT * FROM Simple WHERE Id = 1000)`,
 				expected: nil,
-			},
-			{
-				name: "SubQuery_Array",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id FROM Simple))`,
-				expected: [][]interface{}{
-					[]interface{}{int64(100)},
-					[]interface{}{int64(200)},
-					[]interface{}{int64(300)},
-				},
-			},
-			{
-				name: "SubQuery_Array_WithoutColumnAlias",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id+1 FROM Simple))`,
-				expected: [][]interface{}{
-					[]interface{}{int64(101)},
-					[]interface{}{int64(201)},
-					[]interface{}{int64(301)},
-				},
-			},
-			{
-				name: "SubQuery_Array_WithColumnAlias",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id As x FROM Simple))`,
-				expected: [][]interface{}{
-					[]interface{}{int64(100)},
-					[]interface{}{int64(200)},
-					[]interface{}{int64(300)},
-				},
-			},
-			{
-				name: "SubQuery_Array_Star",
-				sql:  `SELECT x FROM (SELECT ARRAY(SELECT * FROM (SELECT Id FROM Simple)) x)`,
-				expected: [][]interface{}{
-					[]interface{}{makeTestArray(TCInt64, int64(100), int64(200), int64(300))},
-				},
 			},
 			{
 				name:  "SubQuery_ColumnAlias",

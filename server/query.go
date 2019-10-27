@@ -157,11 +157,9 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 
 	if selectStmt.AsStruct {
 		values := make([]string, len(resultItems))
-		names := make([]string, len(resultItems))
 		quotedNames := make([]string, len(resultItems))
 		vts := make([]*ValueType, len(resultItems))
 		for i := range resultItems {
-			names[i] = resultItems[i].Name
 			if resultItems[i].ValueType.Code == TCArray {
 				// column with JSON type needs converting to JSON explictly when reading from table
 				// otherwise it is parsed as string
@@ -177,7 +175,7 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 		vt := ValueType{
 			Code: TCStruct,
 			StructType: &StructType{
-				FieldNames: names,
+				FieldNames: originalNames,
 				FieldTypes: vts,
 			},
 		}
@@ -1496,6 +1494,11 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			return NullExpr, nil, newExprErrorf(expr, true, err.Error())
 		}
 
+		if vt.Code == TCArray {
+			msg := "Cannot construct array with element type %s because nested arrays are not supported"
+			return NullExpr, nil, newExprErrorf(expr, true, msg, vt)
+		}
+
 		// TODO: allow to use both Int64 and Float64
 
 		return Expr{
@@ -1503,7 +1506,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				Code:      TCArray,
 				ArrayType: &vt,
 			},
-			Raw: fmt.Sprintf("json_array(%s)", strings.Join(ss, ", ")),
+			Raw: fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(ss, ", ")),
 		}, data, nil
 
 	case *ast.StructLiteral:
@@ -1545,6 +1548,11 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				return NullExpr, nil, wrapExprError(err, expr, "Values")
 			}
 			data = append(data, d...)
+
+			if s.ValueType.Code == TCStruct {
+				msg := `Unsupported query shape: A struct value cannot be returned as a column value. Rewrite the query to flatten the struct fields in the result.`
+				return NullExpr, nil, newExprUnimplementedErrorf(expr, msg)
+			}
 
 			// If types of fields are defined, check type compatibility with the value
 			// otherwise use the type of the value as is
@@ -1716,7 +1724,8 @@ type exprError struct {
 	expr ast.Expr
 	msg  string
 
-	invalid bool
+	invalid       bool
+	unimplemented bool
 }
 
 func (e *exprError) Error() string {
@@ -1727,6 +1736,9 @@ func (e exprError) GRPCStatus() *status.Status {
 	code := codes.Unknown
 	if e.invalid {
 		code = codes.InvalidArgument
+	}
+	if e.unimplemented {
+		code = codes.Unimplemented
 	}
 	return status.New(code, e.msg)
 }
@@ -1739,14 +1751,22 @@ func newExprErrorf(expr ast.Expr, invalid bool, format string, a ...interface{})
 	}
 }
 
+func newExprUnimplementedErrorf(expr ast.Expr, format string, a ...interface{}) error {
+	return &exprError{
+		expr:          expr,
+		msg:           fmt.Sprintf(format, a...),
+		unimplemented: true,
+	}
+}
+
 func wrapExprError(err error, expr ast.Expr, msg string) error {
 	exprErr, ok := err.(*exprError)
 	if !ok {
 		return fmt.Errorf("unknown error in wrapExprError: %v", err)
 	}
 
-	// if error is invalid it is invalig argument, so return it as is
-	if exprErr.invalid {
+	// if error is invalid or unimplemented it is invalig argument, so return it as is
+	if exprErr.invalid || exprErr.unimplemented {
 		return err
 	}
 
