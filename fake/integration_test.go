@@ -16,6 +16,7 @@ package fake
 
 import (
 	"context"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"reflect"
@@ -626,6 +627,57 @@ func TestIntegration_Query_Detail(t *testing.T) {
 			t.Fatalf("(-got, +want)\n%s", diff)
 		}
 
+	}
+}
+
+func TestIntegration_CreateDatabase(t *testing.T) {
+	ctx := context.Background()
+	projectID, instanceID, databaseID := "fake", "fake", "fake"
+
+	srv, conn, err := Run()
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	defer srv.Stop()
+
+	adminclient, err := admindatabasev1.NewDatabaseAdminClient(ctx, option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatalf("failed to connect fake spanner server: %v", err)
+	}
+
+	f, err := os.Open("./testdata/schema.sql")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+
+	b, err := ioutil.ReadAll(f)
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	var stmts []string
+	for _, s := range strings.Split(string(b), ";") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		stmts = append(stmts, s)
+	}
+
+	op, err := adminclient.CreateDatabase(ctx, &databasepb.CreateDatabaseRequest{
+		Parent:          fmt.Sprintf("projects/%s/instances/%s", projectID, instanceID),
+		CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", databaseID),
+		ExtraStatements: stmts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := op.Wait(ctx)
+	if err != nil {
+		t.Fatalf("Wait err: %v", err)
+	}
+	if got, expect := db.GetName(), fmt.Sprintf("projects/%s/instances/%s/databases/%s", projectID, instanceID, databaseID); got != expect {
+		t.Fatalf("expected %s but got %s", expect, db.GetName())
 	}
 }
 
