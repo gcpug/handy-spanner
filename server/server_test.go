@@ -17,11 +17,15 @@ package server
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
+	"time"
 
+	"github.com/golang/protobuf/ptypes"
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	cmp "github.com/google/go-cmp/cmp"
 	uuidpkg "github.com/google/uuid"
+	adminv1pb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -1558,4 +1562,98 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 		})
 	}
 
+}
+
+func TestCreateDatabase(t *testing.T) {
+	ctx := context.Background()
+	s := newTestServer()
+
+	projectID, instanceID := "fake", "fake"
+	parent := fmt.Sprintf("projects/%s/instances/%s", projectID, instanceID)
+	extraStmts := []string{`
+CREATE TABLE Ids (
+  Id INT64 NOT NULL,
+) PRIMARY KEY(Id)`}
+
+	alreadyExistsDatabase := "already-exists"
+	s.createDatabase(fmt.Sprintf("%s/databases/%s", parent, alreadyExistsDatabase))
+
+	t.Run("Success", func(t *testing.T) {
+		databaseID := strconv.Itoa(int(time.Now().Unix()))
+		op, err := s.CreateDatabase(ctx, &adminv1pb.CreateDatabaseRequest{
+			Parent:          parent,
+			CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", databaseID),
+			ExtraStatements: extraStmts,
+		})
+		if err != nil {
+			t.Fatalf("failed to create database: %s", err)
+		}
+		if !op.GetDone() {
+			t.Fatal("the operation has not finished yet")
+		}
+		var db adminv1pb.Database
+		if err := ptypes.UnmarshalAny(op.GetResponse(), &db); err != nil {
+			t.Fatalf("failed to unmarshal response: %s", err)
+		}
+		if got, expect := db.GetName(), fmt.Sprintf("%s/databases/%s", parent, databaseID); got != expect {
+			t.Fatalf("expected %s but got %s", expect, db.GetName())
+		}
+	})
+
+	t.Run("Failure", func(t *testing.T) {
+		tests := map[string]struct {
+			req        *adminv1pb.CreateDatabaseRequest
+			expectCode codes.Code
+		}{
+			"invalid parent": {
+				req: &adminv1pb.CreateDatabaseRequest{
+					Parent:          "INVALID",
+					CreateStatement: fmt.Sprintf("CREATE DATABASE `%d`", time.Now().Unix()),
+					ExtraStatements: extraStmts,
+				},
+				expectCode: codes.InvalidArgument,
+			},
+			"invalid create statement": {
+				req: &adminv1pb.CreateDatabaseRequest{
+					Parent:          parent,
+					CreateStatement: "INVALID",
+					ExtraStatements: extraStmts,
+				},
+				expectCode: codes.InvalidArgument,
+			},
+			"create statement is not CREATE DATABASE": {
+				req: &adminv1pb.CreateDatabaseRequest{
+					Parent:          parent,
+					CreateStatement: extraStmts[0],
+					ExtraStatements: extraStmts,
+				},
+				expectCode: codes.InvalidArgument,
+			},
+			"invalid extra statements": {
+				req: &adminv1pb.CreateDatabaseRequest{
+					Parent:          parent,
+					CreateStatement: fmt.Sprintf("CREATE DATABASE `%d`", time.Now().Unix()),
+					ExtraStatements: []string{"INVALID"},
+				},
+				expectCode: codes.InvalidArgument,
+			},
+			"already exists": {
+				req: &adminv1pb.CreateDatabaseRequest{
+					Parent:          parent,
+					CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", alreadyExistsDatabase),
+					ExtraStatements: extraStmts,
+				},
+				expectCode: codes.AlreadyExists,
+			},
+		}
+		for name, test := range tests {
+			test := test
+			t.Run(name, func(t *testing.T) {
+				_, err := s.CreateDatabase(ctx, test.req)
+				if got, expect := status.Convert(err).Code(), test.expectCode; got != expect {
+					t.Errorf("expect error code %s but got %s", expect, got)
+				}
+			})
+		}
+	})
 }

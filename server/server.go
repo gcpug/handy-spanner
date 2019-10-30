@@ -74,6 +74,59 @@ func (s *server) ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL
 	return db.ApplyDDL(ctx, stmt)
 }
 
+// CreateDatabase implements adminv1pb.DatabaseAdminServer.
+func (s *server) CreateDatabase(ctx context.Context, req *adminv1pb.CreateDatabaseRequest) (*lropb.Operation, error) {
+	ddl, err := (&parser.Parser{
+		Lexer: &parser.Lexer{
+			File: &token.File{FilePath: "", Buffer: req.GetCreateStatement()},
+		},
+	}).ParseDDL()
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "Errors parsing Spanner DDL statement: %s : %s", req.GetCreateStatement(), err)
+	}
+	createStmt, ok := ddl.(*ast.CreateDatabase)
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "Create statement is not CREATE DATABASE")
+	}
+
+	var stmts []ast.DDL
+	for _, s := range req.GetExtraStatements() {
+		stmt, err := (&parser.Parser{
+			Lexer: &parser.Lexer{
+				File: &token.File{FilePath: "", Buffer: s},
+			},
+		}).ParseDDL()
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "Errors parsing Spanner DDL statement: %s : %s", s, err)
+		}
+		stmts = append(stmts, stmt)
+	}
+
+	databaseName := strings.Join([]string{req.GetParent(), "databases", createStmt.Name.Name}, "/")
+	if _, err := s.createDatabase(databaseName); err != nil {
+		return nil, err
+	}
+	for _, ddl := range stmts {
+		if err := s.ApplyDDL(ctx, databaseName, ddl); err != nil {
+			return nil, err
+		}
+	}
+
+	// TODO: save operation
+	resp, _ := ptypes.MarshalAny(&adminv1pb.Database{
+		Name:  databaseName,
+		State: adminv1pb.Database_READY,
+	})
+	op := &lropb.Operation{
+		Name: fmt.Sprintf("%s/operations/_auto_%d", databaseName, time.Now().UnixNano()/1000),
+		Done: true,
+		Result: &lropb.Operation_Response{
+			Response: resp,
+		},
+	}
+	return op, nil
+}
+
 func (s *server) UpdateDatabaseDdl(ctx context.Context, req *adminv1pb.UpdateDatabaseDdlRequest) (*lropb.Operation, error) {
 	var stmts []ast.DDL
 	for _, s := range req.Statements {
@@ -194,6 +247,26 @@ func (s *server) createSession(db *database, dbName string) (*session, error) {
 	return nil, status.Errorf(codes.Internal, "create session failed")
 }
 
+func (s *server) createDatabase(name string) (*database, error) {
+	if _, ok := parseDatabaseName(name); !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "Invalid CreateDatabase request.")
+	}
+
+	s.dbMu.RLock()
+	_, ok := s.db[name]
+	s.dbMu.RUnlock()
+	if ok {
+		return nil, status.Errorf(codes.AlreadyExists, "Database already exists: %s", name)
+	}
+
+	db := newDatabase()
+	s.dbMu.Lock()
+	s.db[name] = db
+	s.dbMu.Unlock()
+
+	return db, nil
+}
+
 func (s *server) getOrCreateDatabase(name string) (*database, error) {
 	s.dbMu.RLock()
 	db, ok := s.db[name]
@@ -203,10 +276,11 @@ func (s *server) getOrCreateDatabase(name string) (*database, error) {
 			return nil, status.Errorf(codes.NotFound, "Database not found: %s", name)
 		}
 
-		db = newDatabase()
-		s.dbMu.Lock()
-		s.db[name] = db
-		s.dbMu.Unlock()
+		var err error
+		db, err = s.createDatabase(name)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return db, nil
