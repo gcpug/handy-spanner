@@ -726,3 +726,50 @@ func TestIntegration_UpdateDatbaseDdl(t *testing.T) {
 		t.Fatalf("Wait err: %v", err)
 	}
 }
+
+func TestIntegration_DropDatabase(t *testing.T) {
+	ctx := context.Background()
+	projectID, instanceID, databaseID := "fake", "fake", "fake"
+
+	srv, conn, err := Run()
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	defer srv.Stop()
+
+	adminclient, err := admindatabasev1.NewDatabaseAdminClient(ctx, option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatalf("failed to connect fake spanner server: %v", err)
+	}
+
+	// prepare database
+	f, err := os.Open("./testdata/schema.sql")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	b, err := ioutil.ReadAll(f)
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	var stmts []string
+	for _, s := range strings.Split(string(b), ";") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		stmts = append(stmts, s)
+	}
+	if _, err := adminclient.CreateDatabase(ctx, &databasepb.CreateDatabaseRequest{
+		Parent:          fmt.Sprintf("projects/%s/instances/%s", projectID, instanceID),
+		CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", databaseID),
+		ExtraStatements: stmts,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := adminclient.DropDatabase(ctx, &databasepb.DropDatabaseRequest{
+		Database: fmt.Sprintf("projects/%s/instances/%s/databases/%s", projectID, instanceID, databaseID),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

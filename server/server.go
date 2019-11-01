@@ -151,6 +151,14 @@ func (s *server) UpdateDatabaseDdl(ctx context.Context, req *adminv1pb.UpdateDat
 	return op, nil
 }
 
+// DropDatabase implements adminv1pb.DatabaseAdminServer.
+func (s *server) DropDatabase(ctx context.Context, req *adminv1pb.DropDatabaseRequest) (*empty.Empty, error) {
+	if err := s.dropDatabase(req.GetDatabase()); err != nil {
+		return nil, err
+	}
+	return &empty.Empty{}, nil
+}
+
 func (s *server) ListOperations(ctx context.Context, req *lropb.ListOperationsRequest) (*lropb.ListOperationsResponse, error) {
 	// TODO
 	return &lropb.ListOperationsResponse{}, nil
@@ -284,6 +292,29 @@ func (s *server) getOrCreateDatabase(name string) (*database, error) {
 	}
 
 	return db, nil
+}
+
+func (s *server) dropDatabase(name string) error {
+	if _, ok := parseDatabaseName(name); !ok {
+		return status.Error(codes.InvalidArgument, "Invalid DropDatabase request.")
+	}
+
+	s.dbMu.RLock()
+	db, found := s.db[name]
+	s.dbMu.RUnlock()
+	if !found {
+		return nil
+	}
+
+	if err := db.db.Close(); err != nil {
+		return status.Errorf(codes.Internal, "Failed to close the database: %s", err)
+	}
+
+	s.dbMu.Lock()
+	delete(s.db, name)
+	s.dbMu.Unlock()
+
+	return nil
 }
 
 func (s *server) CreateSession(ctx context.Context, req *spannerpb.CreateSessionRequest) (*spannerpb.Session, error) {

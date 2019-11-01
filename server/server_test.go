@@ -1588,6 +1588,9 @@ CREATE TABLE Ids (
 		if err != nil {
 			t.Fatalf("failed to create database: %s", err)
 		}
+		if _, ok := s.db[fmt.Sprintf("%s/databases/%s", parent, databaseID)]; !ok {
+			t.Fatal("failed to get database from map")
+		}
 		if !op.GetDone() {
 			t.Fatal("the operation has not finished yet")
 		}
@@ -1650,6 +1653,62 @@ CREATE TABLE Ids (
 			test := test
 			t.Run(name, func(t *testing.T) {
 				_, err := s.CreateDatabase(ctx, test.req)
+				if got, expect := status.Convert(err).Code(), test.expectCode; got != expect {
+					t.Errorf("expect error code %s but got %s", expect, got)
+				}
+			})
+		}
+	})
+}
+
+func TestDropDatabase(t *testing.T) {
+	ctx := context.Background()
+	s := newTestServer()
+
+	database := "projects/fake/instances/fake/databases/fake"
+
+	t.Run("Success", func(t *testing.T) {
+		db, err := s.createDatabase(database)
+		if err != nil {
+			t.Fatalf("failed to create database: %s", err)
+		}
+
+		if _, err := s.DropDatabase(ctx, &adminv1pb.DropDatabaseRequest{
+			Database: database,
+		}); err != nil {
+			t.Fatalf("failed to drop database: %s", err)
+		}
+		if _, ok := s.db[database]; ok {
+			t.Error("failed to delete database from map")
+		}
+		if err := db.db.Ping(); err == nil {
+			t.Error("db.db sould be closed")
+		}
+
+		// DropDatabase returns no error even if the database is not exist
+		if _, err := s.DropDatabase(ctx, &adminv1pb.DropDatabaseRequest{
+			Database: database,
+		}); err != nil {
+			t.Fatalf("failed to drop database: %s", err)
+		}
+	})
+
+	t.Run("Failure", func(t *testing.T) {
+		tests := map[string]struct {
+			req        *adminv1pb.DropDatabaseRequest
+			expectCode codes.Code
+		}{
+			"invalid database": {
+				req: &adminv1pb.DropDatabaseRequest{
+					Database: "INVALID",
+				},
+				expectCode: codes.InvalidArgument,
+			},
+		}
+		for name, test := range tests {
+			test := test
+			t.Run(name, func(t *testing.T) {
+				_, err := s.DropDatabase(ctx, test.req)
 				if got, expect := status.Convert(err).Code(), test.expectCode; got != expect {
 					t.Errorf("expect error code %s but got %s", expect, got)
 				}
