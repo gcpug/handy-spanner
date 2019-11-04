@@ -70,7 +70,7 @@ func TestQueryBuilder_ExpandParamByPlaceholders(t *testing.T) {
 	}
 
 	for _, tc := range table {
-		s, d, err := b.expandParamByPlaceholders(tc.v)
+		s, err := b.expandParamByPlaceholders(tc.v)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -79,7 +79,7 @@ func TestQueryBuilder_ExpandParamByPlaceholders(t *testing.T) {
 			t.Errorf("expect placeholder %q, but got %q", tc.ph, s.Raw)
 		}
 
-		if diff := cmp.Diff(tc.args, d); diff != "" {
+		if diff := cmp.Diff(tc.args, s.Args); diff != "" {
 			t.Errorf("(-got, +want)\n%s", diff)
 		}
 

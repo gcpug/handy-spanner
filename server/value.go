@@ -35,6 +35,7 @@ var NullValue = Value{}
 type Expr struct {
 	Raw       string
 	ValueType ValueType
+	Args      []interface{}
 }
 
 type RowIterator interface {

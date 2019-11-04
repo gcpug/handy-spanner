@@ -388,12 +388,12 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 		case *ast.On:
 			switch expr := cond.Expr.(type) {
 			case *ast.BinaryExpr:
-				s, d, err := b.buildExpr(expr)
+				ex, err := b.buildExpr(expr)
 				if err != nil {
 					return nil, "", nil, wrapExprError(err, expr, "ON")
 				}
-				condition = fmt.Sprintf("ON %s", s.Raw)
-				data = append(data, d...)
+				condition = fmt.Sprintf("ON %s", ex.Raw)
+				data = append(data, ex.Args...)
 
 			default:
 				return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for JOIN condition", expr)
@@ -468,7 +468,7 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []i
 		}
 	}
 
-	s, data, err := b.buildUnnestExpr(src.Expr, offset, true)
+	s, err := b.buildUnnestExpr(src.Expr, offset, true)
 	if err != nil {
 		return nil, "", nil, wrapExprError(err, src.Expr, "UNNEST")
 	}
@@ -505,7 +505,7 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []i
 	}
 
 	view := createTableViewFromItems(items, nil)
-	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), data, nil
+	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), s.Args, nil
 }
 
 func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultItem, string, error) {
@@ -525,25 +525,25 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			items = append(items, b.rootView.AllItems()...)
 			exprs = append(exprs, "*")
 		case *ast.DotStar:
-			s, d, err := b.buildExpr(i.Expr)
+			ex, err := b.buildExpr(i.Expr)
 			if err != nil {
 				return nil, "", wrapExprError(err, i.Expr, "DotStar")
 			}
-			data = append(data, d...)
+			data = append(data, ex.Args...)
 
-			if s.ValueType.Code != TCStruct {
-				return nil, "", status.Errorf(codes.InvalidArgument, "Dot-star is not supported for type %s", s.ValueType)
+			if ex.ValueType.Code != TCStruct {
+				return nil, "", status.Errorf(codes.InvalidArgument, "Dot-star is not supported for type %s", ex.ValueType)
 
 			}
-			st := s.ValueType.StructType
+			st := ex.ValueType.StructType
 
 			items = append(items, st.AllItems()...)
 			if st.IsTable {
-				exprs = append(exprs, fmt.Sprintf("%s.*", s.Raw))
+				exprs = append(exprs, fmt.Sprintf("%s.*", ex.Raw))
 			} else {
 				n := len(st.FieldTypes)
 				for i := 0; i < n; i++ {
-					exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", s.Raw, i))
+					exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", ex.Raw, i))
 				}
 			}
 
@@ -555,43 +555,43 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			case *ast.Path:
 				alias = e.Idents[len(e.Idents)-1].Name
 			}
-			s, d, err := b.buildExpr(i.Expr)
+			ex, err := b.buildExpr(i.Expr)
 			if err != nil {
 				return nil, "", wrapExprError(err, i.Expr, "Path")
 			}
 
-			data = append(data, d...)
+			data = append(data, ex.Args...)
 			items = append(items, ResultItem{
 				Name:      alias,
-				ValueType: s.ValueType,
+				ValueType: ex.ValueType,
 				Expr: Expr{
 					// This is a trick. This Expr is referred as subquery.
 					// At the reference, it should be just referred as alias name instead of s.Raw.
 					Raw:       alias,
-					ValueType: s.ValueType,
+					ValueType: ex.ValueType,
 				},
 			})
 
-			exprs = append(exprs, s.Raw)
+			exprs = append(exprs, ex.Raw)
 
 		case *ast.Alias:
 			alias := i.As.Alias.Name
-			s, d, err := b.buildExpr(i.Expr)
+			ex, err := b.buildExpr(i.Expr)
 			if err != nil {
 				return nil, "", wrapExprError(err, i.Expr, "Alias")
 			}
-			data = append(data, d...)
+			data = append(data, ex.Args...)
 			items = append(items, ResultItem{
 				Name:      alias,
-				ValueType: s.ValueType,
+				ValueType: ex.ValueType,
 				Expr: Expr{
 					// This is a trick. This Expr is referred as subquery.
 					// At the reference, it should be just referred as alias name instead of s.Raw.
 					Raw:       alias,
-					ValueType: s.ValueType,
+					ValueType: ex.ValueType,
 				},
 			})
-			exprs = append(exprs, fmt.Sprintf("%s AS %s", s.Raw, alias))
+			exprs = append(exprs, fmt.Sprintf("%s AS %s", ex.Raw, alias))
 
 		default:
 			return nil, "", status.Errorf(codes.Unimplemented, "not supported %T in result set", item)
@@ -627,12 +627,12 @@ func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {
 
 	var havingClause string
 	if stmt.Having != nil {
-		s, data, err := b.buildExpr(stmt.Having.Expr)
+		ex, err := b.buildExpr(stmt.Having.Expr)
 		if err != nil {
 			return "", wrapExprError(err, stmt.Having.Expr, "Having")
 		}
-		havingClause = s.Raw
-		b.args = append(b.args, data...)
+		havingClause = ex.Raw
+		b.args = append(b.args, ex.Args...)
 	}
 
 	var orderByClause string
@@ -676,27 +676,27 @@ func (b *QueryBuilder) buildQuery(stmt *ast.Select) (string, error) {
 }
 
 func (b *QueryBuilder) buildQueryWhereClause(where *ast.Where) (string, []interface{}, error) {
-	s, data, err := b.buildExpr(where.Expr)
+	ex, err := b.buildExpr(where.Expr)
 	if err != nil {
 		return "", nil, wrapExprError(err, where.Expr, "Building WHERE clause error")
 	}
-	return s.Raw, data, nil
+	return ex.Raw, ex.Args, nil
 }
 
 func (b *QueryBuilder) buildQueryGroupByClause(groupby *ast.GroupBy) (string, []interface{}, error) {
 	var groupByClause []string
-	var data []interface{}
+	var args []interface{}
 
 	for _, expr := range groupby.Exprs {
-		s, d, err := b.buildExpr(expr)
+		ex, err := b.buildExpr(expr)
 		if err != nil {
 			return "", nil, wrapExprError(err, expr, "Building GROUP BY error")
 		}
-		groupByClause = append(groupByClause, s.Raw)
-		data = append(data, d...)
+		groupByClause = append(groupByClause, ex.Raw)
+		args = append(args, ex.Args...)
 	}
 
-	return strings.Join(groupByClause, ", "), data, nil
+	return strings.Join(groupByClause, ", "), args, nil
 }
 
 func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, view *TableView) (string, []interface{}, error) {
@@ -739,97 +739,102 @@ func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, view *Table
 }
 
 func (b *QueryBuilder) buildQueryLimitOffset(limit *ast.Limit) (string, []interface{}, error) {
-	e, data, err := b.buildIntValue(limit.Count, "LIMIT")
+	var data []interface{}
+	e, err := b.buildIntValue(limit.Count, "LIMIT")
 	if err != nil {
 		return "", nil, err
 	}
 	limitClause := e.Raw
+	data = append(data, e.Args...)
 
 	if limit.Offset != nil {
-		e, d, err := b.buildIntValue(limit.Offset.Value, "OFFSET")
+		e, err := b.buildIntValue(limit.Offset.Value, "OFFSET")
 		if err != nil {
 			return "", nil, err
 		}
-		data = append(data, d...)
+		data = append(data, e.Args...)
 		limitClause += fmt.Sprintf(" OFFSET %s", e.Raw)
 	}
 
 	return limitClause, data, nil
 }
 
-func (b *QueryBuilder) buildIntValue(intValue ast.IntValue, caller string) (Expr, []interface{}, error) {
+func (b *QueryBuilder) buildIntValue(intValue ast.IntValue, caller string) (Expr, error) {
 	switch iv := intValue.(type) {
 	case *ast.Param:
-		s, d, err := b.buildExpr(iv)
+		ex, err := b.buildExpr(iv)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, nil, "buildIntValue")
+			return NullExpr, wrapExprError(err, nil, "buildIntValue")
 		}
-		if s.ValueType.Code != TCInt64 {
-			return NullExpr, nil, newExprErrorf(nil, true, "%s expects an integer literal or parameter", caller)
+		if ex.ValueType.Code != TCInt64 {
+			return NullExpr, newExprErrorf(nil, true, "%s expects an integer literal or parameter", caller)
 		}
-		return s, d, nil
+		return ex, nil
 
 	case *ast.IntLiteral:
-		s, d, err := b.buildExpr(iv)
+		ex, err := b.buildExpr(iv)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, nil, "buildIntValue")
+			return NullExpr, wrapExprError(err, nil, "buildIntValue")
 		}
-		if s.ValueType.Code != TCInt64 {
-			return NullExpr, nil, newExprErrorf(nil, true, "%s expects an integer literal or parameter", caller)
+		if ex.ValueType.Code != TCInt64 {
+			return NullExpr, newExprErrorf(nil, true, "%s expects an integer literal or parameter", caller)
 		}
-		return s, d, nil
+		return ex, nil
 
 	case *ast.CastIntValue:
 		// CAST expression can be used but it seems not working actually.
-		return NullExpr, nil, newExprErrorf(nil, true, "handy-spanner: CAST in Limit/Offset seems not working in Spanner")
+		return NullExpr, newExprErrorf(nil, true, "handy-spanner: CAST in Limit/Offset seems not working in Spanner")
 	default:
-		return NullExpr, nil, fmt.Errorf("unknown LIMIT type")
+		return NullExpr, fmt.Errorf("unknown LIMIT type")
 	}
 }
 
-func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface{}, error) {
+func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, error) {
 	switch c := cond.(type) {
 	case *ast.ValuesInCondition:
 		var ss []string
-		var data []interface{}
+		var args []interface{}
 		for _, e := range c.Exprs {
-			s, d, err := b.buildExpr(e)
+			ex, err := b.buildExpr(e)
 			if err != nil {
-				return NullExpr, nil, wrapExprError(err, e, "IN condition")
+				return NullExpr, wrapExprError(err, e, "IN condition")
 			}
-			ss = append(ss, s.Raw)
-			data = append(data, d...)
+			ss = append(ss, ex.Raw)
+			args = append(args, ex.Args...)
 		}
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
 			Raw:       "(" + strings.Join(ss, ", ") + ")",
-		}, data, nil
+			Args:      args,
+		}, nil
 
 	case *ast.SubQueryInCondition:
 		query, data, items, err := BuildQuery(b.db, c.Query, b.params, false)
 		if err != nil {
-			return NullExpr, nil, newExprErrorf(nil, false, "BuildQuery error for SubqueryInCondition: %v", err)
+			return NullExpr, newExprErrorf(nil, false, "BuildQuery error for SubqueryInCondition: %v", err)
 		}
 		if len(items) != 1 {
-			return NullExpr, nil, newExprErrorf(nil, true, "Subquery of type IN must have only one output column")
+			return NullExpr, newExprErrorf(nil, true, "Subquery of type IN must have only one output column")
 		}
 		return Expr{
 			ValueType: items[0].ValueType, // inherit ValueType from result item
 			Raw:       fmt.Sprintf("(%s)", query),
-		}, data, nil
+			Args:      data,
+		}, nil
 
 	case *ast.UnnestInCondition:
-		s, d, err := b.buildUnnestExpr(c.Expr, false, false)
+		s, err := b.buildUnnestExpr(c.Expr, false, false)
 		if err != nil {
-			return NullExpr, nil, err
+			return NullExpr, err
 		}
 
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
 			Raw:       fmt.Sprintf("(%s)", s.Raw),
-		}, d, nil
+			Args:      s.Args,
+		}, nil
 	default:
-		return NullExpr, nil, fmt.Errorf("not supported InCondition %T", c)
+		return NullExpr, fmt.Errorf("not supported InCondition %T", c)
 	}
 }
 
@@ -846,42 +851,44 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, []interface
 //
 // If offset for unnest is needed `UNNEST([a, b, c])` generates:
 // `SELECT value, key as offset JSON_EACH(JSON_ARRAY(a, b, c))`
-func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool, asview bool) (Expr, []interface{}, error) {
-	s, data, err := b.buildExpr(expr)
+func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool, asview bool) (Expr, error) {
+	ex, err := b.buildExpr(expr)
 	if err != nil {
-		return NullExpr, nil, wrapExprError(err, expr, "UNNEST")
+		return NullExpr, wrapExprError(err, expr, "UNNEST")
 	}
 
-	if s.ValueType.Code != TCArray {
+	if ex.ValueType.Code != TCArray {
 		if asview {
 			msg := "Values referenced in UNNEST must be arrays. UNNEST contains expression of type %s"
-			return NullExpr, nil, newExprErrorf(expr, true, msg, s.ValueType.Code)
+			return NullExpr, newExprErrorf(expr, true, msg, ex.ValueType.Code)
 		} else {
 			msg := "Second argument of IN UNNEST must be an array but was %s"
-			return NullExpr, nil, newExprErrorf(expr, true, msg, s.ValueType.Code)
+			return NullExpr, newExprErrorf(expr, true, msg, ex.ValueType.Code)
 		}
 	}
 
 	var raw string
 	if offset {
-		raw = fmt.Sprintf("SELECT value, key as offset FROM JSON_EACH(%s)", s.Raw)
+		raw = fmt.Sprintf("SELECT value, key as offset FROM JSON_EACH(%s)", ex.Raw)
 	} else {
-		raw = fmt.Sprintf("SELECT value FROM JSON_EACH(%s)", s.Raw)
+		raw = fmt.Sprintf("SELECT value FROM JSON_EACH(%s)", ex.Raw)
 	}
 
 	return Expr{
-		ValueType: s.ValueType,
+		ValueType: ex.ValueType,
 		Raw:       raw,
-	}, data, nil
+		Args:      ex.Args,
+	}, nil
 }
 
-func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, []interface{}, error) {
+func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, error) {
 	switch v.Data.(type) {
 	case nil, bool, int64, float64, string, []byte:
 		return Expr{
 			ValueType: v.Type,
 			Raw:       "?",
-		}, []interface{}{v.Data}, nil
+			Args:      []interface{}{v.Data},
+		}, nil
 	case []bool, []int64, []float64, []string, [][]byte:
 		vv := reflect.ValueOf(v.Data)
 		n := vv.Len()
@@ -899,7 +906,8 @@ func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, []interface{}, 
 		return Expr{
 			ValueType: v.Type, // TODO: check correct type or not
 			Raw:       raw,
-		}, args, nil
+			Args:      args,
+		}, nil
 
 	case ArrayValue:
 		rv := reflect.ValueOf(v.Data.(ArrayValue).Elements())
@@ -923,10 +931,11 @@ func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, []interface{}, 
 		return Expr{
 			ValueType: v.Type, // TODO: check correct type or not
 			Raw:       raw,
-		}, args, nil
+			Args:      args,
+		}, nil
 	}
 
-	return NullExpr, nil, fmt.Errorf("unexpected parameter type for expandParamByPlaceholders: %T", v)
+	return NullExpr, fmt.Errorf("unexpected parameter type for expandParamByPlaceholders: %T", v)
 }
 
 func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
@@ -967,36 +976,38 @@ func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
 	return Expr{
 		ValueType: *st.FieldTypes[idx],
 		Raw:       raw,
+		Args:      expr.Args,
 	}, nil
 }
 
-func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
+func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 	switch e := expr.(type) {
 	case *ast.UnaryExpr:
-		s, data, err := b.buildExpr(e.Expr)
+		ex, err := b.buildExpr(e.Expr)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Unary")
+			return NullExpr, wrapExprError(err, expr, "Unary")
 		}
 
 		return Expr{
-			ValueType: s.ValueType,
-			Raw:       fmt.Sprintf("%s %s", e.Op, s.Raw),
-		}, data, nil
+			ValueType: ex.ValueType,
+			Raw:       fmt.Sprintf("%s %s", e.Op, ex.Raw),
+			Args:      ex.Args,
+		}, nil
 
 	case *ast.BinaryExpr:
-		left, ldata, lerr := b.buildExpr(e.Left)
-		right, rdata, rerr := b.buildExpr(e.Right)
+		left, lerr := b.buildExpr(e.Left)
+		right, rerr := b.buildExpr(e.Right)
 
 		if lerr != nil {
-			return NullExpr, nil, wrapExprError(lerr, expr, "Left")
+			return NullExpr, wrapExprError(lerr, expr, "Left")
 		}
 		if rerr != nil {
-			return NullExpr, nil, wrapExprError(rerr, expr, "Right")
+			return NullExpr, wrapExprError(rerr, expr, "Right")
 		}
 
-		var data []interface{}
-		data = append(data, ldata...)
-		data = append(data, rdata...)
+		var args []interface{}
+		args = append(args, left.Args...)
+		args = append(args, right.Args...)
 
 		var vt ValueType
 		switch e.Op {
@@ -1022,7 +1033,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				Code: TCFloat64,
 			}
 		default:
-			return NullExpr, nil, fmt.Errorf("%T: unknown op %v", e, e.Op)
+			return NullExpr, fmt.Errorf("%T: unknown op %v", e, e.Op)
 		}
 
 		raw := fmt.Sprintf("%s %s %s", left.Raw, e.Op, right.Raw)
@@ -1033,21 +1044,22 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return Expr{
 			ValueType: vt,
 			Raw:       raw,
-		}, data, nil
+			Args:      args,
+		}, nil
 
 	case *ast.InExpr:
-		left, ldata, lerr := b.buildExpr(e.Left)
-		right, rdata, rerr := b.buildInCondition(e.Right)
+		left, lerr := b.buildExpr(e.Left)
+		right, rerr := b.buildInCondition(e.Right)
 		if lerr != nil {
-			return NullExpr, nil, wrapExprError(lerr, expr, "Left")
+			return NullExpr, wrapExprError(lerr, expr, "Left")
 		}
 		if rerr != nil {
-			return NullExpr, nil, wrapExprError(rerr, expr, "Right")
+			return NullExpr, wrapExprError(rerr, expr, "Right")
 		}
 
-		var data []interface{}
-		data = append(data, ldata...)
-		data = append(data, rdata...)
+		var args []interface{}
+		args = append(args, left.Args...)
+		args = append(args, right.Args...)
 
 		op := "IN"
 		if e.Not {
@@ -1057,26 +1069,27 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
 			Raw:       fmt.Sprintf("%s %s %s", left.Raw, op, right.Raw),
-		}, data, nil
+			Args:      args,
+		}, nil
 
 	case *ast.BetweenExpr:
-		left, ldata, lerr := b.buildExpr(e.Left)
-		rstart, rsdata, rserr := b.buildExpr(e.RightStart)
-		rend, redata, reerr := b.buildExpr(e.RightEnd)
+		left, lerr := b.buildExpr(e.Left)
+		rstart, rserr := b.buildExpr(e.RightStart)
+		rend, reerr := b.buildExpr(e.RightEnd)
 		if lerr != nil {
-			return NullExpr, nil, wrapExprError(lerr, expr, "Left")
+			return NullExpr, wrapExprError(lerr, expr, "Left")
 		}
 		if rserr != nil {
-			return NullExpr, nil, wrapExprError(rserr, expr, "RightStart")
+			return NullExpr, wrapExprError(rserr, expr, "RightStart")
 		}
 		if reerr != nil {
-			return NullExpr, nil, wrapExprError(reerr, expr, "RightEnd")
+			return NullExpr, wrapExprError(reerr, expr, "RightEnd")
 		}
 
-		var data []interface{}
-		data = append(data, ldata...)
-		data = append(data, rsdata...)
-		data = append(data, redata...)
+		var args []interface{}
+		args = append(args, left.Args...)
+		args = append(args, rstart.Args...)
+		args = append(args, rend.Args...)
 
 		op := "BETWEEN"
 		if e.Not {
@@ -1086,65 +1099,68 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
 			Raw:       fmt.Sprintf("%s %s %s AND %s", left.Raw, op, rstart.Raw, rend.Raw),
-		}, data, nil
+			Args:      args,
+		}, nil
 
 	case *ast.SelectorExpr:
-		s, d, err := b.buildExpr(e.Expr)
+		ex, err := b.buildExpr(e.Expr)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Expr")
+			return NullExpr, wrapExprError(err, expr, "Expr")
 		}
 
-		s2, err := b.accessField(s, e.Ident.Name)
+		ex2, err := b.accessField(ex, e.Ident.Name)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Expr")
-		}
-
-		return s2, d, nil
-
-	case *ast.IndexExpr:
-		var data []interface{}
-
-		s1, d1, err := b.buildExpr(e.Expr)
-		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Expr")
-		}
-		data = append(data, d1...)
-
-		s2, d2, err := b.buildExpr(e.Index)
-		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Index")
-		}
-		data = append(data, d2...)
-
-		if s1.ValueType.Code != TCArray {
-			msg := "Element access using [] is not supported on values of type %s"
-			return NullExpr, nil, newExprErrorf(expr, true, msg, s1.ValueType.Code)
-		}
-		if s2.ValueType.Code != TCInt64 {
-			msg := "Array position in [] must be coercible to INT64 type, but has type %s"
-			return NullExpr, nil, newExprErrorf(expr, true, msg, s2.ValueType.Code)
-		}
-
-		var raw string
-		if e.Ordinal {
-			raw = fmt.Sprintf("JSON_EXTRACT(%s, '$[' || (%s-1) || ']')", s1.Raw, s2.Raw)
-		} else {
-			raw = fmt.Sprintf("JSON_EXTRACT(%s, '$[' || %s || ']')", s1.Raw, s2.Raw)
+			return NullExpr, wrapExprError(err, expr, "Expr")
 		}
 
 		return Expr{
-			ValueType: *s1.ValueType.ArrayType,
-			Raw:       raw,
-		}, data, nil
+			ValueType: ex2.ValueType,
+			Raw:       ex2.Raw,
+			Args:      ex2.Args,
+		}, nil
 
-	case *ast.IsNullExpr:
-		left, ldata, lerr := b.buildExpr(e.Left)
-		if lerr != nil {
-			return NullExpr, nil, wrapExprError(lerr, expr, "Left")
+	case *ast.IndexExpr:
+		ex1, err := b.buildExpr(e.Expr)
+		if err != nil {
+			return NullExpr, wrapExprError(err, expr, "Expr")
 		}
 
-		var data []interface{}
-		data = append(data, ldata...)
+		ex2, err := b.buildExpr(e.Index)
+		if err != nil {
+			return NullExpr, wrapExprError(err, expr, "Index")
+		}
+
+		if ex1.ValueType.Code != TCArray {
+			msg := "Element access using [] is not supported on values of type %s"
+			return NullExpr, newExprErrorf(expr, true, msg, ex1.ValueType)
+		}
+		if ex2.ValueType.Code != TCInt64 {
+			msg := "Array position in [] must be coercible to INT64 type, but has type %s"
+			return NullExpr, newExprErrorf(expr, true, msg, ex2.ValueType)
+		}
+
+		var args []interface{}
+		args = append(args, ex1.Args...)
+		args = append(args, ex2.Args...)
+
+		var raw string
+		if e.Ordinal {
+			raw = fmt.Sprintf("JSON_EXTRACT(%s, '$[' || (%s-1) || ']')", ex1.Raw, ex2.Raw)
+		} else {
+			raw = fmt.Sprintf("JSON_EXTRACT(%s, '$[' || %s || ']')", ex1.Raw, ex2.Raw)
+		}
+
+		return Expr{
+			ValueType: *ex1.ValueType.ArrayType,
+			Raw:       raw,
+			Args:      args,
+		}, nil
+
+	case *ast.IsNullExpr:
+		left, lerr := b.buildExpr(e.Left)
+		if lerr != nil {
+			return NullExpr, wrapExprError(lerr, expr, "Left")
+		}
 
 		op := "IS NULL"
 		if e.Not {
@@ -1154,16 +1170,14 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
 			Raw:       fmt.Sprintf("%s %s", left.Raw, op),
-		}, data, nil
+			Args:      left.Args,
+		}, nil
 
 	case *ast.IsBoolExpr:
-		left, ldata, lerr := b.buildExpr(e.Left)
+		left, lerr := b.buildExpr(e.Left)
 		if lerr != nil {
-			return NullExpr, nil, wrapExprError(lerr, expr, "Left")
+			return NullExpr, wrapExprError(lerr, expr, "Left")
 		}
-
-		var data []interface{}
-		data = append(data, ldata...)
 
 		op := "IS"
 		if e.Not {
@@ -1177,38 +1191,39 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
 			Raw:       fmt.Sprintf("%s %s %s", left.Raw, op, b),
-		}, data, nil
+			Args:      left.Args,
+		}, nil
 
 	case *ast.CallExpr:
 		name := strings.ToUpper(e.Func.Name)
 		fn, ok := customFunctions[name]
 		if !ok {
-			return NullExpr, nil, newExprErrorf(expr, false, "unsupported CALL function: %s", name)
+			return NullExpr, newExprErrorf(expr, false, "unsupported CALL function: %s", name)
 		}
 
 		// TODO: distinct
 
 		// when fn.NArgs < 0, args is variadic
 		if fn.NArgs >= 0 && fn.NArgs != len(e.Args) {
-			return NullExpr, nil, newExprErrorf(expr, true, "%s requires %d arguments", name, fn.NArgs)
+			return NullExpr, newExprErrorf(expr, true, "%s requires %d arguments", name, fn.NArgs)
 		}
 
-		var data []interface{}
+		var args []interface{}
 		var ss []string
 		var vts []ValueType
 		for i := range e.Args {
-			s, d, err := b.buildExpr(e.Args[i].Expr)
+			ex, err := b.buildExpr(e.Args[i].Expr)
 			if err != nil {
-				return NullExpr, nil, wrapExprError(err, expr, "Args")
+				return NullExpr, wrapExprError(err, expr, "Args")
 			}
 
-			data = append(data, d...)
-			ss = append(ss, s.Raw)
-			vts = append(vts, s.ValueType)
+			args = append(args, ex.Args...)
+			ss = append(ss, ex.Raw)
+			vts = append(vts, ex.ValueType)
 		}
 
 		if ok := fn.ArgTypes(vts); !ok {
-			return NullExpr, nil, newExprErrorf(expr, true, "arguments does not match for %s", name)
+			return NullExpr, newExprErrorf(expr, true, "arguments does not match for %s", name)
 		}
 
 		var distinct string
@@ -1219,28 +1234,29 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return Expr{
 			ValueType: fn.ReturnType(vts),
 			Raw:       fmt.Sprintf(`%s(%s%s)`, name, distinct, strings.Join(ss, ", ")),
-		}, data, nil
+			Args:      args,
+		}, nil
 
 	case *ast.CountStarExpr:
 		return Expr{
 			ValueType: ValueType{Code: TCInt64},
 			Raw:       "COUNT(*)",
-		}, nil, nil
+		}, nil
 
 	case *ast.CastExpr:
-		s, data, err := b.buildExpr(e.Expr)
+		ex, err := b.buildExpr(e.Expr)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Cast")
+			return NullExpr, wrapExprError(err, expr, "Cast")
 		}
 
 		target := astTypeToValueType(e.Type)
 
 		if target.Code == TCStruct {
-			return NullExpr, nil, newExprErrorf(expr, false, "Struct type is not supported in Cast")
+			return NullExpr, newExprErrorf(expr, false, "Struct type is not supported in Cast")
 		}
 
-		raw := s.Raw
-		switch s.ValueType.Code {
+		raw := ex.Raw
+		switch ex.ValueType.Code {
 		case TCInt64:
 			switch target.Code {
 			case TCBool:
@@ -1252,7 +1268,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			case TCFloat64:
 				raw = fmt.Sprintf("___CAST_INT64_TO_FLOAT64(%s)", raw)
 			default:
-				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType.Code, target.Code)
+				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
 			}
 		case TCFloat64:
 			switch target.Code {
@@ -1263,7 +1279,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			case TCFloat64:
 				// do nothing
 			default:
-				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType.Code, target.Code)
+				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
 			}
 
 		case TCBool:
@@ -1275,7 +1291,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			case TCInt64:
 				raw = fmt.Sprintf("___CAST_BOOL_TO_INT64(%s)", raw)
 			default:
-				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
 			}
 
 		case TCString:
@@ -1289,7 +1305,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			case TCFloat64:
 				raw = fmt.Sprintf("___CAST_STRING_TO_FLOAT64(%s)", raw)
 			default:
-				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
 			}
 
 		case TCBytes:
@@ -1299,55 +1315,58 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			case TCString:
 				// do nothing?
 			default:
-				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
 			}
 		case TCArray:
-			if !compareValueType(s.ValueType, target) {
-				if s.ValueType.Code == TCArray && target.Code == TCArray {
+			if !compareValueType(ex.ValueType, target) {
+				if ex.ValueType.Code == TCArray && target.Code == TCArray {
 					msg := "Casting between arrays with incompatible element types is not supported: Invalid cast from %s to %s"
-					return NullExpr, nil, newExprErrorf(expr, true, msg, s.ValueType, target)
+					return NullExpr, newExprErrorf(expr, true, msg, ex.ValueType, target)
 				}
 
-				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
 			}
 		case TCStruct:
-			if !compareValueType(s.ValueType, target) {
-				return NullExpr, nil, newExprErrorf(expr, true, "Invalid cast from %s to %s", s.ValueType, target)
+			if !compareValueType(ex.ValueType, target) {
+				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
 			}
-			return NullExpr, nil, newExprErrorf(expr, false, "struct is not supported")
+			return NullExpr, newExprErrorf(expr, false, "struct is not supported")
 		}
 
 		return Expr{
 			ValueType: target,
 			Raw:       raw,
-		}, data, nil
+			Args:      ex.Args,
+		}, nil
 
-		return NullExpr, nil, newExprErrorf(expr, false, "Cast not supported yet")
+		return NullExpr, newExprErrorf(expr, false, "Cast not supported yet")
 
 	case *ast.ExtractExpr:
-		s, data, err := b.buildExpr(e.Expr)
+		ex, err := b.buildExpr(e.Expr)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Paren")
+			return NullExpr, wrapExprError(err, expr, "Paren")
 		}
+
+		args := ex.Args
 
 		var raw string
 		code := TCInt64
-		switch s.ValueType.Code {
+		switch ex.ValueType.Code {
 		case TCTimestamp:
 			if e.AtTimeZone == nil {
 				msg := fmt.Sprintf("handy-spanner: please specify timezone explicitly. Use %q for default timezone", defaultTimeZone)
-				return NullExpr, nil, newExprErrorf(expr, true, msg)
+				return NullExpr, newExprErrorf(expr, true, msg)
 			}
 
-			tz, tzdata, err := b.buildExpr(e.AtTimeZone.Expr)
+			tz, err := b.buildExpr(e.AtTimeZone.Expr)
 			if err != nil {
-				return NullExpr, nil, wrapExprError(err, expr, "AT TIME ZONE")
+				return NullExpr, wrapExprError(err, expr, "AT TIME ZONE")
 			}
 			if tz.ValueType.Code != TCString {
 				msg := "No matching signature for function EXTRACT for argument types: DATE_TIME_PART FROM TIMESTAMP AT TIME ZONE %s. Supported signatures: EXTRACT(DATE_TIME_PART FROM DATE); EXTRACT(DATE_TIME_PART FROM TIMESTAMP [AT TIME ZONE STRING])"
-				return NullExpr, nil, newExprErrorf(expr, true, msg, tz.ValueType)
+				return NullExpr, newExprErrorf(expr, true, msg, tz.ValueType)
 			}
-			data = append(data, tzdata...)
+			args = append(args, tz.Args...)
 
 			part := strings.ToUpper(e.Part.Name)
 			switch part {
@@ -1366,18 +1385,18 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				"QUARTER",
 				"YEAR",
 				"ISOYEAR":
-				raw = fmt.Sprintf("___EXTRACT_FROM_TIMESTAMP(%q, %s, %s)", part, s.Raw, tz.Raw)
+				raw = fmt.Sprintf("___EXTRACT_FROM_TIMESTAMP(%q, %s, %s)", part, ex.Raw, tz.Raw)
 
 			case "DATE":
 				code = TCDate
-				raw = fmt.Sprintf("DATE(%s)", s.Raw)
+				raw = fmt.Sprintf("DATE(%s)", ex.Raw)
 			default:
-				return NullExpr, nil, newExprErrorf(expr, true, "A valid date part name is required but found %s", e.Part.Name)
+				return NullExpr, newExprErrorf(expr, true, "A valid date part name is required but found %s", e.Part.Name)
 			}
 
 		case TCDate:
 			if e.AtTimeZone != nil {
-				return NullExpr, nil, newExprErrorf(expr, true, "EXTRACT from DATE does not support AT TIME ZONE")
+				return NullExpr, newExprErrorf(expr, true, "EXTRACT from DATE does not support AT TIME ZONE")
 			}
 
 			part := strings.ToUpper(e.Part.Name)
@@ -1391,7 +1410,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				"QUARTER",
 				"YEAR",
 				"ISOYEAR":
-				raw = fmt.Sprintf("___EXTRACT_FROM_DATE(%q, %s)", part, s.Raw)
+				raw = fmt.Sprintf("___EXTRACT_FROM_DATE(%q, %s)", part, ex.Raw)
 
 			case "NANOSECOND",
 				"MICROSECOND",
@@ -1400,58 +1419,61 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				"MINUTE",
 				"HOUR",
 				"DATE":
-				return NullExpr, nil, newExprErrorf(expr, true, "EXTRACT from DATE does not support the %s date part", part)
+				return NullExpr, newExprErrorf(expr, true, "EXTRACT from DATE does not support the %s date part", part)
 			default:
-				return NullExpr, nil, newExprErrorf(expr, true, "A valid date part name is required but found %s", e.Part.Name)
+				return NullExpr, newExprErrorf(expr, true, "A valid date part name is required but found %s", e.Part.Name)
 			}
 
 		default:
-			return NullExpr, nil, newExprErrorf(expr, true, "EXTRACT does not support literal %s arguments", s.ValueType)
+			return NullExpr, newExprErrorf(expr, true, "EXTRACT does not support literal %s arguments", ex.ValueType)
 		}
 
 		return Expr{
 			ValueType: ValueType{Code: code},
 			Raw:       raw,
-		}, data, nil
+			Args:      args,
+		}, nil
 
 	case *ast.CaseExpr:
-		return NullExpr, nil, newExprErrorf(expr, false, "Case not supported yet")
+		return NullExpr, newExprErrorf(expr, false, "Case not supported yet")
 
 	case *ast.ParenExpr:
-		s, data, err := b.buildExpr(e.Expr)
+		ex, err := b.buildExpr(e.Expr)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Paren")
+			return NullExpr, wrapExprError(err, expr, "Paren")
 		}
 
 		return Expr{
-			ValueType: s.ValueType,
-			Raw:       fmt.Sprintf("(%s)", s.Raw),
-		}, data, nil
+			ValueType: ex.ValueType,
+			Raw:       fmt.Sprintf("(%s)", ex.Raw),
+			Args:      ex.Args,
+		}, nil
 
 	case *ast.ScalarSubQuery:
-		query, data, items, err := BuildQuery(b.db, e.Query, b.params, false)
+		query, args, items, err := BuildQuery(b.db, e.Query, b.params, false)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Scalar")
+			return NullExpr, wrapExprError(err, expr, "Scalar")
 		}
 		if len(items) != 1 {
-			return NullExpr, nil, newExprErrorf(expr, true, "Scalar subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
+			return NullExpr, newExprErrorf(expr, true, "Scalar subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
 		}
 		return Expr{
 			ValueType: items[0].ValueType, // inherit ValueType from result item
 			Raw:       fmt.Sprintf("(%s)", query),
-		}, data, nil
+			Args:      args,
+		}, nil
 
 	case *ast.ArraySubQuery:
-		query, data, items, err := BuildQuery(b.db, e.Query, b.params, true)
+		query, args, items, err := BuildQuery(b.db, e.Query, b.params, true)
 		if err != nil {
-			return NullExpr, nil, wrapExprError(err, expr, "Array")
+			return NullExpr, wrapExprError(err, expr, "Array")
 		}
 		if len(items) != 1 {
-			return NullExpr, nil, newExprErrorf(expr, true, "ARRAY subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
+			return NullExpr, newExprErrorf(expr, true, "ARRAY subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values")
 		}
 		if items[0].ValueType.Code == TCArray {
 			msg := "Cannot use array subquery with column of type %s because nested arrays are not supported"
-			return NullExpr, nil, newExprErrorf(expr, true, msg, items[0].ValueType)
+			return NullExpr, newExprErrorf(expr, true, msg, items[0].ValueType)
 		}
 
 		return Expr{
@@ -1459,44 +1481,46 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				Code:      TCArray,
 				ArrayType: &items[0].ValueType,
 			},
-			Raw: fmt.Sprintf("(SELECT JSON_GROUP_ARRAY(%s) FROM (%s))", items[0].Expr.Raw, query),
-		}, data, nil
+			Raw:  fmt.Sprintf("(SELECT JSON_GROUP_ARRAY(%s) FROM (%s))", items[0].Expr.Raw, query),
+			Args: args,
+		}, nil
 
 	case *ast.ExistsSubQuery:
-		query, data, _, err := BuildQuery(b.db, e.Query, b.params, false)
+		query, args, _, err := BuildQuery(b.db, e.Query, b.params, false)
 		if err != nil {
-			return NullExpr, nil, newExprErrorf(expr, false, "BuildQuery error for %T: %v", err, e)
+			return NullExpr, newExprErrorf(expr, false, "BuildQuery error for %T: %v", err, e)
 		}
 		return Expr{
 			ValueType: ValueType{
 				Code: TCBool,
 			},
-			Raw: fmt.Sprintf("EXISTS(%s)", query),
-		}, data, nil
+			Raw:  fmt.Sprintf("EXISTS(%s)", query),
+			Args: args,
+		}, nil
 
 	case *ast.ArrayLiteral:
-		var data []interface{}
+		var args []interface{}
 		var ss []string
 		var vts []ValueType
 		for i := range e.Values {
-			s, d, err := b.buildExpr(e.Values[i])
+			ex, err := b.buildExpr(e.Values[i])
 			if err != nil {
-				return NullExpr, nil, wrapExprError(err, expr, "ArrayLiteral")
+				return NullExpr, wrapExprError(err, expr, "ArrayLiteral")
 			}
 
-			data = append(data, d...)
-			ss = append(ss, s.Raw)
-			vts = append(vts, s.ValueType)
+			args = append(args, ex.Args...)
+			ss = append(ss, ex.Raw)
+			vts = append(vts, ex.ValueType)
 		}
 
 		vt, err := decideArrayElementsValueType(vts...)
 		if err != nil {
-			return NullExpr, nil, newExprErrorf(expr, true, err.Error())
+			return NullExpr, newExprErrorf(expr, true, err.Error())
 		}
 
 		if vt.Code == TCArray {
 			msg := "Cannot construct array with element type %s because nested arrays are not supported"
-			return NullExpr, nil, newExprErrorf(expr, true, msg, vt)
+			return NullExpr, newExprErrorf(expr, true, msg, vt)
 		}
 
 		// TODO: allow to use both Int64 and Float64
@@ -1506,8 +1530,9 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 				Code:      TCArray,
 				ArrayType: &vt,
 			},
-			Raw: fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(ss, ", ")),
-		}, data, nil
+			Raw:  fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(ss, ", ")),
+			Args: args,
+		}, nil
 
 	case *ast.StructLiteral:
 		var names []string
@@ -1526,7 +1551,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 			}
 		} else {
 			if len(e.Fields) != len(e.Values) {
-				return NullExpr, nil, newExprErrorf(expr, true, "STRUCT type has %d fields but constructor call has %d fields", len(e.Fields), len(e.Values))
+				return NullExpr, newExprErrorf(expr, true, "STRUCT type has %d fields but constructor call has %d fields", len(e.Fields), len(e.Values))
 			}
 
 			typedef = true
@@ -1540,32 +1565,32 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 
 		namesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(names, ", "))
 
-		var data []interface{}
+		var args []interface{}
 		var values []string
 		for i, v := range e.Values {
-			s, d, err := b.buildExpr(v)
+			ex, err := b.buildExpr(v)
 			if err != nil {
-				return NullExpr, nil, wrapExprError(err, expr, "Values")
+				return NullExpr, wrapExprError(err, expr, "Values")
 			}
-			data = append(data, d...)
+			args = append(args, ex.Args...)
 
-			if s.ValueType.Code == TCStruct {
+			if ex.ValueType.Code == TCStruct {
 				msg := `Unsupported query shape: A struct value cannot be returned as a column value. Rewrite the query to flatten the struct fields in the result.`
-				return NullExpr, nil, newExprUnimplementedErrorf(expr, msg)
+				return NullExpr, newExprUnimplementedErrorf(expr, msg)
 			}
 
 			// If types of fields are defined, check type compatibility with the value
 			// otherwise use the type of the value as is
 			if typedef {
-				if !compareValueType(s.ValueType, *vt.StructType.FieldTypes[i]) {
+				if !compareValueType(ex.ValueType, *vt.StructType.FieldTypes[i]) {
 					msg := "Struct field %d has type literal %s which does not coerce to %s"
-					return NullExpr, nil, newExprErrorf(expr, true, msg, i+1, s.ValueType, *vt.StructType.FieldTypes[i])
+					return NullExpr, newExprErrorf(expr, true, msg, i+1, ex.ValueType, *vt.StructType.FieldTypes[i])
 				}
 			} else {
 				vt.StructType.FieldNames = append(vt.StructType.FieldNames, "")
-				vt.StructType.FieldTypes = append(vt.StructType.FieldTypes, &s.ValueType)
+				vt.StructType.FieldTypes = append(vt.StructType.FieldTypes, &ex.ValueType)
 			}
-			values = append(values, s.Raw)
+			values = append(values, ex.Raw)
 		}
 		valuesObj := fmt.Sprintf("JSON_ARRAY(%s)", strings.Join(values, ", "))
 		raw := fmt.Sprintf(`JSON_OBJECT("keys", %s, "values", %s)`, namesObj, valuesObj)
@@ -1573,78 +1598,79 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		return Expr{
 			Raw:       raw,
 			ValueType: vt,
-		}, data, nil
+			Args:      args,
+		}, nil
 
 	case *ast.NullLiteral:
 		return Expr{
 			ValueType: ValueType{Code: TCInt64},
 			Raw:       "NULL",
-		}, nil, nil
+		}, nil
 
 	case *ast.BoolLiteral:
 		if e.Value {
 			return Expr{
 				ValueType: ValueType{Code: TCBool},
 				Raw:       "TRUE",
-			}, nil, nil
+			}, nil
 		}
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
 			Raw:       "FALSE",
-		}, nil, nil
+		}, nil
 
 	case *ast.FloatLiteral:
 		return Expr{
 			ValueType: ValueType{Code: TCFloat64},
 			Raw:       e.Value,
-		}, nil, nil
+		}, nil
 
 	case *ast.IntLiteral:
 		n, err := strconv.ParseInt(e.Value, 0, 64)
 		if err != nil {
-			return NullExpr, nil, newExprErrorf(expr, false, "unexpected format %q as int64: %v", e.Value, err)
+			return NullExpr, newExprErrorf(expr, false, "unexpected format %q as int64: %v", e.Value, err)
 		}
 		return Expr{
 			ValueType: ValueType{Code: TCInt64},
 			Raw:       strconv.FormatInt(n, 10),
-		}, nil, nil
+		}, nil
 
 	case *ast.StringLiteral:
 		return Expr{
 			ValueType: ValueType{Code: TCString},
 			Raw:       fmt.Sprintf("%q", e.Value),
-		}, nil, nil
+		}, nil
 
 	case *ast.BytesLiteral:
 		return Expr{
 			ValueType: ValueType{Code: TCBytes},
 			Raw:       `"` + string(e.Value) + `"`,
-		}, nil, nil
+		}, nil
 
 	case *ast.DateLiteral:
 		t, ok := parseDateLiteral(e.Value.Value)
 		if !ok {
-			return NullExpr, nil, newExprErrorf(expr, true, "Invalid DATE literal")
+			return NullExpr, newExprErrorf(expr, true, "Invalid DATE literal")
 		}
 		return Expr{
 			ValueType: ValueType{Code: TCDate},
 			Raw:       `"` + t.Format("2006-01-02") + `"`,
-		}, nil, nil
+		}, nil
 
 	case *ast.TimestampLiteral:
 		t, ok := parseTimestampLiteral(e.Value.Value)
 		if !ok {
-			return NullExpr, nil, newExprErrorf(expr, true, "Invalid TIMESTAMP literal")
+			return NullExpr, newExprErrorf(expr, true, "Invalid TIMESTAMP literal")
 		}
 		return Expr{
 			ValueType: ValueType{Code: TCTimestamp},
 			Raw:       `"` + t.Format(time.RFC3339Nano) + `"`,
-		}, nil, nil
+		}, nil
 
 	case *ast.Param:
 		v, ok := b.params[e.Name]
 		if !ok {
-			return NullExpr, nil, newExprErrorf(expr, true, "params not found: %s", e.Name)
+			return NullExpr, newExprErrorf(expr, true, "params not found: %s", e.Name)
 		}
 		return b.expandParamByPlaceholders(v)
 
@@ -1657,20 +1683,20 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 					StructType: tbl.ToStruct(),
 				},
 				Raw: e.Name,
-			}, nil, nil
+			}, nil
 		} else {
 			if b.rootView == nil {
-				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
+				return NullExpr, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
 			}
 
 			item, ambiguous, notfound := b.rootView.Get(e.Name)
 			if notfound {
-				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
+				return NullExpr, newExprErrorf(expr, true, "Unrecognized name: %s", e.Name)
 			}
 			if ambiguous {
-				return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", e.Name)
+				return NullExpr, newExprErrorf(expr, true, "Column name %s is ambiguous", e.Name)
 			}
-			return item.Expr, nil, nil
+			return item.Expr, nil
 		}
 	case *ast.Path:
 		firstName := e.Idents[0].Name
@@ -1690,15 +1716,15 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		} else {
 			// If not found in tables, look the results items of root
 			if b.rootView == nil {
-				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", firstName)
+				return NullExpr, newExprErrorf(expr, true, "Unrecognized name: %s", firstName)
 			}
 
 			item, ambiguous, notfound := b.rootView.Get(firstName)
 			if notfound {
-				return NullExpr, nil, newExprErrorf(expr, true, "Unrecognized name: %s", firstName)
+				return NullExpr, newExprErrorf(expr, true, "Unrecognized name: %s", firstName)
 			}
 			if ambiguous {
-				return NullExpr, nil, newExprErrorf(expr, true, "Column name %s is ambiguous", firstName)
+				return NullExpr, newExprErrorf(expr, true, "Column name %s is ambiguous", firstName)
 			}
 
 			curExpr = item.Expr
@@ -1708,15 +1734,15 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, []interface{}, error) {
 		for _, ident := range remains {
 			next, err := b.accessField(curExpr, ident.Name)
 			if err != nil {
-				return NullExpr, nil, wrapExprError(err, expr, "Path")
+				return NullExpr, wrapExprError(err, expr, "Path")
 			}
 
 			curExpr = next
 		}
 
-		return curExpr, nil, nil
+		return curExpr, nil
 	default:
-		return NullExpr, nil, newExprErrorf(expr, false, "unknown expression")
+		return NullExpr, newExprErrorf(expr, false, "unknown expression")
 	}
 }
 
