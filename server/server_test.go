@@ -17,6 +17,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -1668,7 +1669,7 @@ func TestDropDatabase(t *testing.T) {
 	database := "projects/fake/instances/fake/databases/fake"
 
 	t.Run("Success", func(t *testing.T) {
-		db, err := s.createDatabase(database)
+		_, err := s.createDatabase(database)
 		if err != nil {
 			t.Fatalf("failed to create database: %s", err)
 		}
@@ -1678,11 +1679,12 @@ func TestDropDatabase(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("failed to drop database: %s", err)
 		}
-		if _, ok := s.db[database]; ok {
-			t.Error("failed to delete database from map")
-		}
-		if err := db.db.Ping(); err == nil {
-			t.Error("db.db sould be closed")
+
+		_, err = s.GetDatabase(ctx, &adminv1pb.GetDatabaseRequest{
+			Name: database,
+		})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("failed to drop database: %s", err)
 		}
 
 		// DropDatabase returns no error even if the database is not exist
@@ -1715,4 +1717,51 @@ func TestDropDatabase(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestListDatabases(t *testing.T) {
+	ctx := context.Background()
+	s := newTestServer()
+
+	databases := []string{
+		"projects/fake/instances/fake/databases/fake",
+		"projects/fake/instances/fake/databases/fake2",
+		"projects/fake/instances/fake/databases/fake3",
+	}
+
+	for _, name := range databases {
+		_, err := s.createDatabase(name)
+		if err != nil {
+			t.Fatalf("failed to create database: %s", err)
+		}
+	}
+
+	res, err := s.ListDatabases(ctx, &adminv1pb.ListDatabasesRequest{
+		Parent: "projects/fake/instances/fake",
+	})
+	if err != nil {
+		t.Fatalf("failed to list databases: %s", err)
+	}
+
+	sort.Slice(res.Databases, func(i, j int) bool {
+		return res.Databases[i].Name < res.Databases[j].Name
+	})
+
+	expected := []*adminv1pb.Database{
+		{
+			Name:  "projects/fake/instances/fake/databases/fake",
+			State: adminv1pb.Database_READY,
+		},
+		{
+			Name:  "projects/fake/instances/fake/databases/fake2",
+			State: adminv1pb.Database_READY,
+		},
+		{
+			Name:  "projects/fake/instances/fake/databases/fake3",
+			State: adminv1pb.Database_READY,
+		},
+	}
+	if diff := cmp.Diff(expected, res.Databases); diff != "" {
+		t.Errorf("(-got, +want)\n%s", diff)
+	}
 }

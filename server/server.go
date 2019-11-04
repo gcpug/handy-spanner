@@ -30,6 +30,7 @@ import (
 	"github.com/golang/protobuf/ptypes/empty"
 	emptypb "github.com/golang/protobuf/ptypes/empty"
 	structpb "github.com/golang/protobuf/ptypes/struct"
+	iamv1pb "google.golang.org/genproto/googleapis/iam/v1"
 	lropb "google.golang.org/genproto/googleapis/longrunning"
 	adminv1pb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
@@ -61,8 +62,6 @@ type server struct {
 
 	sessionMu sync.RWMutex
 	sessions  map[string]*session
-
-	adminv1pb.DatabaseAdminServer
 }
 
 func (s *server) ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL) error {
@@ -127,6 +126,39 @@ func (s *server) CreateDatabase(ctx context.Context, req *adminv1pb.CreateDataba
 	return op, nil
 }
 
+// Gets the state of a Cloud Spanner database.
+func (s *server) GetDatabase(ctx context.Context, req *adminv1pb.GetDatabaseRequest) (*adminv1pb.Database, error) {
+	_, err := s.getDatabase(req.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &adminv1pb.Database{
+		Name:  req.Name,
+		State: adminv1pb.Database_READY,
+	}, nil
+}
+
+// Lists Cloud Spanner databases.
+func (s *server) ListDatabases(ctx context.Context, req *adminv1pb.ListDatabasesRequest) (*adminv1pb.ListDatabasesResponse, error) {
+	s.dbMu.RLock()
+	defer s.dbMu.RUnlock()
+
+	// TODO: filter by parent
+
+	dbs := make([]*adminv1pb.Database, 0, len(s.db))
+	for name := range s.db {
+		dbs = append(dbs, &adminv1pb.Database{
+			Name:  name,
+			State: adminv1pb.Database_READY,
+		})
+	}
+
+	// TODO: respect page token
+
+	return &adminv1pb.ListDatabasesResponse{Databases: dbs}, nil
+}
+
 func (s *server) UpdateDatabaseDdl(ctx context.Context, req *adminv1pb.UpdateDatabaseDdlRequest) (*lropb.Operation, error) {
 	var stmts []ast.DDL
 	for _, s := range req.Statements {
@@ -157,6 +189,25 @@ func (s *server) DropDatabase(ctx context.Context, req *adminv1pb.DropDatabaseRe
 		return nil, err
 	}
 	return &empty.Empty{}, nil
+}
+
+// Returns the schema of a Cloud Spanner database as a list of formatted
+// DDL statements. This method does not show pending schema updates, those may
+// be queried using the [Operations][google.longrunning.Operations] API.
+func (s *server) GetDatabaseDdl(context.Context, *adminv1pb.GetDatabaseDdlRequest) (*adminv1pb.GetDatabaseDdlResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ExecuteSql")
+}
+
+func (s *server) SetIamPolicy(context.Context, *iamv1pb.SetIamPolicyRequest) (*iamv1pb.Policy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: SetIamPolixy")
+}
+
+func (s *server) GetIamPolicy(context.Context, *iamv1pb.GetIamPolicyRequest) (*iamv1pb.Policy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: GetIamPolicy")
+}
+
+func (s *server) TestIamPermissions(context.Context, *iamv1pb.TestIamPermissionsRequest) (*iamv1pb.TestIamPermissionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: TestIamPermissions")
 }
 
 func (s *server) ListOperations(ctx context.Context, req *lropb.ListOperationsRequest) (*lropb.ListOperationsResponse, error) {
@@ -294,6 +345,17 @@ func (s *server) getOrCreateDatabase(name string) (*database, error) {
 	return db, nil
 }
 
+func (s *server) getDatabase(name string) (*database, error) {
+	s.dbMu.RLock()
+	db, ok := s.db[name]
+	s.dbMu.RUnlock()
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "Database not found: %s", name)
+	}
+
+	return db, nil
+}
+
 func (s *server) dropDatabase(name string) error {
 	if _, ok := parseDatabaseName(name); !ok {
 		return status.Error(codes.InvalidArgument, "Invalid DropDatabase request.")
@@ -306,7 +368,7 @@ func (s *server) dropDatabase(name string) error {
 		return nil
 	}
 
-	if err := db.db.Close(); err != nil {
+	if err := db.Close(); err != nil {
 		return status.Errorf(codes.Internal, "Failed to close the database: %s", err)
 	}
 
