@@ -41,6 +41,8 @@ type Database interface {
 	Replace(ctx context.Context, tbl string, cols []string, values []*structpb.ListValue) error
 	InsertOrUpdate(ctx context.Context, tbl string, cols []string, values []*structpb.ListValue) error
 	Delete(ctx context.Context, table string, keyset *KeySet) error
+
+	Close() error
 }
 
 var _ Database = (*database)(nil)
@@ -529,6 +531,23 @@ func (db *database) CreateIndex(ctx context.Context, stmt *ast.CreateIndex) erro
 	if _, err := db.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("failed to create index for %s: %v", index.Name(), err)
 	}
+
+	return nil
+}
+
+func (d *database) Close() error {
+	if d.db == nil {
+		return nil
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if err := d.db.Close(); err != nil {
+		return err
+	}
+
+	d.db = nil
 
 	return nil
 }

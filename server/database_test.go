@@ -505,6 +505,19 @@ func TestApplyDDL(t *testing.T) {
 	}
 }
 
+func TestClose(t *testing.T) {
+	db := newDatabase()
+	err := db.Close()
+	if err != nil {
+		t.Fatalf("failed to close: %v", err)
+	}
+
+	err = db.Close()
+	if err != nil {
+		t.Fatalf("failed to close: %v", err)
+	}
+}
+
 func TestRead(t *testing.T) {
 	ctx := context.Background()
 	db := newDatabase()
