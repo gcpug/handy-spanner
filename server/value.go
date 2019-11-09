@@ -21,10 +21,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
 	structpb "github.com/golang/protobuf/ptypes/struct"
+	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -582,7 +584,7 @@ func spannerValue2DatabaseValue(v *structpb.Value, col Column) (interface{}, err
 		}
 	}
 
-	vv, err := makeDataFromSpannerValue(v, col.valueType)
+	vv, err := makeDataFromSpannerValue(col.Name(), v, col.valueType)
 	if err != nil {
 		return nil, err
 	}
@@ -608,4 +610,443 @@ func decodeBase64(s string) ([]byte, error) {
 		return base64.RawStdEncoding.DecodeString(s)
 	}
 	return b, nil
+}
+
+func makeSpannerTypeFromValueType(typ ValueType) *spannerpb.Type {
+	var code spannerpb.TypeCode
+	switch typ.Code {
+	case TCBool:
+		code = spannerpb.TypeCode_BOOL
+	case TCInt64:
+		code = spannerpb.TypeCode_INT64
+	case TCFloat64:
+		code = spannerpb.TypeCode_FLOAT64
+	case TCTimestamp:
+		code = spannerpb.TypeCode_TIMESTAMP
+	case TCDate:
+		code = spannerpb.TypeCode_DATE
+	case TCString:
+		code = spannerpb.TypeCode_STRING
+	case TCBytes:
+		code = spannerpb.TypeCode_BYTES
+	case TCArray:
+		code = spannerpb.TypeCode_ARRAY
+	case TCStruct:
+		code = spannerpb.TypeCode_STRUCT
+	}
+
+	st := &spannerpb.Type{Code: code}
+	if code == spannerpb.TypeCode_ARRAY {
+		st = &spannerpb.Type{
+			Code:             code,
+			ArrayElementType: makeSpannerTypeFromValueType(*typ.ArrayType),
+		}
+	}
+	if code == spannerpb.TypeCode_STRUCT {
+		n := len(typ.StructType.FieldTypes)
+		fields := make([]*spannerpb.StructType_Field, n)
+		for i := 0; i < n; i++ {
+			fields[i] = &spannerpb.StructType_Field{
+				Name: typ.StructType.FieldNames[i],
+				Type: makeSpannerTypeFromValueType(*typ.StructType.FieldTypes[i]),
+			}
+		}
+
+		st = &spannerpb.Type{
+			Code: code,
+			StructType: &spannerpb.StructType{
+				Fields: fields,
+			},
+		}
+	}
+	return st
+}
+
+func makeValueTypeFromSpannerType(typ *spannerpb.Type) (ValueType, error) {
+	switch typ.Code {
+	case spannerpb.TypeCode_BOOL:
+		return ValueType{
+			Code: TCBool,
+		}, nil
+	case spannerpb.TypeCode_INT64:
+		return ValueType{
+			Code: TCInt64,
+		}, nil
+	case spannerpb.TypeCode_FLOAT64:
+		return ValueType{
+			Code: TCFloat64,
+		}, nil
+	case spannerpb.TypeCode_TIMESTAMP:
+		return ValueType{
+			Code: TCTimestamp,
+		}, nil
+	case spannerpb.TypeCode_DATE:
+		return ValueType{
+			Code: TCDate,
+		}, nil
+	case spannerpb.TypeCode_STRING:
+		return ValueType{
+			Code: TCString,
+		}, nil
+	case spannerpb.TypeCode_BYTES:
+		return ValueType{
+			Code: TCBytes,
+		}, nil
+	case spannerpb.TypeCode_ARRAY:
+		var array *ValueType
+		if typ.ArrayElementType != nil {
+			vt, err := makeValueTypeFromSpannerType(typ.ArrayElementType)
+			if err != nil {
+				return ValueType{}, err
+			}
+			array = &vt
+		}
+		return ValueType{
+			Code:      TCArray,
+			ArrayType: array,
+		}, nil
+	case spannerpb.TypeCode_STRUCT:
+		fields := typ.GetStructType().GetFields()
+		names := make([]string, len(fields))
+		types := make([]*ValueType, len(fields))
+		for i, field := range fields {
+			vt, err := makeValueTypeFromSpannerType(field.Type)
+			if err != nil {
+				return ValueType{}, err
+			}
+			names[i] = field.Name
+			types[i] = &vt
+		}
+		return ValueType{
+			Code: TCStruct,
+			StructType: &StructType{
+				FieldNames: names,
+				FieldTypes: types,
+			},
+		}, nil
+	}
+
+	return ValueType{}, fmt.Errorf("unknown code for spanner.Type: %v", typ.Code)
+}
+
+func spannerValueFromValue(x interface{}) (*structpb.Value, error) {
+	switch x := x.(type) {
+	case nil:
+		return &structpb.Value{Kind: &structpb.Value_NullValue{}}, nil
+
+	case bool:
+		return &structpb.Value{Kind: &structpb.Value_BoolValue{x}}, nil
+	case int64:
+		// The Spanner int64 is actually a decimal string.
+		s := strconv.FormatInt(x, 10)
+		return &structpb.Value{Kind: &structpb.Value_StringValue{s}}, nil
+	case float64:
+		return &structpb.Value{Kind: &structpb.Value_NumberValue{x}}, nil
+	case string:
+		return &structpb.Value{Kind: &structpb.Value_StringValue{x}}, nil
+	case []byte:
+		if x == nil {
+			return &structpb.Value{Kind: &structpb.Value_NullValue{}}, nil
+		} else {
+			return &structpb.Value{Kind: &structpb.Value_StringValue{encodeBase64(x)}}, nil
+		}
+	case StructValue:
+		n := len(x.Values)
+		fields := make(map[string]*structpb.Value)
+		for i := 0; i < n; i++ {
+			elem := x.Values[i]
+			v, err := spannerValueFromValue(elem)
+			if err != nil {
+				return nil, err
+			}
+			fields[x.Keys[i]] = v
+		}
+		return &structpb.Value{Kind: &structpb.Value_StructValue{
+			StructValue: &structpb.Struct{
+				Fields: fields,
+			},
+		}}, nil
+
+	case []*bool, []*int64, []*float64, []*string, []*StructValue, [][]byte:
+		rv := reflect.ValueOf(x)
+		n := rv.Len()
+		vs := make([]*structpb.Value, n)
+		for i := 0; i < n; i++ {
+			var elem interface{}
+
+			rvv := rv.Index(i)
+			if !rvv.IsNil() {
+				elem = reflect.Indirect(rv.Index(i)).Interface()
+			}
+
+			v, err := spannerValueFromValue(elem)
+			if err != nil {
+				return nil, err
+			}
+			vs[i] = v
+		}
+		return &structpb.Value{Kind: &structpb.Value_ListValue{
+			&structpb.ListValue{Values: vs},
+		}}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown database value type %T", x)
+	}
+}
+
+func makeDataFromSpannerValue(key string, v *structpb.Value, typ ValueType) (interface{}, error) {
+	if typ.StructType != nil {
+		return nil, newBindingErrorf(key, typ, "Struct type is not supported yet")
+	}
+
+	if typ.Code == TCArray {
+		if typ.ArrayType == nil {
+			return nil, status.Error(codes.InvalidArgument, "The array_element_type field is required for ARRAYs")
+		}
+
+		if _, ok := v.Kind.(*structpb.Value_NullValue); ok {
+			switch typ.ArrayType.Code {
+			case TCBool:
+				return []bool(nil), nil
+			case TCInt64:
+				return []int64(nil), nil
+			case TCFloat64:
+				return []float64(nil), nil
+			case TCTimestamp, TCDate, TCString:
+				return []string(nil), nil
+			case TCBytes:
+				return [][]byte(nil), nil
+			case TCArray, TCStruct:
+				// this should not be error actually but no reason to support.
+				return nil, newBindingErrorf(key, typ, "nested Array or Struct for Array is not supported yet")
+			default:
+				return nil, fmt.Errorf("unexpected type %d for Null value as Array", typ.ArrayType.Code)
+			}
+		}
+
+		vv, ok := v.Kind.(*structpb.Value_ListValue)
+		if !ok {
+			return nil, newBindingErrorf(key, typ, "unexpected value %T and type %s as Array", v.Kind, typ)
+		}
+
+		n := len(vv.ListValue.Values)
+		switch typ.ArrayType.Code {
+		case TCBool:
+			ret := make([]*bool, n)
+			for i, vv := range vv.ListValue.Values {
+				elemKey := fmt.Sprintf("%s[%d]", key, i)
+				vvv, err := makeDataFromSpannerValue(elemKey, vv, *typ.ArrayType)
+				if err != nil {
+					return nil, err
+				}
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.(bool)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = &vvvv
+				}
+			}
+			return &ArrayValueEncoder{Values: ret}, nil
+		case TCInt64:
+			ret := make([]*int64, n)
+			for i, vv := range vv.ListValue.Values {
+				elemKey := fmt.Sprintf("%s[%d]", key, i)
+				vvv, err := makeDataFromSpannerValue(elemKey, vv, *typ.ArrayType)
+				if err != nil {
+					return nil, err
+				}
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.(int64)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = &vvvv
+				}
+			}
+			return &ArrayValueEncoder{Values: ret}, nil
+		case TCFloat64:
+			ret := make([]*float64, n)
+			for i, vv := range vv.ListValue.Values {
+				elemKey := fmt.Sprintf("%s[%d]", key, i)
+				vvv, err := makeDataFromSpannerValue(elemKey, vv, *typ.ArrayType)
+				if err != nil {
+					return nil, err
+				}
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.(float64)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = &vvvv
+				}
+			}
+			return &ArrayValueEncoder{Values: ret}, nil
+		case TCTimestamp, TCDate, TCString:
+			ret := make([]*string, n)
+			for i, vv := range vv.ListValue.Values {
+				elemKey := fmt.Sprintf("%s[%d]", key, i)
+				vvv, err := makeDataFromSpannerValue(elemKey, vv, *typ.ArrayType)
+				if err != nil {
+					return nil, err
+				}
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.(string)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = &vvvv
+				}
+			}
+			return &ArrayValueEncoder{Values: ret}, nil
+		case TCBytes:
+			ret := make([][]byte, n)
+			for i, vv := range vv.ListValue.Values {
+				elemKey := fmt.Sprintf("%s[%d]", key, i)
+				vvv, err := makeDataFromSpannerValue(elemKey, vv, *typ.ArrayType)
+				if err != nil {
+					return nil, err
+				}
+				if vvv == nil {
+					ret[i] = nil
+				} else {
+					vvvv, ok := vvv.([]byte)
+					if !ok {
+						panic(fmt.Sprintf("unexpected value type: %T", vvv))
+					}
+					ret[i] = vvvv
+				}
+			}
+			return &ArrayValueEncoder{Values: ret}, nil
+		case TCArray, TCStruct:
+			// just visit elements for appropriate error handling
+			for i, vv := range vv.ListValue.Values {
+				elemKey := fmt.Sprintf("%s[%d]", key, i)
+				_, err := makeDataFromSpannerValue(elemKey, vv, *typ.ArrayType)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			// must be unreachable
+			panic("array of array or array of struct is not supported")
+
+		default:
+			return nil, fmt.Errorf("unknown TypeCode for ArrayElement %v", typ.Code)
+		}
+	}
+
+	if _, ok := v.Kind.(*structpb.Value_NullValue); ok {
+		return nil, nil
+	}
+
+	switch typ.Code {
+	case TCBool:
+		switch vv := v.Kind.(type) {
+		case *structpb.Value_BoolValue:
+			return vv.BoolValue, nil
+		}
+	case TCInt64:
+		switch vv := v.Kind.(type) {
+		case *structpb.Value_StringValue:
+			// base is always 10
+			n, err := strconv.ParseInt(vv.StringValue, 10, 64)
+			if err != nil {
+				return nil, newBindingErrorf(key, typ, "unexpected format %q as int64: %v", vv.StringValue, err)
+			}
+			return n, nil
+		}
+
+	case TCFloat64:
+		switch vv := v.Kind.(type) {
+		case *structpb.Value_NumberValue:
+			return vv.NumberValue, nil
+		}
+
+	case TCTimestamp:
+		switch vv := v.Kind.(type) {
+		case *structpb.Value_StringValue:
+			s := vv.StringValue
+			if _, err := time.Parse(time.RFC3339Nano, s); err != nil {
+				return nil, newBindingErrorf(key, typ, "unexpected format %q as timestamp: %v", s, err)
+			}
+			return s, nil
+		}
+
+	case TCDate:
+		switch vv := v.Kind.(type) {
+		case *structpb.Value_StringValue:
+			s := vv.StringValue
+			if _, err := time.Parse("2006-01-02", s); err != nil {
+				return nil, newBindingErrorf(key, typ, "unexpected format for %q as date: %v", s, err)
+			}
+			return s, nil
+		}
+
+	case TCString:
+		switch vv := v.Kind.(type) {
+		case *structpb.Value_StringValue:
+			return vv.StringValue, nil
+		}
+	case TCBytes:
+		switch vv := v.Kind.(type) {
+		case *structpb.Value_StringValue:
+			b, err := decodeBase64(vv.StringValue)
+			if err != nil {
+				return nil, newBindingErrorf(key, typ, "decoding base64 failed: %v", err)
+			}
+			return b, nil
+		}
+	default:
+		return nil, fmt.Errorf("unknown Type %s", typ)
+	}
+
+	return nil, newBindingErrorf(key, typ, "unexpected value %T and type %s", v.Kind, typ)
+}
+
+func makeValueFromSpannerValue(key string, v *structpb.Value, typ *spannerpb.Type) (Value, error) {
+	vt, err := makeValueTypeFromSpannerType(typ)
+	if err != nil {
+		return Value{}, err
+	}
+
+	data, err := makeDataFromSpannerValue(key, v, vt)
+	if err != nil {
+		return Value{}, err
+	}
+
+	return Value{
+		Data: data,
+		Type: vt,
+	}, nil
+}
+
+type bindingError struct {
+	key      string
+	msg      string
+	expected ValueType
+}
+
+func (e *bindingError) Error() string {
+	return e.msg
+}
+
+func (e *bindingError) GRPCStatus() *status.Status {
+	return status.Newf(codes.InvalidArgument, "Invalid value for bind parameter %s: Expected %s.", e.key, e.expected)
+}
+
+func newBindingErrorf(key string, expected ValueType, format string, a ...interface{}) error {
+	return &bindingError{
+		key:      key,
+		expected: expected,
+		msg:      fmt.Sprintf(format, a...),
+	}
 }

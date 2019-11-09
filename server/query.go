@@ -724,7 +724,7 @@ func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, view *Table
 			case *ast.Param:
 				vv, ok := b.params[v.Name]
 				if !ok {
-					return "", nil, fmt.Errorf("params not found: %v", v.Name)
+					return "", nil, fmt.Errorf("No parameter found for binding: %s", v.Name)
 				}
 				collate = "?"
 				data = append(data, vv)
@@ -1670,7 +1670,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 	case *ast.Param:
 		v, ok := b.params[e.Name]
 		if !ok {
-			return NullExpr, newExprErrorf(expr, true, "params not found: %s", e.Name)
+			return NullExpr, newExprErrorf(expr, true, "No parameter found for binding: %s", e.Name)
 		}
 		return b.expandParamByPlaceholders(v)
 
