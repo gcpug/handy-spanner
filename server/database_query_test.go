@@ -2386,6 +2386,121 @@ func TestQuery(t *testing.T) {
 				code: codes.OutOfRange,
 				msg:  regexp.MustCompile(`^Bad double value: xx`),
 			},
+			{
+				name: "Cast_String_Date_Valid",
+				sql:  `SELECT CAST("1999-01-01" AS DATE)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-01"},
+				},
+			},
+			{
+				name: "Cast_String_Date_Valid2",
+				sql:  `SELECT CAST("1999-4-5" AS DATE)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-04-05"},
+				},
+			},
+			{
+				name: "Cast_String_DATE_Invalid",
+				sql:  `SELECT CAST("x" AS DATE)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Could not cast literal "x" to type DATE`),
+			},
+			{
+				name: "Cast_String_DATE_Invalid2",
+				sql:  `SELECT CAST("1999" AS DATE)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Could not cast literal "1999" to type DATE`),
+			},
+			{
+				name: "Cast_String_DATE_Invalid3",
+				sql:  `SELECT CAST("1999-01-50" AS DATE)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Could not cast literal "1999-01-50" to type DATE`),
+			},
+			{
+				name: "Cast_String_Timestamp_Valid",
+				sql:  `SELECT CAST("1999-01-02T20:34:56Z" AS TIMESTAMP)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-02T20:34:56Z"},
+				},
+			},
+			{
+				name: "Cast_String_Timestamp_Valid2",
+				sql:  `SELECT CAST("1999-01-02 01:02:03.123456" AS TIMESTAMP)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-02T09:02:03.123456Z"},
+				},
+			},
+			{
+				name: "Cast_String_TIMESTAMP_Invalid",
+				sql:  `SELECT CAST("x" AS TIMESTAMP)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Could not cast literal "x" to type TIMESTAMP`),
+			},
+			{
+				name: "Cast_String_TIMESTAMP_Invalid2",
+				sql:  `SELECT CAST("1999" AS TIMESTAMP)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Could not cast literal "1999" to type TIMESTAMP`),
+			},
+			{
+				name: "Cast_String_TIMESTAMP_Invalid3",
+				sql:  `SELECT CAST("1999-01-50" AS TIMESTAMP)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Could not cast literal "1999-01-50" to type TIMESTAMP`),
+			},
+
+			{
+				name: "Cast_Date_String_Valid",
+				sql:  `SELECT CAST(DATE "1999-1-1" AS STRING)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-01"},
+				},
+			},
+			{
+				name: "Cast_Date_Timestamp_Valid",
+				sql:  `SELECT CAST(DATE "1999-01-01" AS TIMESTAMP)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-01T08:00:00Z"},
+				},
+			},
+
+			{
+				name: "Cast_Timestamp_String_Valid",
+				sql:  `SELECT CAST(TIMESTAMP "1999-01-02 00:00:00" AS STRING)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-02 00:00:00-08"},
+				},
+			},
+			{
+				name: "Cast_Timestamp_String_Valid2",
+				sql:  `SELECT CAST(TIMESTAMP "1999-01-02 00:00:00Z" AS STRING)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-01 16:00:00-08"},
+				},
+			},
+			{
+				name: "Cast_Timestamp_String_Valid3",
+				sql:  `SELECT CAST(TIMESTAMP "1999-01-02 00:00:00.123456789Z" AS STRING)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-01 16:00:00.123456789-08"},
+				},
+			},
+			{
+				name: "Cast_Timestamp_Date_Valid",
+				sql:  `SELECT CAST(TIMESTAMP "1999-01-02 00:00:00" AS DATE)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-02"},
+				},
+			},
+			{
+				name: "Cast_Timestamp_Date_Valid2",
+				sql:  `SELECT CAST(TIMESTAMP "1999-01-02 00:00:00Z" AS DATE)`,
+				expected: [][]interface{}{
+					[]interface{}{"1999-01-01"},
+				},
+			},
 		},
 
 		"Function": {
