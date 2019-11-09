@@ -17,6 +17,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"testing"
@@ -611,6 +612,71 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 			},
 		},
 
+		"Simple_QueryParam_ImplicitTypeAsInt64": {
+			sql: `SELECT @foo`,
+			params: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"foo": makeStringValue("100"),
+				},
+			},
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
+			expected: [][]*structpb.Value{
+				{makeStringValue("100")},
+			},
+		},
+
+		"Simple_UnusedTypes": {
+			sql: `SELECT 100 v`,
+			types: map[string]*spannerpb.Type{
+				"foo": &spannerpb.Type{
+					Code: spannerpb.TypeCode_INT64,
+				},
+			},
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "v",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
+			expected: [][]*structpb.Value{
+				{makeStringValue("100")},
+			},
+		},
+
+		"Simple_UnusedParams": {
+			sql: `SELECT 100 v`,
+			types: map[string]*spannerpb.Type{
+				"foo": &spannerpb.Type{
+					Code: spannerpb.TypeCode_INT64,
+				},
+			},
+			params: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"foo": makeStringValue("200"),
+				},
+			},
+			fields: []*spannerpb.StructType_Field{
+				{
+					Name: "v",
+					Type: &spannerpb.Type{
+						Code: spannerpb.TypeCode_INT64,
+					},
+				},
+			},
+			expected: [][]*structpb.Value{
+				{makeStringValue("100")},
+			},
+		},
+
 		"FromUnnest_ArrayLiteral": {
 			sql: `SELECT x, y FROM UNNEST (["xxx", "yyy"]) AS x WITH OFFSET y`,
 			fields: []*spannerpb.StructType_Field{
@@ -1189,380 +1255,194 @@ func TestStreamingRead_ValueType(t *testing.T) {
 	}
 }
 
-func TestMakeValueFromSpannerValue(t *testing.T) {
+func TestExecuteStreamingSql_Error(t *testing.T) {
+	ctx := context.Background()
+	s := newTestServer()
+	session, dbName := testCreateSession(t, s)
+
+	// TODO: prepare initial data
+	db, ok := s.db[dbName]
+	if !ok {
+		t.Fatalf("database not found")
+	}
+	for _, s := range allSchema {
+		ddls := parseDDL(t, s)
+		for _, ddl := range ddls {
+			db.ApplyDDL(ctx, ddl)
+		}
+	}
+
 	table := map[string]struct {
-		value    *structpb.Value
-		typ      *spannerpb.Type
-		expected Value
+		sql    string
+		types  map[string]*spannerpb.Type
+		params *structpb.Struct
+		code   codes.Code
+		msg    *regexp.Regexp
 	}{
-		"Null": {
-			value: makeNullValue(),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_INT64,
-			},
-			expected: Value{
-				Data: nil,
-				Type: ValueType{
-					Code: TCInt64,
-				},
-			},
+		"NoParameter": {
+			sql:    `SELECT @foo`,
+			types:  nil,
+			params: nil,
+			code:   codes.InvalidArgument,
+			msg:    regexp.MustCompile(`No parameter found for binding: foo`),
 		},
-		"Int": {
-			value: makeStringValue("100"),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_INT64,
-			},
-			expected: Value{
-				Data: int64(100),
-				Type: ValueType{
-					Code: TCInt64,
-				},
-			},
-		},
-		"String": {
-			value: makeStringValue("xx"),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_STRING,
-			},
-			expected: Value{
-				Data: "xx",
-				Type: ValueType{
-					Code: TCString,
-				},
-			},
-		},
-		"Bool": {
-			value: makeBoolValue(true),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_BOOL,
-			},
-			expected: Value{
-				Data: true,
-				Type: ValueType{
-					Code: TCBool,
-				},
-			},
-		},
-		"Number": {
-			value: makeNumberValue(0.123),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_FLOAT64,
-			},
-			expected: Value{
-				Data: 0.123,
-				Type: ValueType{
-					Code: TCFloat64,
-				},
-			},
-		},
-		"Timestamp": {
-			value: makeStringValue("2012-03-04T00:00:00.123456789Z"),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_TIMESTAMP,
-			},
-			expected: Value{
-				Data: "2012-03-04T00:00:00.123456789Z",
-				Type: ValueType{
-					Code: TCTimestamp,
-				},
-			},
-		},
-		"Date": {
-			value: makeStringValue("2012-03-04"),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_DATE,
-			},
-			expected: Value{
-				Data: "2012-03-04",
-				Type: ValueType{
-					Code: TCDate,
-				},
-			},
-		},
-		"Bytes": {
-			value: makeStringValue("eHh4eHg="),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_BYTES,
-			},
-			expected: Value{
-				Data: []byte("xxxxx"),
-				Type: ValueType{
-					Code: TCBytes,
-				},
-			},
-		},
-		"ListInt": {
-			value: makeListValueAsValue(makeListValue(
-				makeStringValue("100"),
-				makeStringValue("101"),
-			)),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_INT64,
-				},
-			},
-			expected: Value{
-				Data: makeTestWrappedArray(TCInt64, 100, 101),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCInt64,
+		"NoType": {
+			sql:   `SELECT @foo`,
+			types: nil,
+			params: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"foo": &structpb.Value{
+						Kind: &structpb.Value_StringValue{StringValue: "x"},
 					},
 				},
 			},
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Invalid value for bind parameter foo: Expected INT64.`),
 		},
-		"ListString": {
-			value: makeListValueAsValue(makeListValue(
-				makeStringValue("xxx"),
-				makeStringValue("yyy"),
-			)),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_STRING,
-				},
-			},
-			expected: Value{
-				Data: makeTestWrappedArray(TCString, "xxx", "yyy"),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCString,
+
+		"InvalidValueForBinding": {
+			sql: `SELECT @foo`,
+			params: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"foo": &structpb.Value{
+						Kind: &structpb.Value_StringValue{StringValue: "x"},
 					},
 				},
 			},
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Invalid value for bind parameter foo: Expected INT64.`),
 		},
-		"ListStringNull": {
-			value: makeNullValue(),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_STRING,
-				},
-			},
-			expected: Value{
-				Data: []string(nil),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCString,
+
+		"EmptySQL": {
+			sql:  ``,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Invalid ExecuteStreamingSql request.`),
+		},
+		"SQLSyntxError": {
+			sql:  `SELECT`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`^Syntax error: .+`),
+		},
+
+		"BindStruct": {
+			sql: `SELECT @bar`,
+			types: map[string]*spannerpb.Type{
+				"bar": &spannerpb.Type{
+					Code: spannerpb.TypeCode_STRUCT,
+					StructType: &spannerpb.StructType{
+						Fields: []*spannerpb.StructType_Field{
+							{
+								Name: "xxx",
+								Type: &spannerpb.Type{
+									Code: spannerpb.TypeCode_STRING,
+								},
+							},
+							{
+								Name: "yyy",
+								Type: &spannerpb.Type{
+									Code: spannerpb.TypeCode_INT64,
+								},
+							},
+						},
 					},
 				},
 			},
-		},
-		"ListBool": {
-			value: makeListValueAsValue(makeListValue(
-				makeBoolValue(true),
-				makeBoolValue(false),
-			)),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_BOOL,
-				},
-			},
-			expected: Value{
-				Data: makeTestWrappedArray(TCBool, true, false),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCBool,
+			params: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"bar": &structpb.Value{
+						Kind: &structpb.Value_StructValue{StructValue: &structpb.Struct{
+							Fields: map[string]*structpb.Value{
+								"xxx": &structpb.Value{
+									Kind: &structpb.Value_StringValue{StringValue: "xxx"},
+								},
+								"yyy": &structpb.Value{
+									Kind: &structpb.Value_StringValue{StringValue: "100"},
+								},
+							},
+						}},
 					},
 				},
 			},
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Invalid value for bind parameter bar: Expected STRUCT<xxx STRING, yyy INT64>`),
 		},
-		"ListBoolNull": {
-			value: makeNullValue(),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_BOOL,
-				},
-			},
-			expected: Value{
-				Data: []bool(nil),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCBool,
+
+		"BindArrayStruct": {
+			sql: `SELECT @bar`,
+			params: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"bar": &structpb.Value{
+						Kind: &structpb.Value_ListValue{
+							ListValue: &structpb.ListValue{
+								Values: []*structpb.Value{
+									{
+										Kind: &structpb.Value_StructValue{StructValue: &structpb.Struct{
+											Fields: map[string]*structpb.Value{
+												"xxx": &structpb.Value{
+													Kind: &structpb.Value_StringValue{StringValue: "xxx"},
+												},
+												"yyy": &structpb.Value{
+													Kind: &structpb.Value_StringValue{StringValue: "100"},
+												},
+											},
+										}},
+									},
+								},
+							},
+						},
 					},
 				},
 			},
-		},
-		"ListNumber": {
-			value: makeListValueAsValue(makeListValue(
-				makeNumberValue(0.123),
-				makeNumberValue(1.123),
-			)),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_FLOAT64,
-				},
-			},
-			expected: Value{
-				Data: makeTestWrappedArray(TCFloat64, 0.123, 1.123),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCFloat64,
+			types: map[string]*spannerpb.Type{
+				"bar": &spannerpb.Type{
+					Code: spannerpb.TypeCode_ARRAY,
+					ArrayElementType: &spannerpb.Type{
+						Code: spannerpb.TypeCode_STRUCT,
+						StructType: &spannerpb.StructType{
+							Fields: []*spannerpb.StructType_Field{
+								{
+									Name: "xxx",
+									Type: &spannerpb.Type{
+										Code: spannerpb.TypeCode_STRING,
+									},
+								},
+								{
+									Name: "yyy",
+									Type: &spannerpb.Type{
+										Code: spannerpb.TypeCode_INT64,
+									},
+								},
+							},
+						},
 					},
 				},
 			},
-		},
-		"ListNumberNull": {
-			value: makeNullValue(),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_FLOAT64,
-				},
-			},
-			expected: Value{
-				Data: []float64(nil),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCFloat64,
-					},
-				},
-			},
-		},
-		"ListTimestamp": {
-			value: makeListValueAsValue(makeListValue(
-				makeStringValue("2012-03-04T00:00:00.123456789Z"),
-				makeStringValue("2012-03-04T00:00:00.000000000Z"),
-			)),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_TIMESTAMP,
-				},
-			},
-			expected: Value{
-				Data: makeTestWrappedArray(TCString,
-					"2012-03-04T00:00:00.123456789Z",
-					"2012-03-04T00:00:00.000000000Z",
-				),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCTimestamp,
-					},
-				},
-			},
-		},
-		"ListTimestampNull": {
-			value: makeNullValue(),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_TIMESTAMP,
-				},
-			},
-			expected: Value{
-				Data: []string(nil),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCTimestamp,
-					},
-				},
-			},
-		},
-		"ListDate": {
-			value: makeListValueAsValue(makeListValue(
-				makeStringValue("2012-03-04"),
-				makeStringValue("2012-03-05"),
-			)),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_DATE,
-				},
-			},
-			expected: Value{
-				Data: makeTestWrappedArray(TCString, "2012-03-04", "2012-03-05"),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCDate,
-					},
-				},
-			},
-		},
-		"ListDateNull": {
-			value: makeNullValue(),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_DATE,
-				},
-			},
-			expected: Value{
-				Data: []string(nil),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCDate,
-					},
-				},
-			},
-		},
-		"ListBytes": {
-			value: makeListValueAsValue(makeListValue(
-				makeStringValue("eHh4eHg="),
-				makeStringValue("eXl5eXk="),
-			)),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_BYTES,
-				},
-			},
-			expected: Value{
-				Data: makeTestWrappedArray(TCBytes, []byte("xxxxx"), []byte("yyyyy")),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCBytes,
-					},
-				},
-			},
-		},
-		"ListBytesNull": {
-			value: makeNullValue(),
-			typ: &spannerpb.Type{
-				Code: spannerpb.TypeCode_ARRAY,
-				ArrayElementType: &spannerpb.Type{
-					Code: spannerpb.TypeCode_BYTES,
-				},
-			},
-			expected: Value{
-				Data: [][]byte(nil),
-				Type: ValueType{
-					Code: TCArray,
-					ArrayType: &ValueType{
-						Code: TCBytes,
-					},
-				},
-			},
+			code: codes.InvalidArgument,
+			// TODO: return correct error message
+			// msg:  regexp.MustCompile(`Invalid value for array element bar[0]: Expected STRUCT<xxx STRING, yyy INT64>.`),
+			msg: regexp.MustCompile(`^Invalid value for bind parameter bar\[0\]: Expected STRUCT<xxx STRING, yyy INT64>.`),
 		},
 	}
 
 	for name, tc := range table {
 		t.Run(name, func(t *testing.T) {
-			res, err := makeValueFromSpannerValue(tc.value, tc.typ)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			fake := &fakeExecuteStreamingSqlServer{}
+			err := s.ExecuteStreamingSql(&spannerpb.ExecuteSqlRequest{
+				Session:     session.Name,
+				Transaction: &spannerpb.TransactionSelector{},
+				Sql:         tc.sql,
+				ParamTypes:  tc.types,
+				Params:      tc.params,
+			}, fake)
+			st := status.Convert(err)
+			if st.Code() != tc.code {
+				t.Errorf("expect code to be %v but got %v", tc.code, st.Code())
 			}
-			if diff := cmp.Diff(tc.expected, res); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
+			if !tc.msg.MatchString(st.Message()) {
+				t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tc.msg)
 			}
 		})
 	}
-
 }
 
 func TestCreateDatabase(t *testing.T) {
