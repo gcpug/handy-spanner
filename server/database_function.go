@@ -354,6 +354,66 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 			return ValueType{Code: TCFloat64}
 		},
 	},
+	"___CAST_STRING_TO_DATE": {
+		Func:  sqlite3FnCastStringToDate,
+		NArgs: 1,
+		ArgTypes: func(vts []ValueType) bool {
+			return vts[0].Code == TCString
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCDate}
+		},
+	},
+	"___CAST_STRING_TO_TIMESTAMP": {
+		Func:  sqlite3FnCastStringToTimestamp,
+		NArgs: 1,
+		ArgTypes: func(vts []ValueType) bool {
+			return vts[0].Code == TCString
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCTimestamp}
+		},
+	},
+	"___CAST_DATE_TO_STRING": {
+		Func:  sqlite3FnCastDateToString,
+		NArgs: 1,
+		ArgTypes: func(vts []ValueType) bool {
+			return vts[0].Code == TCDate
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCString}
+		},
+	},
+	"___CAST_DATE_TO_TIMESTAMP": {
+		Func:  sqlite3FnCastDateToTimestamp,
+		NArgs: 1,
+		ArgTypes: func(vts []ValueType) bool {
+			return vts[0].Code == TCDate
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCTimestamp}
+		},
+	},
+	"___CAST_TIMESTAMP_TO_STRING": {
+		Func:  sqlite3FnCastTimestampToString,
+		NArgs: 1,
+		ArgTypes: func(vts []ValueType) bool {
+			return vts[0].Code == TCTimestamp
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCString}
+		},
+	},
+	"___CAST_TIMESTAMP_TO_DATE": {
+		Func:  sqlite3FnCastTimestampToDate,
+		NArgs: 1,
+		ArgTypes: func(vts []ValueType) bool {
+			return vts[0].Code == TCTimestamp
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCDate}
+		},
+	},
 }
 
 func sqlite3FnSign(x int64) int64 {
@@ -655,4 +715,64 @@ func sqlite3FnCastStringToFloat64(s string) (float64, error) {
 	}
 
 	return n, nil
+}
+
+func sqlite3FnCastStringToDate(s string) (string, error) {
+	t, ok := parseDateLiteral(s)
+	if !ok {
+		// InvalidArgument error
+		return "", &sqliteArgumentRuntimeError{msg: fmt.Sprintf("Could not cast literal %q to type DATE", s)}
+	}
+
+	return t.Format("2006-01-02"), nil
+}
+
+func sqlite3FnCastStringToTimestamp(s string) (string, error) {
+	t, ok := parseTimestampLiteral(s)
+	if !ok {
+		// InvalidArgument error
+		return "", &sqliteArgumentRuntimeError{msg: fmt.Sprintf("Could not cast literal %q to type TIMESTAMP", s)}
+	}
+
+	return t.Format(time.RFC3339Nano), nil
+}
+
+func sqlite3FnCastDateToString(s string) (string, error) {
+	t, ok := parseDateLiteral(s)
+	if !ok {
+		// InvalidArgument error
+		return "", &sqliteArgumentRuntimeError{msg: fmt.Sprintf("Could not cast literal %q to type STRING", s)}
+	}
+
+	return t.Format("2006-01-02"), nil
+}
+
+func sqlite3FnCastDateToTimestamp(s string) (string, error) {
+	t, ok := parseDateLiteral(s)
+	if !ok {
+		// InvalidArgument error
+		return "", &sqliteArgumentRuntimeError{msg: fmt.Sprintf("Could not cast literal %q to type TIMESTAMP", s)}
+	}
+
+	return t.UTC().Format(time.RFC3339Nano), nil
+}
+
+func sqlite3FnCastTimestampToString(s string) (string, error) {
+	t, ok := parseTimestampLiteral(s)
+	if !ok {
+		// InvalidArgument error
+		return "", &sqliteArgumentRuntimeError{msg: fmt.Sprintf("Could not cast literal %q to type STRING", s)}
+	}
+
+	return t.In(parseLocation).Format("2006-01-02 15:04:05.999999999-07"), nil
+}
+
+func sqlite3FnCastTimestampToDate(s string) (string, error) {
+	t, ok := parseTimestampLiteral(s)
+	if !ok {
+		// InvalidArgument error
+		return "", &sqliteArgumentRuntimeError{msg: fmt.Sprintf("Could not cast literal %q to type DATE", s)}
+	}
+
+	return t.In(parseLocation).Format("2006-01-02"), nil
 }

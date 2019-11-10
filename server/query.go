@@ -1304,6 +1304,10 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 				raw = fmt.Sprintf("___CAST_STRING_TO_INT64(%s)", raw)
 			case TCFloat64:
 				raw = fmt.Sprintf("___CAST_STRING_TO_FLOAT64(%s)", raw)
+			case TCDate:
+				raw = fmt.Sprintf("___CAST_STRING_TO_DATE(%s)", raw)
+			case TCTimestamp:
+				raw = fmt.Sprintf("___CAST_STRING_TO_TIMESTAMP(%s)", raw)
 			default:
 				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
 			}
@@ -1317,6 +1321,31 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 			default:
 				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
 			}
+
+		case TCDate:
+			switch target.Code {
+			case TCString:
+				raw = fmt.Sprintf("___CAST_DATE_TO_STRING(%s)", raw)
+			case TCDate:
+				// do nothing
+			case TCTimestamp:
+				raw = fmt.Sprintf("___CAST_DATE_TO_TIMESTAMP(%s)", raw)
+			default:
+				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
+			}
+
+		case TCTimestamp:
+			switch target.Code {
+			case TCString:
+				raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_STRING(%s)", raw)
+			case TCDate:
+				raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_DATE(%s)", raw)
+			case TCTimestamp:
+				// do nothing
+			default:
+				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
+			}
+
 		case TCArray:
 			if !compareValueType(ex.ValueType, target) {
 				if ex.ValueType.Code == TCArray && target.Code == TCArray {
