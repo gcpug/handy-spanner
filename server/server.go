@@ -476,6 +476,20 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 		return err
 	}
 
+	tx, err := session.GetTransactionBySelector(req.GetTransaction())
+	if err != nil {
+		return err
+	}
+
+	if !tx.Available() {
+		switch tx.Status() {
+		case TransactionInvalidated:
+			return status.Errorf(codes.FailedPrecondition, "This transaction has been invalidated by a later transaction in the same session.")
+		case TransactionCommited, TransactionRollbacked:
+			return status.Errorf(codes.FailedPrecondition, "Cannot start a read or query within a transaction after Commit() or Rollback() has been called.")
+		}
+	}
+
 	if req.Sql == "" {
 		return status.Error(codes.InvalidArgument, "Invalid ExecuteStreamingSql request.")
 	}
@@ -532,26 +546,19 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 		return err
 	}
 
-	var tx *transaction
-	switch sel := req.GetTransaction().GetSelector().(type) {
-	case nil:
-		// From documents: If none is provided, the default is a
-		// temporary read-only transaction with strong concurrency.
-		tx = &transaction{}
-	case *spannerpb.TransactionSelector_SingleUse:
-		tx = &transaction{}
-	case *spannerpb.TransactionSelector_Id:
-		txx, ok := session.GetTransaction(sel.Id)
-		if !ok {
-			return status.Errorf(codes.InvalidArgument, "Transaction was started in a different session")
-		}
-		tx = txx
-	case *spannerpb.TransactionSelector_Begin:
-		return status.Errorf(codes.Unimplemented, "transaction selector begin is not supported yet")
-	default:
-		return fmt.Errorf("unknown transaction selector: %v", sel)
+	tx, err := session.GetTransactionBySelector(req.GetTransaction())
+	if err != nil {
+		return err
 	}
-	_ = tx
+
+	if !tx.Available() {
+		switch tx.Status() {
+		case TransactionInvalidated:
+			return status.Errorf(codes.FailedPrecondition, "This transaction has been invalidated by a later transaction in the same session.")
+		case TransactionCommited, TransactionRollbacked:
+			return status.Errorf(codes.FailedPrecondition, "Cannot start a read or query within a transaction after Commit() or Rollback() has been called.")
+		}
+	}
 
 	iter, err := session.database.Read(ctx, req.Table, req.Index, req.Columns, makeKeySet(req.KeySet), req.Limit)
 	if err != nil {
@@ -611,22 +618,7 @@ func (s *server) BeginTransaction(ctx context.Context, req *spannerpb.BeginTrans
 		return nil, err
 	}
 
-	var txMode transactionMode
-	switch v := req.GetOptions().GetMode().(type) {
-	case *spannerpb.TransactionOptions_ReadWrite_:
-		txMode = txReadWrite
-	case *spannerpb.TransactionOptions_ReadOnly_:
-		txMode = txReadOnly
-	case *spannerpb.TransactionOptions_PartitionedDml_:
-		txMode = txPartitionedDML
-	case nil:
-		// TransactionOptions is required
-		return nil, status.Errorf(codes.InvalidArgument, "Invalid BeginTransaction request")
-	default:
-		return nil, status.Errorf(codes.Unknown, "unknown transaction mode: %v", v)
-	}
-
-	tx, err := session.CreateTransaction(txMode)
+	tx, err := session.BeginTransaction(req.GetOptions())
 	if err != nil {
 		return nil, err
 	}
@@ -649,11 +641,25 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 		}
 		tx = txx
 	case *spannerpb.CommitRequest_SingleUseTransaction:
-		tx = &transaction{}
+		txx, err := session.BeginTransaction(v.SingleUseTransaction)
+		if err != nil {
+			return nil, err
+		}
+		tx = txx
 	default:
 		return nil, status.Errorf(codes.Unknown, "unknown transaction: %v", v)
 	}
-	_ = tx
+
+	if !tx.Available() {
+		switch tx.Status() {
+		case TransactionInvalidated:
+			return nil, status.Errorf(codes.FailedPrecondition, "This transaction has been invalidated by a later transaction in the same session.")
+		case TransactionCommited:
+			return &spannerpb.CommitResponse{}, nil
+		case TransactionRollbacked:
+			return nil, status.Errorf(codes.FailedPrecondition, "Cannot commit a transaction after Rollback() has been called.")
+		}
+	}
 
 	for _, m := range req.Mutations {
 		switch op := m.Operation.(type) {
@@ -692,6 +698,8 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 		}
 	}
 
+	tx.Done(TransactionCommited)
+
 	return &spannerpb.CommitResponse{}, nil
 }
 
@@ -704,7 +712,19 @@ func (s *server) Rollback(ctx context.Context, req *spannerpb.RollbackRequest) (
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "Transaction was started in a different session")
 	}
-	tx.done = true
+
+	if !tx.Available() {
+		switch tx.Status() {
+		case TransactionInvalidated:
+			return nil, status.Errorf(codes.FailedPrecondition, "This transaction has been invalidated by a later transaction in the same session.")
+		case TransactionCommited:
+			return nil, status.Errorf(codes.FailedPrecondition, "Cannot rollback a transaction after Commit() has been called.")
+		case TransactionRollbacked:
+			return &emptypb.Empty{}, nil
+		}
+	}
+
+	tx.Done(TransactionRollbacked)
 
 	return &emptypb.Empty{}, nil
 }

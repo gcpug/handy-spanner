@@ -218,6 +218,16 @@ func newTestServer() *server {
 	return NewFakeServer().(*server)
 }
 
+func assertGRPCError(t *testing.T, err error, code codes.Code, msg string) {
+	st := status.Convert(err)
+	if st.Code() != code {
+		t.Errorf("expect code to be %v but got %v", code, st.Code())
+	}
+	if st.Message() != msg {
+		t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), msg)
+	}
+}
+
 func testCreateSession(t *testing.T, s *server) (*spannerpb.Session, string) {
 	name := fmt.Sprintf("projects/fake/instances/fakse/databases/%s", uuidpkg.New().String())
 	session, err := s.CreateSession(context.Background(), &spannerpb.CreateSessionRequest{
@@ -227,6 +237,45 @@ func testCreateSession(t *testing.T, s *server) (*spannerpb.Session, string) {
 		t.Fatalf("failed to create session: %v", err)
 	}
 	return session, name
+}
+
+func testInvalidatedTransaction(t *testing.T, s *server, session *spannerpb.Session) *spannerpb.Transaction {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+		Session: session.Name,
+		Options: &spannerpb.TransactionOptions{
+			Mode: &spannerpb.TransactionOptions_ReadWrite_{
+				ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tx.Id) == 0 {
+		t.Error("transaction id must not be empty")
+	}
+
+	for i := 0; i < 32; i++ {
+		tx2, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadOnly_{
+					ReadOnly: &spannerpb.TransactionOptions_ReadOnly{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(tx2.Id) == 0 {
+			t.Error("transaction id must not be empty")
+		}
+	}
+
+	return tx
 }
 
 func TestCreateSession(t *testing.T) {
@@ -1443,6 +1492,277 @@ func TestExecuteStreamingSql_Error(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCommit(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+
+	t.Run("Success", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("RollbackAfterRollback", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("CommitAfterRollback", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Rollback(ctx, &spannerpb.RollbackRequest{
+			Session:       session.Name,
+			TransactionId: tx.Id,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		expected := "Cannot commit a transaction after Rollback() has been called."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
+
+	t.Run("TransactionInDifferentSession", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		session2, _ := testCreateSession(t, s)
+
+		_, err = s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session2.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		assertGRPCError(t, err, codes.InvalidArgument, "Transaction was started in a different session")
+	})
+
+	t.Run("Invalidated_Commit", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx := testInvalidatedTransaction(t, s, session)
+
+		_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		expected := "This transaction has been invalidated by a later transaction in the same session."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
+}
+
+func TestRollback(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+
+	t.Run("Success", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Rollback(ctx, &spannerpb.RollbackRequest{
+			Session:       session.Name,
+			TransactionId: tx.Id,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("RollbackAfterRollback", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Rollback(ctx, &spannerpb.RollbackRequest{
+			Session:       session.Name,
+			TransactionId: tx.Id,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Rollback(ctx, &spannerpb.RollbackRequest{
+			Session:       session.Name,
+			TransactionId: tx.Id,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("RollbackAfterCommit", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.Rollback(ctx, &spannerpb.RollbackRequest{
+			Session:       session.Name,
+			TransactionId: tx.Id,
+		})
+		expected := "Cannot rollback a transaction after Commit() has been called."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
+
+	t.Run("TransactionInDifferentSession", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		session2, _ := testCreateSession(t, s)
+
+		_, err = s.Rollback(ctx, &spannerpb.RollbackRequest{
+			Session:       session2.Name,
+			TransactionId: tx.Id,
+		})
+		assertGRPCError(t, err, codes.InvalidArgument, "Transaction was started in a different session")
+	})
+
+	t.Run("InvalidatedTransaction", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx := testInvalidatedTransaction(t, s, session)
+
+		_, err := s.Rollback(ctx, &spannerpb.RollbackRequest{
+			Session:       session.Name,
+			TransactionId: tx.Id,
+		})
+		expected := "This transaction has been invalidated by a later transaction in the same session."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
 }
 
 func TestCreateDatabase(t *testing.T) {
