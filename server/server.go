@@ -476,7 +476,7 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 		return err
 	}
 
-	tx, err := session.GetTransactionBySelector(req.GetTransaction())
+	tx, txCreated, err := session.GetTransactionBySelector(req.GetTransaction())
 	if err != nil {
 		return err
 	}
@@ -527,7 +527,11 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 		return err
 	}
 
-	return sendResult(stream, iter)
+	if txCreated {
+		return sendResult(stream, iter, tx)
+	} else {
+		return sendResult(stream, iter, nil)
+	}
 }
 
 func (s *server) ExecuteBatchDml(ctx context.Context, req *spannerpb.ExecuteBatchDmlRequest) (*spannerpb.ExecuteBatchDmlResponse, error) {
@@ -546,7 +550,7 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 		return err
 	}
 
-	tx, err := session.GetTransactionBySelector(req.GetTransaction())
+	tx, txCreated, err := session.GetTransactionBySelector(req.GetTransaction())
 	if err != nil {
 		return err
 	}
@@ -565,10 +569,14 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 		return err
 	}
 
-	return sendResult(stream, iter)
+	if txCreated {
+		return sendResult(stream, iter, tx)
+	} else {
+		return sendResult(stream, iter, nil)
+	}
 }
 
-func sendResult(stream spannerpb.Spanner_StreamingReadServer, iter RowIterator) error {
+func sendResult(stream spannerpb.Spanner_StreamingReadServer, iter RowIterator, tx *transaction) error {
 	// Create metadata about columns
 	fields := make([]*spannerpb.StructType_Field, len(iter.ResultSet()))
 	for i, item := range iter.ResultSet() {
@@ -577,9 +585,15 @@ func sendResult(stream spannerpb.Spanner_StreamingReadServer, iter RowIterator) 
 			Type: makeSpannerTypeFromValueType(item.ValueType),
 		}
 	}
+
+	var txProto *spannerpb.Transaction
+	if tx != nil {
+		txProto = tx.Proto()
+	}
+
 	metadata := &spannerpb.ResultSetMetadata{
 		RowType:     &spannerpb.StructType{Fields: fields},
-		Transaction: nil, // TODO
+		Transaction: txProto,
 	}
 
 	err := iter.Do(func(row []interface{}) error {
@@ -632,22 +646,9 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 		return nil, err
 	}
 
-	var tx *transaction
-	switch v := req.GetTransaction().(type) {
-	case *spannerpb.CommitRequest_TransactionId:
-		txx, ok := session.GetTransaction(v.TransactionId)
-		if !ok {
-			return nil, status.Errorf(codes.InvalidArgument, "Transaction was started in a different session")
-		}
-		tx = txx
-	case *spannerpb.CommitRequest_SingleUseTransaction:
-		txx, err := session.BeginTransaction(v.SingleUseTransaction)
-		if err != nil {
-			return nil, err
-		}
-		tx = txx
-	default:
-		return nil, status.Errorf(codes.Unknown, "unknown transaction: %v", v)
+	tx, err := session.GetTransactionForCommit(req.GetTransaction())
+	if err != nil {
+		return nil, err
 	}
 
 	if !tx.Available() {
@@ -659,6 +660,16 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 		case TransactionRollbacked:
 			return nil, status.Errorf(codes.FailedPrecondition, "Cannot commit a transaction after Rollback() has been called.")
 		}
+	}
+
+	if !tx.ReadWrite() {
+		var msg string
+		if tx.SingleUse() {
+			msg = "Cannot commit a single-use read-only transaction."
+		} else {
+			msg = "Cannot commit a read-only transaction."
+		}
+		return nil, status.Errorf(codes.FailedPrecondition, msg)
 	}
 
 	for _, m := range req.Mutations {
@@ -700,7 +711,13 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 
 	tx.Done(TransactionCommited)
 
-	return &spannerpb.CommitResponse{}, nil
+	// TODO: more accurate time
+	commitTime := time.Now()
+	commitTimeProto, _ := ptypes.TimestampProto(commitTime)
+
+	return &spannerpb.CommitResponse{
+		CommitTimestamp: commitTimeProto,
+	}, nil
 }
 
 func (s *server) Rollback(ctx context.Context, req *spannerpb.RollbackRequest) (*emptypb.Empty, error) {
@@ -722,6 +739,10 @@ func (s *server) Rollback(ctx context.Context, req *spannerpb.RollbackRequest) (
 		case TransactionRollbacked:
 			return &emptypb.Empty{}, nil
 		}
+	}
+
+	if !tx.ReadWrite() {
+		return nil, status.Errorf(codes.FailedPrecondition, "Cannot rollback a read-only transaction.")
 	}
 
 	tx.Done(TransactionRollbacked)
