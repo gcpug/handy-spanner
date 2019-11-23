@@ -27,6 +27,7 @@ import (
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	cmp "github.com/google/go-cmp/cmp"
 	uuidpkg "github.com/google/uuid"
+	lropb "google.golang.org/genproto/googleapis/longrunning"
 	adminv1pb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	grpc "google.golang.org/grpc"
@@ -1697,6 +1698,217 @@ func TestCommit(t *testing.T) {
 	})
 }
 
+func TestCommitMutations(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+
+	session, dbName := testCreateSession(t, s)
+	for _, schema := range allSchema {
+		ddls := parseDDL(t, schema)
+		for _, ddl := range ddls {
+			if err := s.ApplyDDL(ctx, dbName, ddl); err != nil {
+				t.Fatalf("ApplyDDL failed: %v", err)
+			}
+		}
+	}
+
+	singleTx := &spannerpb.CommitRequest_SingleUseTransaction{
+		SingleUseTransaction: &spannerpb.TransactionOptions{
+			Mode: &spannerpb.TransactionOptions_ReadWrite_{
+				ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+			},
+		},
+	}
+
+	_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+		Session:     session.Name,
+		Transaction: singleTx,
+		Mutations: []*spannerpb.Mutation{
+			{
+				Operation: &spannerpb.Mutation_Insert{
+					Insert: &spannerpb.Mutation_Write{
+						Table:   "Simple",
+						Columns: []string{"Id", "Value"},
+						Values: []*structpb.ListValue{
+							{
+								Values: []*structpb.Value{
+									makeStringValue("100"),
+									makeStringValue("aaa"),
+								},
+							},
+							{
+								Values: []*structpb.Value{
+									makeStringValue("200"),
+									makeStringValue("bbb"),
+								},
+							},
+							{
+								Values: []*structpb.Value{
+									makeStringValue("300"),
+									makeStringValue("ccc"),
+								},
+							},
+							{
+								Values: []*structpb.Value{
+									makeStringValue("400"),
+									makeStringValue("ddd"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	singleTx2 := &spannerpb.TransactionSelector{
+		Selector: &spannerpb.TransactionSelector_SingleUse{
+			SingleUse: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		},
+	}
+
+	fake := &fakeExecuteStreamingSqlServer{}
+	err = s.StreamingRead(&spannerpb.ReadRequest{
+		Session:     session.Name,
+		Transaction: singleTx2,
+		Table:       "Simple",
+		Columns:     []string{"Id"},
+		KeySet:      &spannerpb.KeySet{All: true},
+	}, fake)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	_, err = s.Commit(ctx, &spannerpb.CommitRequest{
+		Session:     session.Name,
+		Transaction: singleTx,
+		Mutations: []*spannerpb.Mutation{
+			{
+				Operation: &spannerpb.Mutation_Insert{
+					Insert: &spannerpb.Mutation_Write{
+						Table:   "Simple",
+						Columns: []string{"Id", "Value"},
+						Values: []*structpb.ListValue{
+							{
+								Values: []*structpb.Value{
+									makeStringValue("500"),
+									makeStringValue("eee"),
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Operation: &spannerpb.Mutation_Update{
+					Update: &spannerpb.Mutation_Write{
+						Table:   "Simple",
+						Columns: []string{"Id", "Value"},
+						Values: []*structpb.ListValue{
+							{
+								Values: []*structpb.Value{
+									makeStringValue("100"),
+									makeStringValue("aaa2"),
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Operation: &spannerpb.Mutation_Replace{
+					Replace: &spannerpb.Mutation_Write{
+						Table:   "Simple",
+						Columns: []string{"Id", "Value"},
+						Values: []*structpb.ListValue{
+							{
+								Values: []*structpb.Value{
+									makeStringValue("200"),
+									makeStringValue("bbb2"),
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Operation: &spannerpb.Mutation_InsertOrUpdate{
+					InsertOrUpdate: &spannerpb.Mutation_Write{
+						Table:   "Simple",
+						Columns: []string{"Id", "Value"},
+						Values: []*structpb.ListValue{
+							{
+								Values: []*structpb.Value{
+									makeStringValue("300"),
+									makeStringValue("ccc2"),
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Operation: &spannerpb.Mutation_Delete_{
+					Delete: &spannerpb.Mutation_Delete{
+						Table: "Simple",
+						KeySet: &spannerpb.KeySet{
+							Keys: []*structpb.ListValue{
+								{
+									Values: []*structpb.Value{
+										makeStringValue("400"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	fake2 := &fakeExecuteStreamingSqlServer{}
+	err = s.StreamingRead(&spannerpb.ReadRequest{
+		Session:     session.Name,
+		Transaction: singleTx2,
+		Table:       "Simple",
+		Columns:     []string{"Id", "Value"},
+		KeySet:      &spannerpb.KeySet{All: true},
+	}, fake2)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	var results []*structpb.Value
+	for _, set := range fake2.sets {
+		results = append(results, set.Values...)
+	}
+
+	expected := []*structpb.Value{
+		makeStringValue("100"),
+		makeStringValue("aaa2"),
+		makeStringValue("200"),
+		makeStringValue("bbb2"),
+		makeStringValue("300"),
+		makeStringValue("ccc2"),
+		makeStringValue("500"),
+		makeStringValue("eee"),
+	}
+	if diff := cmp.Diff(expected, results); diff != "" {
+		t.Errorf("(-got, +want)\n%s", diff)
+	}
+}
+
 func TestRollback(t *testing.T) {
 	ctx := context.Background()
 
@@ -1959,6 +2171,32 @@ func TestTransaction(t *testing.T) {
 				assertGRPCError(t, err, codes.FailedPrecondition, expected)
 			})
 		})
+	}
+}
+
+func TestUpdateDatabaseDdl(t *testing.T) {
+	ctx := context.Background()
+	s := newTestServer()
+	_, dbName := testCreateSession(t, s)
+
+	stmts := []string{`CREATE TABLE Test (Id INT64) PRIMARY KEY(Id)`}
+	op, err := s.UpdateDatabaseDdl(ctx, &adminv1pb.UpdateDatabaseDdlRequest{
+		Database:   dbName,
+		Statements: stmts,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	op2, err := s.WaitOperation(ctx, &lropb.WaitOperationRequest{
+		Name: op.Name,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !op2.Done {
+		t.Errorf("should be success")
 	}
 }
 
