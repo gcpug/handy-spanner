@@ -309,6 +309,7 @@ func (s *server) createDatabase(name string) (*database, error) {
 		return nil, status.Errorf(codes.InvalidArgument, "Invalid CreateDatabase request.")
 	}
 
+	// read lock to check database exists
 	s.dbMu.RLock()
 	_, ok := s.db[name]
 	s.dbMu.RUnlock()
@@ -316,10 +317,17 @@ func (s *server) createDatabase(name string) (*database, error) {
 		return nil, status.Errorf(codes.AlreadyExists, "Database already exists: %s", name)
 	}
 
-	db := newDatabase()
+	// write lock
 	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+
+	// re-check after lock
+	if _, ok := s.db[name]; ok {
+		return nil, status.Errorf(codes.AlreadyExists, "Database already exists: %s", name)
+	}
+
+	db := newDatabase()
 	s.db[name] = db
-	s.dbMu.Unlock()
 
 	return db, nil
 }
