@@ -229,6 +229,13 @@ func assertGRPCError(t *testing.T, err error, code codes.Code, msg string) {
 	}
 }
 
+func assertStatusCode(t *testing.T, err error, code codes.Code) {
+	st := status.Convert(err)
+	if st.Code() != code {
+		t.Errorf("expect code to be %v but got %v", code, st.Code())
+	}
+}
+
 func testCreateSession(t *testing.T, s *server) (*spannerpb.Session, string) {
 	name := fmt.Sprintf("projects/fake/instances/fakse/databases/%s", uuidpkg.New().String())
 	session, err := s.CreateSession(context.Background(), &spannerpb.CreateSessionRequest{
@@ -555,7 +562,14 @@ func TestBeginTransaction(t *testing.T) {
 	})
 }
 
+func NewFakeExecuteStreamingSqlServer(ctx context.Context) *fakeExecuteStreamingSqlServer {
+	return &fakeExecuteStreamingSqlServer{ctx: ctx}
+}
+
 type fakeExecuteStreamingSqlServer struct {
+	ctx    context.Context
+	cancel func()
+
 	sets []*spannerpb.PartialResultSet
 
 	grpc.ServerStream
@@ -567,7 +581,10 @@ func (s *fakeExecuteStreamingSqlServer) Send(set *spannerpb.PartialResultSet) er
 }
 
 func (s *fakeExecuteStreamingSqlServer) Context() context.Context {
-	return context.Background()
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
 }
 
 func TestExecuteStreamingSql_Success(t *testing.T) {
@@ -1762,7 +1779,7 @@ func TestCommitMutations(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("Commit failed: %v", err)
+		t.Fatalf("Commit1 failed: %v", err)
 	}
 
 	singleTx2 := &spannerpb.TransactionSelector{
@@ -1775,7 +1792,7 @@ func TestCommitMutations(t *testing.T) {
 		},
 	}
 
-	fake := &fakeExecuteStreamingSqlServer{}
+	fake := NewFakeExecuteStreamingSqlServer(ctx)
 	err = s.StreamingRead(&spannerpb.ReadRequest{
 		Session:     session.Name,
 		Transaction: singleTx2,
@@ -1874,10 +1891,10 @@ func TestCommitMutations(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("Commit failed: %v", err)
+		t.Fatalf("Commit2 failed: %v", err)
 	}
 
-	fake2 := &fakeExecuteStreamingSqlServer{}
+	fake2 := NewFakeExecuteStreamingSqlServer(ctx)
 	err = s.StreamingRead(&spannerpb.ReadRequest{
 		Session:     session.Name,
 		Transaction: singleTx2,
@@ -1907,6 +1924,138 @@ func TestCommitMutations(t *testing.T) {
 	if diff := cmp.Diff(expected, results); diff != "" {
 		t.Errorf("(-got, +want)\n%s", diff)
 	}
+}
+
+func TestCommitMutations_AtomicOperation(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+
+	preareDBAndSession := func(t *testing.T) *spannerpb.Session {
+		session, dbName := testCreateSession(t, s)
+		db, ok := s.db[dbName]
+		if !ok {
+			t.Fatalf("database not found")
+		}
+		for _, s := range allSchema {
+			ddls := parseDDL(t, s)
+			for _, ddl := range ddls {
+				db.ApplyDDL(ctx, ddl)
+			}
+		}
+
+		for _, query := range []string{
+			`INSERT INTO Simple VALUES(100, "xxx")`,
+		} {
+			if _, err := db.db.ExecContext(ctx, query); err != nil {
+				t.Fatalf("Insert failed: %v", err)
+			}
+		}
+
+		return session
+	}
+
+	session := preareDBAndSession(t)
+
+	begin := func() *spannerpb.Transaction {
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return tx
+	}
+	readSimple := func(t *testing.T) [][]*structpb.Value {
+		fake := NewFakeExecuteStreamingSqlServer(ctx)
+		err := s.StreamingRead(&spannerpb.ReadRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_SingleUse{
+					SingleUse: &spannerpb.TransactionOptions{
+						Mode: &spannerpb.TransactionOptions_ReadWrite_{
+							ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+						},
+					},
+				},
+			},
+			Table:   "Simple",
+			Columns: []string{"Id", "Value"},
+			KeySet:  &spannerpb.KeySet{All: true},
+		}, fake)
+		if err != nil {
+			t.Fatalf("StreamingRead error: %v", err)
+		}
+
+		var results [][]*structpb.Value
+		for _, set := range fake.sets {
+			results = append(results, set.Values)
+		}
+
+		return results
+	}
+
+	expected := [][]*structpb.Value{
+		{
+			makeStringValue("100"),
+			makeStringValue("xxx"),
+		},
+	}
+
+	t.Run("InsertConflict", func(t *testing.T) {
+		tx := begin()
+		_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{
+				{
+					Operation: &spannerpb.Mutation_Insert{
+						Insert: &spannerpb.Mutation_Write{
+							Table:   "Simple",
+							Columns: []string{"Id", "Value"},
+							Values: []*structpb.ListValue{
+								{
+									Values: []*structpb.Value{
+										makeStringValue("300"),
+										makeStringValue("ccc2"),
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					Operation: &spannerpb.Mutation_Insert{
+						Insert: &spannerpb.Mutation_Write{
+							Table:   "Simple",
+							Columns: []string{"Id", "Value"},
+							Values: []*structpb.ListValue{
+								{
+									Values: []*structpb.Value{
+										makeStringValue("100"), // already exists
+										makeStringValue("ccc2"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		assertStatusCode(t, err, codes.AlreadyExists)
+
+		results := readSimple(t)
+		if diff := cmp.Diff(results, expected); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+	})
 }
 
 func TestRollback(t *testing.T) {
