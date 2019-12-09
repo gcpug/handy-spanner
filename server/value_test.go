@@ -163,7 +163,7 @@ func TestDatabaseEncDec(t *testing.T) {
 			defer r.Close()
 
 			item := createResultItemFromColumn(&column)
-			iter := rows{rows: r, resultItems: []ResultItem{item}}
+			iter := rows{rows: r, resultItems: []ResultItem{item}, transaction: &transaction{status: 1}}
 
 			var rows [][]interface{}
 			err = iter.Do(func(row []interface{}) error {

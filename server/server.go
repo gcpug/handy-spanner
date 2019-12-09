@@ -477,7 +477,8 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 }
 
 func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream spannerpb.Spanner_ExecuteStreamingSqlServer) error {
-	ctx := stream.Context()
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
 
 	session, err := s.getSession(req.Session)
 	if err != nil {
@@ -489,13 +490,28 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 		return err
 	}
 
-	if !tx.Available() {
+	checkAvailability := func() error {
 		switch tx.Status() {
 		case TransactionInvalidated:
 			return status.Errorf(codes.FailedPrecondition, "This transaction has been invalidated by a later transaction in the same session.")
 		case TransactionCommited, TransactionRollbacked:
 			return status.Errorf(codes.FailedPrecondition, "Cannot start a read or query within a transaction after Commit() or Rollback() has been called.")
+		case TransactionAborted:
+			return status.Errorf(codes.Aborted, "transaction aborted")
 		}
+		return status.Errorf(codes.Unknown, "unknown status")
+	}
+
+	if !tx.Available() {
+		return checkAvailability()
+	}
+
+	if tx.SingleUse() {
+		go func(ctx context.Context) {
+			// make sure to call tx.Done() after the request finished
+			<-ctx.Done()
+			tx.Done(TransactionCommited)
+		}(stream.Context())
 	}
 
 	if req.Sql == "" {
@@ -530,16 +546,22 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 		params[key] = v
 	}
 
-	iter, err := session.database.Query(ctx, stmt, params)
+	iter, err := session.database.Query(ctx, tx, stmt, params)
 	if err != nil {
+		if !tx.Available() {
+			return checkAvailability()
+		}
 		return err
 	}
 
-	if txCreated {
-		return sendResult(stream, iter, tx)
-	} else {
-		return sendResult(stream, iter, nil)
+	if err := sendResult(stream, tx, iter, txCreated); err != nil {
+		if !tx.Available() {
+			return checkAvailability()
+		}
+		return err
 	}
+
+	return nil
 }
 
 func (s *server) ExecuteBatchDml(ctx context.Context, req *spannerpb.ExecuteBatchDmlRequest) (*spannerpb.ExecuteBatchDmlResponse, error) {
@@ -551,7 +573,8 @@ func (s *server) Read(ctx context.Context, req *spannerpb.ReadRequest) (*spanner
 }
 
 func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Spanner_StreamingReadServer) error {
-	ctx := stream.Context()
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
 
 	session, err := s.getSession(req.Session)
 	if err != nil {
@@ -563,28 +586,49 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 		return err
 	}
 
-	if !tx.Available() {
+	checkAvailability := func() error {
 		switch tx.Status() {
 		case TransactionInvalidated:
 			return status.Errorf(codes.FailedPrecondition, "This transaction has been invalidated by a later transaction in the same session.")
 		case TransactionCommited, TransactionRollbacked:
 			return status.Errorf(codes.FailedPrecondition, "Cannot start a read or query within a transaction after Commit() or Rollback() has been called.")
+		case TransactionAborted:
+			return status.Errorf(codes.Aborted, "transaction aborted")
 		}
+		return status.Errorf(codes.Unknown, "unknown status")
 	}
 
-	iter, err := session.database.Read(ctx, req.Table, req.Index, req.Columns, makeKeySet(req.KeySet), req.Limit)
+	if !tx.Available() {
+		return checkAvailability()
+	}
+
+	if tx.SingleUse() {
+		go func(ctx context.Context) {
+			// make sure to call tx.Done() after the request finished
+			<-ctx.Done()
+			tx.Done(TransactionCommited)
+		}(stream.Context())
+	}
+
+	iter, err := session.database.Read(ctx, tx, req.Table, req.Index, req.Columns, makeKeySet(req.KeySet), req.Limit)
 	if err != nil {
+		if !tx.Available() {
+			return checkAvailability()
+		}
+
 		return err
 	}
 
-	if txCreated {
-		return sendResult(stream, iter, tx)
-	} else {
-		return sendResult(stream, iter, nil)
+	if err := sendResult(stream, tx, iter, txCreated); err != nil {
+		if !tx.Available() {
+			return checkAvailability()
+		}
+		return err
 	}
+	return nil
 }
 
-func sendResult(stream spannerpb.Spanner_StreamingReadServer, iter RowIterator, tx *transaction) error {
+func sendResult(stream spannerpb.Spanner_StreamingReadServer, tx *transaction, iter RowIterator, returnTx bool) error {
 	// Create metadata about columns
 	fields := make([]*spannerpb.StructType_Field, len(iter.ResultSet()))
 	for i, item := range iter.ResultSet() {
@@ -595,7 +639,7 @@ func sendResult(stream spannerpb.Spanner_StreamingReadServer, iter RowIterator, 
 	}
 
 	var txProto *spannerpb.Transaction
-	if tx != nil {
+	if returnTx {
 		txProto = tx.Proto()
 	}
 
@@ -649,6 +693,9 @@ func (s *server) BeginTransaction(ctx context.Context, req *spannerpb.BeginTrans
 }
 
 func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spannerpb.CommitResponse, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	session, err := s.getSession(req.Session)
 	if err != nil {
 		return nil, err
@@ -659,7 +706,7 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 		return nil, err
 	}
 
-	if !tx.Available() {
+	checkAvailability := func() (*spannerpb.CommitResponse, error) {
 		switch tx.Status() {
 		case TransactionInvalidated:
 			return nil, status.Errorf(codes.FailedPrecondition, "This transaction has been invalidated by a later transaction in the same session.")
@@ -667,7 +714,14 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 			return &spannerpb.CommitResponse{}, nil
 		case TransactionRollbacked:
 			return nil, status.Errorf(codes.FailedPrecondition, "Cannot commit a transaction after Rollback() has been called.")
+		case TransactionAborted:
+			return nil, status.Errorf(codes.Aborted, "transaction aborted")
 		}
+		return nil, status.Errorf(codes.Unknown, "unknown status")
+	}
+
+	if !tx.Available() {
+		return checkAvailability()
 	}
 
 	if !tx.ReadWrite() {
@@ -680,41 +734,62 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 		return nil, status.Errorf(codes.FailedPrecondition, msg)
 	}
 
-	for _, m := range req.Mutations {
-		switch op := m.Operation.(type) {
-		case *spannerpb.Mutation_Insert:
-			mut := op.Insert
-			if err := session.database.Insert(ctx, mut.Table, mut.Columns, mut.Values); err != nil {
-				return nil, err
-			}
+	err = func() error {
+		for _, m := range req.Mutations {
+			switch op := m.Operation.(type) {
+			case *spannerpb.Mutation_Insert:
+				mut := op.Insert
+				if err := session.database.Insert(ctx, tx, mut.Table, mut.Columns, mut.Values); err != nil {
+					return err
+				}
 
-		case *spannerpb.Mutation_Update:
-			mut := op.Update
-			if err := session.database.Update(ctx, mut.Table, mut.Columns, mut.Values); err != nil {
-				return nil, err
-			}
+			case *spannerpb.Mutation_Update:
+				mut := op.Update
+				if err := session.database.Update(ctx, tx, mut.Table, mut.Columns, mut.Values); err != nil {
+					return err
+				}
 
-		case *spannerpb.Mutation_Replace:
-			mut := op.Replace
-			if err := session.database.Replace(ctx, mut.Table, mut.Columns, mut.Values); err != nil {
-				return nil, err
-			}
+			case *spannerpb.Mutation_Replace:
+				mut := op.Replace
+				if err := session.database.Replace(ctx, tx, mut.Table, mut.Columns, mut.Values); err != nil {
+					return err
+				}
 
-		case *spannerpb.Mutation_InsertOrUpdate:
-			mut := op.InsertOrUpdate
-			if err := session.database.InsertOrUpdate(ctx, mut.Table, mut.Columns, mut.Values); err != nil {
-				return nil, err
-			}
+			case *spannerpb.Mutation_InsertOrUpdate:
+				mut := op.InsertOrUpdate
+				if err := session.database.InsertOrUpdate(ctx, tx, mut.Table, mut.Columns, mut.Values); err != nil {
+					return err
+				}
 
-		case *spannerpb.Mutation_Delete_:
-			mut := op.Delete
-			if err := session.database.Delete(ctx, mut.Table, makeKeySet(mut.KeySet)); err != nil {
-				return nil, err
-			}
+			case *spannerpb.Mutation_Delete_:
+				mut := op.Delete
+				if err := session.database.Delete(ctx, tx, mut.Table, makeKeySet(mut.KeySet)); err != nil {
+					return err
+				}
 
-		default:
-			return nil, fmt.Errorf("unknown mutation operation: %v", op)
+			default:
+				return fmt.Errorf("unknown mutation operation: %v", op)
+			}
 		}
+
+		return nil
+	}()
+	if err != nil {
+		if !tx.Available() {
+			return checkAvailability()
+		}
+
+		tx.Done(TransactionRollbacked)
+		return nil, err
+	}
+
+	if err := session.database.Commit(tx); err != nil {
+		if !tx.Available() {
+			return checkAvailability()
+		}
+
+		tx.Done(TransactionRollbacked)
+		return nil, err // TODO
 	}
 
 	tx.Done(TransactionCommited)
@@ -746,6 +821,8 @@ func (s *server) Rollback(ctx context.Context, req *spannerpb.RollbackRequest) (
 			return nil, status.Errorf(codes.FailedPrecondition, "Cannot rollback a transaction after Commit() has been called.")
 		case TransactionRollbacked:
 			return &emptypb.Empty{}, nil
+		case TransactionAborted:
+			return nil, status.Errorf(codes.Aborted, "transaction aborted")
 		}
 	}
 
@@ -753,6 +830,9 @@ func (s *server) Rollback(ctx context.Context, req *spannerpb.RollbackRequest) (
 		return nil, status.Errorf(codes.FailedPrecondition, "Cannot rollback a read-only transaction.")
 	}
 
+	if err := session.database.Rollback(tx); err != nil {
+		return nil, err // TODO
+	}
 	tx.Done(TransactionRollbacked)
 
 	return &emptypb.Empty{}, nil

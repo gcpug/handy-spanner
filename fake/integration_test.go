@@ -20,7 +20,9 @@ import (
 	"io/ioutil"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -201,6 +203,118 @@ func TestIntegration_ReadWrite(t *testing.T) {
 		if err != nil {
 			t.Fatalf("delete failed: %v", err)
 		}
+	}
+}
+
+func TestIntegration_ReadWrite_AtomicCount(t *testing.T) {
+	ctx := context.Background()
+	dbName := "projects/fake/instances/fake/databases/fake"
+
+	f, err := os.Open("./testdata/schema.sql")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+
+	srv, conn, err := Run()
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	defer srv.Stop()
+
+	if err := srv.ParseAndApplyDDL(ctx, dbName, f); err != nil {
+		t.Fatal(err)
+	}
+
+	client, err := spanner.NewClient(ctx, dbName, option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatalf("Connecting to in-memory fake: %v", err)
+	}
+
+	if _, err := client.Apply(ctx, []*spanner.Mutation{
+		spanner.Insert("Simple", []string{"Id", "Value"},
+			[]interface{}{100, "100"},
+		),
+	}); err != nil {
+		t.Fatalf("failed to apply: %v", err)
+	}
+
+	errCh := make(chan error, 10)
+	wg := &sync.WaitGroup{}
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(me int) {
+			defer wg.Done()
+
+			for j := 0; j < 10; j++ {
+				_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
+					var num int
+
+					it := tx.Read(ctx, "Simple", spanner.Key([]interface{}{100}), []string{"Value"})
+					err := it.Do(func(r *spanner.Row) error {
+						var value string
+						if err := r.Column(0, &value); err != nil {
+							return err
+						}
+						num, _ = strconv.Atoi(value)
+						return nil
+					})
+					if err != nil {
+						return err
+					}
+
+					next := num + 1
+
+					return tx.BufferWrite([]*spanner.Mutation{
+						spanner.Update("Simple", []string{"Id", "Value"},
+							[]interface{}{100, fmt.Sprint(next)},
+						),
+					})
+				})
+				if err != nil {
+					errCh <- fmt.Errorf("Transaction failed: %v", err)
+					return
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	var errs []error
+L:
+	for {
+		select {
+		case err := <-errCh:
+			errs = append(errs, err)
+		default:
+			break L
+		}
+	}
+
+	if len(errs) != 0 {
+		for _, err := range errs {
+			t.Error(err)
+		}
+		t.FailNow()
+	}
+
+	var num int
+	it := client.Single().Read(ctx, "Simple", spanner.Key([]interface{}{100}), []string{"Value"})
+	err = it.Do(func(r *spanner.Row) error {
+		var value string
+		if err := r.Column(0, &value); err != nil {
+			return err
+		}
+		num, _ = strconv.Atoi(value)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	expected := 200
+	if num != expected {
+		t.Fatalf("expect num to be %v, but got %v", expected, num)
 	}
 }
 
@@ -470,6 +584,9 @@ func TestIntegration_Query(t *testing.T) {
 	}
 
 	for _, tc := range table {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+
 		stmt := spanner.NewStatement(tc.sql)
 		stmt.Params = tc.params
 		var results []*Simple

@@ -415,6 +415,7 @@ type StructValue struct {
 type rows struct {
 	rows        *sql.Rows
 	resultItems []ResultItem
+	transaction *transaction
 
 	lastErr error
 }
@@ -425,11 +426,13 @@ func (r *rows) ResultSet() []ResultItem {
 
 func (it *rows) Do(fn func([]interface{}) error) error {
 	var lastErr error
+	var rows []interface{}
 	for {
 		row, ok := it.next()
 		if !ok {
 			break
 		}
+		rows = append(rows, row)
 		if err := fn(row); err != nil {
 			lastErr = err
 			break
@@ -463,6 +466,13 @@ func (it *rows) Do(fn func([]interface{}) error) error {
 			msg = strings.TrimPrefix(msg, SqliteOutOfRangeRuntimeErrorPrefix)
 			return status.Errorf(codes.OutOfRange, "%s", msg)
 		}
+	}
+
+	// database/sql has a possible bug that cannot read any data without error.
+	// It may happen context is canceled in bad timing.
+	// Here checks the transaction is available or not and if it's not available return aborted error.
+	if !it.transaction.Available() {
+		lastErr = status.Errorf(codes.Aborted, "transaction aborted")
 	}
 
 	return lastErr

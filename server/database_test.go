@@ -231,18 +231,35 @@ var initialData = []struct {
 	},
 }
 
-func createInitialData(t *testing.T, ctx context.Context, db Database) {
+func testRunInTransaction(t *testing.T, ses *session, fn func(*transaction)) {
+	t.Helper()
+
+	tx, err := ses.createTransaction(txReadWrite, false)
+	if err != nil {
+		t.Fatalf("createTransaction failed: %v", err)
+	}
+	defer tx.Done(TransactionCommited)
+
+	fn(tx)
+
+	if err := ses.database.Commit(tx); err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+}
+
+func createInitialData(t *testing.T, ctx context.Context, db Database, tx *transaction) {
+	t.Helper()
+
 	for _, d := range initialData {
 		for _, values := range d.values {
 			listValues := []*structpb.ListValue{
 				{Values: values},
 			}
-			if err := db.Insert(ctx, d.table, d.cols, listValues); err != nil {
+			if err := db.Insert(ctx, tx, d.table, d.cols, listValues); err != nil {
 				t.Fatalf("Insert failed: %v", err)
 			}
 		}
 	}
-
 }
 
 func makeNullValue() *structpb.Value {
@@ -829,23 +846,28 @@ func TestRead(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			it, err := db.Read(ctx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
 
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
-
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
 		})
 	}
 }
@@ -937,14 +959,19 @@ func TestReadError(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			_, err := db.Read(ctx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
-			st := status.Convert(err)
-			if st.Code() != tt.code {
-				t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
-			}
-			if !tt.msg.MatchString(st.Message()) {
-				t.Errorf("unexpected error message: %v", st.Message())
-			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				_, err := db.Read(ctx, tx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
+				st := status.Convert(err)
+				if st.Code() != tt.code {
+					t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
+				}
+				if !tt.msg.MatchString(st.Message()) {
+					t.Errorf("unexpected error message: %v", st.Message())
+				}
+			})
 		})
 	}
 }
@@ -1043,33 +1070,38 @@ func TestRead_FullType_Range(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ks := &KeySet{
-				Ranges: []*KeyRange{
-					{
-						start:       tt.start,
-						end:         tt.end,
-						startClosed: tt.startClosed,
-						endClosed:   tt.endClosed,
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				ks := &KeySet{
+					Ranges: []*KeyRange{
+						{
+							start:       tt.start,
+							end:         tt.end,
+							startClosed: tt.startClosed,
+							endClosed:   tt.endClosed,
+						},
 					},
-				},
-			}
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, ks, 100)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
+				}
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, ks, 100)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
 
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
-
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
 		})
 	}
 }
@@ -1299,8 +1331,12 @@ func TestInsertAndReplace(t *testing.T) {
 		t.Run(op, func(t *testing.T) {
 			for name, tt := range table {
 				t.Run(name, func(t *testing.T) {
-					ctx := context.Background()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+
 					db := newDatabase()
+					ses := newSession(db, "foo")
+
 					for _, s := range allSchema {
 						ddls := parseDDL(t, s)
 						for _, ddl := range ddls {
@@ -1308,37 +1344,40 @@ func TestInsertAndReplace(t *testing.T) {
 						}
 					}
 
-					listValues := []*structpb.ListValue{
-						{Values: tt.values},
-					}
-
-					if op == "INSERT" {
-						if err := db.Insert(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-							t.Fatalf("Insert failed: %v", err)
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						listValues := []*structpb.ListValue{
+							{Values: tt.values},
 						}
-					} else if op == "REPLACE" {
-						if err := db.Replace(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-							t.Fatalf("Replace failed: %v", err)
+						if op == "INSERT" {
+							if err := db.Insert(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+								t.Fatalf("Insert failed: %v", err)
+							}
+						} else if op == "REPLACE" {
+							if err := db.Replace(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+								t.Fatalf("Replace failed: %v", err)
+							}
 						}
-					}
-
-					it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-					if err != nil {
-						t.Fatalf("Read failed: %v", err)
-					}
-
-					var rows [][]interface{}
-					err = it.Do(func(row []interface{}) error {
-						rows = append(rows, row)
-						return nil
 					})
-					if err != nil {
-						t.Fatalf("unexpected error in iteration: %v", err)
-					}
 
-					if diff := cmp.Diff(tt.expected, rows); diff != "" {
-						t.Errorf("(-got, +want)\n%s", diff)
-					}
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+						if err != nil {
+							t.Fatalf("Read failed: %v", err)
+						}
+
+						var rows [][]interface{}
+						err = it.Do(func(row []interface{}) error {
+							rows = append(rows, row)
+							return nil
+						})
+						if err != nil {
+							t.Fatalf("unexpected error in iteration: %v", err)
+						}
+
+						if diff := cmp.Diff(tt.expected, rows); diff != "" {
+							t.Errorf("(-got, +want)\n%s", diff)
+						}
+					})
 				})
 			}
 		})
@@ -1373,8 +1412,12 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 	limit := int64(100)
 
 	for _, op := range []string{"INSERT", "REPLACE"} {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		db := newDatabase()
+		ses := newSession(db, "foo")
+
 		for _, s := range allSchema {
 			ddls := parseDDL(t, s)
 			for _, ddl := range ddls {
@@ -1382,56 +1425,59 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 			}
 		}
 
-		listValues := []*structpb.ListValue{
-			{Values: values},
-		}
-
-		if op == "INSERT" {
-			if err := db.Insert(ctx, tbl, wcols, listValues); err != nil {
-				t.Fatalf("Insert failed: %v", err)
+		testRunInTransaction(t, ses, func(tx *transaction) {
+			listValues := []*structpb.ListValue{
+				{Values: values},
 			}
-		} else if op == "REPLACE" {
-			if err := db.Replace(ctx, tbl, wcols, listValues); err != nil {
-				t.Fatalf("Replace failed: %v", err)
+			if op == "INSERT" {
+				if err := db.Insert(ctx, tx, tbl, wcols, listValues); err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			} else if op == "REPLACE" {
+				if err := db.Replace(ctx, tx, tbl, wcols, listValues); err != nil {
+					t.Fatalf("Replace failed: %v", err)
+				}
 			}
-		}
-
-		it, err := db.Read(ctx, tbl, "", cols, &KeySet{All: true}, limit)
-		if err != nil {
-			t.Fatalf("Read failed: %v", err)
-		}
-
-		var rows [][]interface{}
-		err = it.Do(func(row []interface{}) error {
-			rows = append(rows, row)
-			return nil
 		})
-		if err != nil {
-			t.Fatalf("unexpected error in iteration: %v", err)
-		}
 
-		if len(rows) != 1 {
-			t.Fatalf("unexpected numbers of rows: %v", len(rows))
+		testRunInTransaction(t, ses, func(tx *transaction) {
+			it, err := db.Read(ctx, tx, tbl, "", cols, &KeySet{All: true}, limit)
+			if err != nil {
+				t.Fatalf("Read failed: %v", err)
+			}
 
-		}
-		row := rows[0]
+			var rows [][]interface{}
+			err = it.Do(func(row []interface{}) error {
+				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
+			}
 
-		var a, b string
-		a = row[0].(string)
-		b = row[1].(string)
-		if got := "2012-03-04T12:34:56.123456789Z"; a != got {
-			t.Errorf("expect %v, but got %v", got, a)
-		}
+			if len(rows) != 1 {
+				t.Fatalf("unexpected numbers of rows: %v", len(rows))
 
-		timestamp, err := time.Parse(time.RFC3339Nano, b)
-		if err != nil {
-			t.Fatalf("unexpected format timestamp: %v", err)
-		}
+			}
+			row := rows[0]
 
-		d := time.Since(timestamp)
-		if d >= 3*time.Millisecond {
-			t.Fatalf("unexpected time: %v", d)
-		}
+			var a, b string
+			a = row[0].(string)
+			b = row[1].(string)
+			if got := "2012-03-04T12:34:56.123456789Z"; a != got {
+				t.Errorf("expect %v, but got %v", got, a)
+			}
+
+			timestamp, err := time.Parse(time.RFC3339Nano, b)
+			if err != nil {
+				t.Fatalf("unexpected format timestamp: %v", err)
+			}
+
+			d := time.Since(timestamp)
+			if d >= 30*time.Millisecond {
+				t.Fatalf("unexpected time: %v", d)
+			}
+		})
 	}
 }
 
@@ -1567,8 +1613,12 @@ func TestReplace(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, "foo")
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -1576,32 +1626,38 @@ func TestReplace(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
-
-			listValues := []*structpb.ListValue{
-				{Values: tt.values},
-			}
-			if err := db.Replace(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-				t.Fatalf("Replace failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				listValues := []*structpb.ListValue{
+					{Values: tt.values},
+				}
+				if err := db.Replace(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+					t.Fatalf("Replace failed: %v", err)
+				}
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -1759,8 +1815,12 @@ func TestUpdate(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, "foo")
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -1768,32 +1828,38 @@ func TestUpdate(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
-
-			listValues := []*structpb.ListValue{
-				{Values: tt.values},
-			}
-			if err := db.Update(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-				t.Fatalf("Update failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				listValues := []*structpb.ListValue{
+					{Values: tt.values},
+				}
+				if err := db.Update(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+					t.Fatalf("Update failed: %v", err)
+				}
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -1930,8 +1996,12 @@ func TestInsertOrUpdate(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, name)
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -1939,32 +2009,38 @@ func TestInsertOrUpdate(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
-
-			listValues := []*structpb.ListValue{
-				{Values: tt.values},
-			}
-			if err := db.InsertOrUpdate(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-				t.Fatalf("InsertOrUpdate failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				listValues := []*structpb.ListValue{
+					{Values: tt.values},
+				}
+				if err := db.InsertOrUpdate(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+					t.Fatalf("InsertOrUpdate failed: %v", err)
+				}
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -2079,8 +2155,12 @@ func TestDelete(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, name)
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -2106,27 +2186,31 @@ func TestDelete(t *testing.T) {
 				}
 			}
 
-			if err := db.Delete(ctx, tt.tbl, tt.ks); err != nil {
-				t.Fatalf("Update failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, 100)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Delete(ctx, tx, tt.tbl, tt.ks); err != nil {
+					t.Fatalf("Update failed: %v", err)
+				}
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, 100)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -2343,8 +2427,12 @@ func TestMutationError(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, "foo")
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -2352,7 +2440,9 @@ func TestMutationError(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
+			})
 
 			for _, op := range tt.op {
 				t.Run(op, func(t *testing.T) {
@@ -2360,26 +2450,28 @@ func TestMutationError(t *testing.T) {
 						{Values: tt.values},
 					}
 
-					var err error
-					switch op {
-					case "INSERT":
-						err = db.Insert(ctx, tt.tbl, tt.wcols, listValues)
-					case "UPDATE":
-						err = db.Update(ctx, tt.tbl, tt.wcols, listValues)
-					case "UPSERT":
-						err = db.InsertOrUpdate(ctx, tt.tbl, tt.wcols, listValues)
-					case "REPLACE":
-						err = db.Replace(ctx, tt.tbl, tt.wcols, listValues)
-					default:
-						t.Fatalf("unexpected op: %v", op)
-					}
-					st := status.Convert(err)
-					if st.Code() != tt.code {
-						t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
-					}
-					if !tt.msg.MatchString(st.Message()) {
-						t.Errorf("unexpected error message: %v", st.Message())
-					}
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						var err error
+						switch op {
+						case "INSERT":
+							err = db.Insert(ctx, tx, tt.tbl, tt.wcols, listValues)
+						case "UPDATE":
+							err = db.Update(ctx, tx, tt.tbl, tt.wcols, listValues)
+						case "UPSERT":
+							err = db.InsertOrUpdate(ctx, tx, tt.tbl, tt.wcols, listValues)
+						case "REPLACE":
+							err = db.Replace(ctx, tx, tt.tbl, tt.wcols, listValues)
+						default:
+							t.Fatalf("unexpected op: %v", op)
+						}
+						st := status.Convert(err)
+						if st.Code() != tt.code {
+							t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
+						}
+						if !tt.msg.MatchString(st.Message()) {
+							t.Errorf("unexpected error message: %v", st.Message())
+						}
+					})
 				})
 			}
 		})

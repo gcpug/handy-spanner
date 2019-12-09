@@ -39,6 +39,7 @@ func init() {
 
 type QueryBuilder struct {
 	db   *database
+	tx   *transaction
 	stmt ast.QueryExpr
 
 	views    map[string]*TableView
@@ -46,8 +47,6 @@ type QueryBuilder struct {
 	params   map[string]Value
 
 	args []interface{}
-
-	frees []func()
 
 	unnestViewNum   int
 	subqueryViewNum int
@@ -58,9 +57,10 @@ type QueryBuilder struct {
 	forceColumnAlias bool
 }
 
-func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value, forceColumnAlias bool) (string, []interface{}, []ResultItem, error) {
+func BuildQuery(db *database, tx *transaction, stmt ast.QueryExpr, params map[string]Value, forceColumnAlias bool) (string, []interface{}, []ResultItem, error) {
 	b := &QueryBuilder{
 		db:               db,
+		tx:               tx,
 		stmt:             stmt,
 		views:            make(map[string]*TableView),
 		params:           params,
@@ -69,15 +69,7 @@ func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value, force
 	return b.Build()
 }
 
-func (b *QueryBuilder) close() {
-	for _, free := range b.frees {
-		free()
-	}
-}
-
 func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
-	defer b.close()
-
 	switch q := b.stmt.(type) {
 	case *ast.Select:
 		return b.buildSelectQuery(q)
@@ -199,7 +191,7 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 }
 
 func (b *QueryBuilder) buildSubQuery(sub *ast.SubQuery) (string, []interface{}, []ResultItem, error) {
-	s, data, items, err := BuildQuery(b.db, sub.Query, b.params, b.forceColumnAlias)
+	s, data, items, err := BuildQuery(b.db, b.tx, sub.Query, b.params, b.forceColumnAlias)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -265,7 +257,7 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 		}
 	}
 
-	s, data, items, err := BuildQuery(b.db, compound.Queries[0], b.params, b.forceColumnAlias)
+	s, data, items, err := BuildQuery(b.db, b.tx, compound.Queries[0], b.params, b.forceColumnAlias)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -285,7 +277,7 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 	ss = append(ss, fmt.Sprintf("SELECT * FROM (%s)", s))
 
 	for i, query := range compound.Queries[1:] {
-		s, d, items2, err := BuildQuery(b.db, query, b.params, false)
+		s, d, items2, err := BuildQuery(b.db, b.tx, query, b.params, false)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -338,14 +330,13 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, []interface{}, error) {
 	switch src := exp.(type) {
 	case *ast.TableName:
-		t, free, err := b.db.readTable(src.Table.Name)
+		t, err := b.db.useTable(src.Table.Name, b.tx)
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
 				return nil, "", nil, status.Error(codes.InvalidArgument, err.Error())
 			}
 			return nil, "", nil, err
 		}
-		b.frees = append(b.frees, free)
 		view := t.TableView()
 
 		var query string
@@ -421,7 +412,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 		return b.buildUnnestView(src)
 
 	case *ast.SubQueryTableExpr:
-		query, data, items, err := BuildQuery(b.db, src.Query, b.params, false)
+		query, data, items, err := BuildQuery(b.db, b.tx, src.Query, b.params, false)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("Subquery error: %v", err)
 		}
@@ -815,7 +806,7 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, error) {
 		}, nil
 
 	case *ast.SubQueryInCondition:
-		query, data, items, err := BuildQuery(b.db, c.Query, b.params, false)
+		query, data, items, err := BuildQuery(b.db, b.tx, c.Query, b.params, false)
 		if err != nil {
 			return NullExpr, newExprErrorf(nil, false, "BuildQuery error for SubqueryInCondition: %v", err)
 		}
@@ -1485,7 +1476,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.ScalarSubQuery:
-		query, args, items, err := BuildQuery(b.db, e.Query, b.params, false)
+		query, args, items, err := BuildQuery(b.db, b.tx, e.Query, b.params, false)
 		if err != nil {
 			return NullExpr, wrapExprError(err, expr, "Scalar")
 		}
@@ -1499,7 +1490,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.ArraySubQuery:
-		query, args, items, err := BuildQuery(b.db, e.Query, b.params, true)
+		query, args, items, err := BuildQuery(b.db, b.tx, e.Query, b.params, true)
 		if err != nil {
 			return NullExpr, wrapExprError(err, expr, "Array")
 		}
@@ -1521,7 +1512,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.ExistsSubQuery:
-		query, args, _, err := BuildQuery(b.db, e.Query, b.params, false)
+		query, args, _, err := BuildQuery(b.db, b.tx, e.Query, b.params, false)
 		if err != nil {
 			return NullExpr, newExprErrorf(expr, false, "BuildQuery error for %T: %v", err, e)
 		}
