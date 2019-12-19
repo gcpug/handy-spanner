@@ -716,6 +716,12 @@ func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, view *Table
 				return "", nil, newExprErrorf(nil, true, "Column name %s is ambiguous", e.Name)
 			}
 			expr = i.Expr
+		case *ast.Path:
+			ex, err := b.buildExpr(item.Expr)
+			if err != nil {
+				return "", nil, wrapExprError(err, item.Expr, "OrderBy")
+			}
+			expr = ex
 		}
 
 		collate := ""
