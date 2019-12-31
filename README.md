@@ -78,6 +78,7 @@ Note that it becomes specific implementations for a fake server, which means you
 * Mutation
    * All mutation types: Insert, Update, InsertOrUpdate, Replace, Delete
    * Commit timestamp
+* Transaction
 * DML
    * fully not yet supported
 * DDL
@@ -88,9 +89,7 @@ Note that it becomes specific implementations for a fake server, which means you
 ### Not supported features
 
 * Transaction
-   * Applying mutations is not transactional
-   * Optimistic lock
-   * No check for transaction type RO/RW
+   * Timestamp bound read
 * Query
    * Strict type checking
    * More functions
@@ -107,6 +106,30 @@ Note that it becomes specific implementations for a fake server, which means you
    * Long running operations
 * Replace
    * wrong behavior on conflict
+
+## Implementation
+
+### Transaction simulation
+
+handy-spanner uses sqlite3 in [Shared-Cache Mode](https://www.sqlite.org/sharedcache.html). There is a characteristic for the trasactions.
+
+* Only one transaction can hold write lock per database to write database tables.
+    * Other transactions still can hold read lock.
+* Write transaction holds write lock against database tables while writing the tables.
+    * Other read transactions cannot read the table while locked
+* Read transaction holds read lock against database tables while reading the tables.
+    * Other read transactions can read the table by holding read lock
+    * Write transaction cannot write the table while read-locked
+
+If we simply use the transactions, dead lock should happen in read and write locks. To simulate spanner transactions correctly as possible, handy-spanner manages sqlite3 transactions inside.
+
+* Each spanner transaction starts own sqlite3 transaction.
+* Only one spanner transaction can hold write lock per database.
+* While a transaction holds write lock, other spanner transactions cannot newly get read or write lock.
+* When write transaction tries to write a table, it forces transactions that hold read lock to the table to release the lock.
+   * The transactions become "aborted"
+* The aborted transactions are expected to be retried by the client.
+
 
 ## Copyright
 
