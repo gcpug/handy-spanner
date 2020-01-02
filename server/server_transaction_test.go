@@ -492,7 +492,7 @@ func TestReadAndWriteTransaction_AtomicUpdate(t *testing.T) {
 		{pKey: "1001", concurrency: 10, tries: 10},
 		{pKey: "1002", concurrency: 20, tries: 10},
 		{pKey: "1003", concurrency: 50, tries: 5},
-		{pKey: "1004", concurrency: 100, tries: 30},
+		// {pKey: "1004", concurrency: 100, tries: 30},
 	}
 
 	for _, tc := range table {
