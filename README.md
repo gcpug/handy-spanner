@@ -124,8 +124,9 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
    * All mutation types: Insert, Update, InsertOrUpdate, Replace, Delete
    * Commit timestamp
 * Transaction
+   * Isolation level: SERIALIZABLE
 * DML
-   * fully not yet supported
+   * Insert, Update, Delete
 * DDL
    * CreateTable, CreateIndex only
 * Data Types
@@ -157,7 +158,7 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
 
 ### Transaction simulation
 
-handy-spanner uses sqlite3 in [Shared-Cache Mode](https://www.sqlite.org/sharedcache.html). There is a characteristic for the trasactions.
+handy-spanner uses sqlite3 in [Shared-Cache Mode](https://www.sqlite.org/sharedcache.html). There is a characteristic in the trasactions.
 
 * Only one transaction can hold write lock per database to write database tables.
     * Other transactions still can hold read lock.
@@ -175,6 +176,16 @@ If we simply use the transactions, dead lock should happen in read and write loc
 * When write transaction tries to write a table, it forces transactions that hold read lock to the table to release the lock.
    * The transactions become "aborted"
 * The aborted transactions are expected to be retried by the client.
+
+![abort](img/abort1.png) ![abort](img/abort2.png)
+
+### DML
+
+Because of transaction limitations, DML also has limitations.
+
+When a transaction(A) updates a table, other transactions cannot read/write the table until the transaction(A) commits. This limitation may become an inconsistency to the Cloud Spanner. Other limitations are same to mutations with commit.
+
+![block](img/read_block.png)
 
 ## Feature Request and Bug Report
 
