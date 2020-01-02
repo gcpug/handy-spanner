@@ -41,6 +41,7 @@ type QueryBuilder struct {
 	db   *database
 	tx   *transaction
 	stmt ast.QueryExpr
+	dml  ast.DML
 
 	views    map[string]*TableView
 	rootView *TableView
@@ -69,6 +70,17 @@ func BuildQuery(db *database, tx *transaction, stmt ast.QueryExpr, params map[st
 	return b.Build()
 }
 
+func BuildDML(db *database, tx *transaction, dml ast.DML, params map[string]Value) (string, []interface{}, error) {
+	b := &QueryBuilder{
+		db:     db,
+		tx:     tx,
+		dml:    dml,
+		views:  make(map[string]*TableView),
+		params: params,
+	}
+	return b.BuildDML()
+}
+
 func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
 	switch q := b.stmt.(type) {
 	case *ast.Select:
@@ -80,6 +92,19 @@ func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
 	}
 
 	return "", nil, nil, status.Errorf(codes.Unimplemented, "not unknown expression %T", b.stmt)
+}
+
+func (b *QueryBuilder) BuildDML() (string, []interface{}, error) {
+	switch q := b.dml.(type) {
+	case *ast.Insert:
+		return b.buildInsert(q)
+	case *ast.Delete:
+		return b.buildDelete(q)
+	case *ast.Update:
+		return b.buildUpdate(q)
+	}
+
+	return "", nil, status.Errorf(codes.Unimplemented, "not unknown expression %T", b.stmt)
 }
 
 func (b *QueryBuilder) registerTableAlias(view *TableView, name string) error {
@@ -326,6 +351,231 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 	query := strings.Join(ss, fmt.Sprintf(" %s ", op))
 	query = fmt.Sprintf("%s%s%s", query, orderByClause, limitClause)
 	return query, data, items, nil
+}
+
+func (b *QueryBuilder) buildUpdate(up *ast.Update) (string, []interface{}, error) {
+	t, err := b.db.useTableExclusive(up.TableName.Name, b.tx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return "", nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		return "", nil, err
+	}
+	view := t.TableView()
+	b.rootView = view
+
+	// build FROM
+	var fromClause string
+	var tableAliiasName string
+	if up.As == nil {
+		fromClause = t.Name
+		tableAliiasName = t.Name
+		if err := b.registerTableAlias(view, t.Name); err != nil {
+			return "", nil, err
+		}
+	} else {
+		fromClause = fmt.Sprintf("%s AS %s", t.Name, up.As.Alias.Name)
+		tableAliiasName = up.As.Alias.Name
+		if err := b.registerTableAlias(view, up.As.Alias.Name); err != nil {
+			return "", nil, err
+		}
+	}
+
+	// build SET
+	var setClause []string
+	usedPaths := make(map[string]struct{}, len(up.Updates))
+	for _, item := range up.Updates {
+		var fullPathName string
+		var normalizedFullPathName string
+
+		var path Expr
+		if len(item.Path) == 1 {
+			ex, err := b.buildExpr(item.Path[0])
+			if err != nil {
+				return "", nil, wrapExprError(err, item.Expr, "Updates")
+			}
+			path = ex
+			fullPathName = item.Path[0].Name
+			normalizedFullPathName = item.Path[0].Name
+		} else {
+			ex, err := b.buildExpr(&ast.Path{Idents: item.Path})
+			if err != nil {
+				return "", nil, wrapExprError(err, item.Expr, "Updates")
+			}
+			path = ex
+
+			// generate full path name
+			paths := make([]string, len(item.Path))
+			for i := range item.Path {
+				paths[i] = item.Path[i].Name
+			}
+			fullPathName = strings.Join(paths, ".")
+
+			// if the first path is same to table alias name, normalize the full path name
+			if paths[0] == tableAliiasName {
+				normalizedFullPathName = strings.Join(paths[1:], ".")
+			} else {
+				normalizedFullPathName = fullPathName
+			}
+		}
+
+		// check duplicate path in set clause
+		if _, ok := usedPaths[normalizedFullPathName]; ok {
+			return "", nil, status.Errorf(codes.InvalidArgument, "Update item %s assigned more than once", fullPathName)
+		}
+		usedPaths[normalizedFullPathName] = struct{}{}
+
+		value, err := b.buildExpr(item.Expr)
+		if err != nil {
+			return "", nil, wrapExprError(err, item.Expr, "Updates")
+		}
+		b.args = append(b.args, value.Args...)
+
+		setClause = append(setClause, fmt.Sprintf("%s = %s", path.Raw, value.Raw))
+	}
+
+	// build WHERE
+	whereClause, data, err := b.buildQueryWhereClause(up.Where)
+	if err != nil {
+		return "", nil, err
+	}
+	b.args = append(b.args, data...)
+
+	query := fmt.Sprintf(`UPDATE %s SET %s WHERE %s`, fromClause, strings.Join(setClause, ", "), whereClause)
+
+	return query, b.args, nil
+}
+
+func (b *QueryBuilder) buildInsert(up *ast.Insert) (string, []interface{}, error) {
+	t, err := b.db.useTableExclusive(up.TableName.Name, b.tx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return "", nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		return "", nil, err
+	}
+	view := t.TableView()
+	b.rootView = view
+	tableName := t.Name
+
+	var columns []string
+	for _, c := range up.Columns {
+		columns = append(columns, c.Name)
+	}
+
+	// Check columns exist in the table
+	for _, c := range columns {
+		if _, err := t.getColumn(c); err != nil {
+			return "", nil, status.Errorf(codes.InvalidArgument, "Column %s is not present in table %s", c, tableName)
+		}
+	}
+
+	// Ensure multiple values are not specified
+	usedColumns := make(map[string]struct{}, len(columns))
+	for _, name := range columns {
+		if _, ok := usedColumns[name]; ok {
+			return "", nil, status.Errorf(codes.InvalidArgument, "INSERT has columns with duplicate name: %s", name)
+		}
+		usedColumns[name] = struct{}{}
+	}
+
+	// Check not nullable columns
+	if exist, nonNullables := t.NonNullableColumnsExist(columns); exist {
+		columns := strings.Join(nonNullables, ", ")
+		return "", nil, status.Errorf(codes.FailedPrecondition,
+			"A new row in table %s does not specify a non-null value for these NOT NULL columns: %s",
+			tableName, columns,
+		)
+	}
+
+	var values string
+	switch input := up.Input.(type) {
+	case *ast.ValuesInput:
+		var rows []string
+		for _, row := range input.Rows {
+			if len(row.Exprs) != len(columns) {
+				return "", nil, status.Errorf(codes.InvalidArgument,
+					"Inserted row has wrong column count; Has %d, expected %d",
+					len(row.Exprs), len(columns),
+				)
+			}
+
+			var values []string
+			for _, e := range row.Exprs {
+				if e.Default {
+					values = append(values, "NULL")
+					continue
+				}
+
+				ex, err := b.buildExpr(e.Expr)
+				if err != nil {
+					return "", nil, wrapExprError(err, e.Expr, "INSERT")
+				}
+				b.args = append(b.args, ex.Args...)
+				values = append(values, ex.Raw)
+			}
+
+			rows = append(rows, fmt.Sprintf("(%s)", strings.Join(values, ", ")))
+		}
+
+		values = fmt.Sprintf("VALUES %s", strings.Join(rows, ", "))
+	case *ast.SubQueryInput:
+		query, data, items, err := BuildQuery(b.db, b.tx, input.Query, b.params, false)
+		if err != nil {
+			return "", nil, fmt.Errorf("Subquery error: %v", err)
+		}
+		b.args = append(b.args, data...)
+
+		if len(items) != len(columns) {
+			return "", nil, status.Errorf(codes.InvalidArgument,
+				"Inserted row has wrong column count; Has %d, expected %d",
+				len(items), len(columns),
+			)
+		}
+
+		values = query
+	}
+
+	query := fmt.Sprintf(`INSERT INTO %s (%s) %s`, tableName, strings.Join(columns, ", "), values)
+
+	return query, b.args, nil
+}
+
+func (b *QueryBuilder) buildDelete(up *ast.Delete) (string, []interface{}, error) {
+	t, err := b.db.useTableExclusive(up.TableName.Name, b.tx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return "", nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		return "", nil, err
+	}
+	view := t.TableView()
+	b.rootView = view
+
+	// build FROM
+	var fromClause string
+	if up.As == nil {
+		fromClause = t.Name
+		if err := b.registerTableAlias(view, t.Name); err != nil {
+			return "", nil, err
+		}
+	} else {
+		fromClause = fmt.Sprintf("%s AS %s", t.Name, up.As.Alias.Name)
+		if err := b.registerTableAlias(view, up.As.Alias.Name); err != nil {
+			return "", nil, err
+		}
+	}
+
+	// build WHERE
+	whereClause, data, err := b.buildQueryWhereClause(up.Where)
+	if err != nil {
+		return "", nil, err
+	}
+	b.args = append(b.args, data...)
+
+	query := fmt.Sprintf(`DELETE FROM %s WHERE %s`, fromClause, whereClause)
+
+	return query, b.args, nil
 }
 
 func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, []interface{}, error) {

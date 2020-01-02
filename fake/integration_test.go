@@ -456,6 +456,112 @@ func TestIntegration_Read_KeySet(t *testing.T) {
 	}
 }
 
+func TestIntegration_ReadWrite_Update(t *testing.T) {
+	ctx := context.Background()
+	dbName := "projects/fake/instances/fake/databases/fake"
+
+	f, err := os.Open("./testdata/schema.sql")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+
+	srv, conn, err := Run()
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	defer srv.Stop()
+
+	if err := srv.ParseAndApplyDDL(ctx, dbName, f); err != nil {
+		t.Fatal(err)
+	}
+
+	client, err := spanner.NewClient(ctx, dbName, option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatalf("Connecting to in-memory fake: %v", err)
+	}
+
+	read := func(rows *spanner.RowIterator) ([]*Simple, error) {
+		var results []*Simple
+		err = rows.Do(func(row *spanner.Row) error {
+			var s Simple
+			if err := row.ToStruct(&s); err != nil {
+				return err
+			}
+			results = append(results, &s)
+
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("Iterating over all row read: %v", err)
+		}
+		return results, nil
+	}
+
+	expected1 := []*Simple{
+		{ID: 100, Value: "xxx"},
+		{ID: 101, Value: "yyy"},
+	}
+
+	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
+		stmt := spanner.NewStatement(`INSERT INTO Simple (Id, Value) VALUES(@id1, @value1), (@id2, @value2)`)
+		stmt.Params = map[string]interface{}{
+			"id1":    100,
+			"value1": "xxx",
+			"id2":    101,
+			"value2": "yyy",
+		}
+		if _, err := tx.Update(ctx, stmt); err != nil {
+			return err
+		}
+
+		rows := tx.Read(ctx, "Simple", spanner.AllKeys(), []string{"Id", "Value"})
+		results, err := read(rows)
+		if err != nil {
+			return err
+		}
+
+		if diff := cmp.Diff(expected1, results); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+
+		stmt2 := spanner.NewStatement(`UPDATE Simple SET Value = "200" WHERE Id = @id`)
+		stmt2.Params = map[string]interface{}{
+			"id": 100,
+		}
+		if _, err := tx.Update(ctx, stmt2); err != nil {
+			return err
+		}
+
+		stmt3 := spanner.NewStatement(`DELETE FROM Simple WHERE Id = @id`)
+		stmt3.Params = map[string]interface{}{
+			"id": 101,
+		}
+		if _, err := tx.Update(ctx, stmt3); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReadWriteTransaction: %v", err)
+	}
+
+	expected2 := []*Simple{
+		{ID: 100, Value: "200"},
+	}
+
+	var results []*Simple
+	rows := client.Single().Read(ctx, "Simple", spanner.AllKeys(), []string{"Id", "Value"})
+	results, err = read(rows)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	if diff := cmp.Diff(expected2, results); diff != "" {
+		t.Errorf("(-got, +want)\n%s", diff)
+	}
+}
+
 func TestIntegration_Query(t *testing.T) {
 	ctx := context.Background()
 	dbName := "projects/fake/instances/fake/databases/fake"

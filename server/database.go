@@ -38,6 +38,7 @@ type Database interface {
 
 	Read(ctx context.Context, tx *transaction, tbl, index string, cols []string, keyset *KeySet, limit int64) (RowIterator, error)
 	Query(ctx context.Context, tx *transaction, query *ast.QueryStatement, params map[string]Value) (RowIterator, error)
+	Execute(ctx context.Context, tx *transaction, dml ast.DML, params map[string]Value) (int64, error)
 
 	Insert(ctx context.Context, tx *transaction, tbl string, cols []string, values []*structpb.ListValue) error
 	Update(ctx context.Context, tx *transaction, tbl string, cols []string, values []*structpb.ListValue) error
@@ -153,6 +154,15 @@ func (tt *tableTransaction) Use(tx *transaction) {
 		defer DebugStartEnd("[%s] tableTransaction.Use", tx.Name())()
 	}
 
+	// skip if the transction already holds the table lock
+	tt.transactionsInUseMu.Lock()
+	if tx.Equals(tt.lockHolder) {
+		tt.transactionsInUseMu.Unlock()
+		return
+	}
+	tt.transactionsInUseMu.Unlock()
+
+	// try to get read lock
 	tt.use.RLock()
 	defer tt.use.RUnlock()
 
@@ -175,6 +185,7 @@ func (tt *tableTransaction) Lock(tx *transaction) {
 	}
 	tt.transactionsInUseMu.Unlock()
 
+	// try to get write lock
 	tt.use.Lock()
 
 	var uses []*transaction
@@ -194,6 +205,7 @@ func (tt *tableTransaction) Lock(tx *transaction) {
 		}
 	}()
 
+	// Abort all ransactions which hold read lock for the table
 	for _, tt := range uses {
 		if !tx.Equals(tt) {
 			tt.Done(TransactionAborted)
@@ -281,6 +293,14 @@ func (d *database) waitUntilReadable(ctx context.Context, tx *transaction) error
 		defer DebugStartEnd("[%s] database.waitUntilReadable", tx.Name())()
 	}
 
+	// Skip if the transaction already holds write lock
+	d.writeTransactionMu.RLock()
+	curTx := d.writeTransaction
+	d.writeTransactionMu.RUnlock()
+	if tx.Equals(curTx) {
+		return nil
+	}
+
 	if d.writeBarrier.Released() {
 		return nil
 	}
@@ -294,7 +314,7 @@ func (d *database) waitUntilReadable(ctx context.Context, tx *transaction) error
 	select {
 	case <-ch:
 	case <-ctx.Done():
-		return ctx.Err()
+		return status.FromContextError(ctx.Err()).Err()
 	}
 
 	if !tx.Available() {
@@ -365,7 +385,7 @@ func (d *database) waitUntilWritable(ctx context.Context, tx *transaction) error
 	select {
 	case <-ch:
 	case <-ctx.Done():
-		return ctx.Err()
+		return status.FromContextError(ctx.Err()).Err()
 	}
 
 	if !tx.Available() {
@@ -600,6 +620,56 @@ func (d *database) Query(ctx context.Context, tx *transaction, stmt *ast.QuerySt
 	return &rows{rows: sqlRows, resultItems: resultItems, transaction: tx}, nil
 }
 
+func (d *database) Execute(ctx context.Context, tx *transaction, dml ast.DML, params map[string]Value) (int64, error) {
+	if err := d.waitUntilWritable(ctx, tx); err != nil {
+		return 0, err
+	}
+
+	if !tx.Available() {
+		return 0, ErrNotAvailableTransaction
+	}
+
+	if tx.Status() == TransactionAborted {
+		return 0, status.Errorf(codes.Aborted, "transaction aborted")
+	}
+
+	query, args, err := BuildDML(d, tx, dml, params)
+	if err != nil {
+		return 0, err
+	}
+
+	var affectedRows int64
+	err = tx.WriteTransaction(func(dbtx databaseWriter) error {
+		r, err := dbtx.ExecContext(ctx, query, args...)
+		if err != nil {
+			if sqliteErr, ok := err.(sqlite.Error); ok {
+				// This error should not be happend.
+				// This error means a tx tries to write a table which another tx holds read-lock
+				// to the table, or a tx tries to write a table which another tx holds global wite-lock
+				//
+				// It better to be panic but return Aborted to expect the client retries.
+				if sqliteErr.Code == sqlite.ErrLocked {
+					return status.Errorf(codes.Aborted, "transaction is aborted: database is locked")
+				}
+			}
+
+			return status.Errorf(codes.Internal, "failed to write into sqlite: %v", err)
+		}
+
+		affectedRows, err = r.RowsAffected()
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return affectedRows, nil
+}
+
 func (d *database) write(ctx context.Context, tx *transaction, tbl string, cols []string, values []*structpb.ListValue,
 	nonNullCheck bool,
 	affectedRowsCheck bool,
@@ -658,19 +728,8 @@ func (d *database) write(ctx context.Context, tx *transaction, tbl string, cols 
 
 	// Check not nullable columns are specified for Insert/Replace
 	if nonNullCheck {
-		var noExsitNonNullableColumns []string
-		for _, c := range table.columns {
-			if c.nullable {
-				continue
-			}
-
-			n := c.Name()
-			if _, ok := usedColumns[n]; !ok {
-				noExsitNonNullableColumns = append(noExsitNonNullableColumns, n)
-			}
-		}
-		if len(noExsitNonNullableColumns) > 0 {
-			columns := strings.Join(noExsitNonNullableColumns, ", ")
+		if exist, nonNullables := table.NonNullableColumnsExist(cols); exist {
+			columns := strings.Join(nonNullables, ", ")
 			return status.Errorf(codes.FailedPrecondition,
 				"A new row in table %s does not specify a non-null value for these NOT NULL columns: %s",
 				tbl, columns,

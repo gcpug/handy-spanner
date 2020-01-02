@@ -431,13 +431,23 @@ func TestReadAndWriteTransaction_AtomicUpdate(t *testing.T) {
 		return n, nil
 	}
 
-	commit := func(session *spannerpb.Session, tx *spannerpb.Transaction, pKey string, next int) error {
-		_, err := s.Commit(ctx, &spannerpb.CommitRequest{
-			Session: session.Name,
-			Transaction: &spannerpb.CommitRequest_TransactionId{
-				TransactionId: tx.Id,
-			},
-			Mutations: []*spannerpb.Mutation{
+	commit := func(session *spannerpb.Session, tx *spannerpb.Transaction, pKey string, sql bool, next int) error {
+		var mus []*spannerpb.Mutation
+		if sql {
+			_, err := s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+				Session: session.Name,
+				Transaction: &spannerpb.TransactionSelector{
+					Selector: &spannerpb.TransactionSelector_Id{
+						Id: tx.Id,
+					},
+				},
+				Sql: fmt.Sprintf(`UPDATE Simple Set Value = "%d" WHERE Id = %s`, next, pKey),
+			})
+			if err != nil {
+				return err
+			}
+		} else {
+			mus = []*spannerpb.Mutation{
 				{
 					Operation: &spannerpb.Mutation_Update{
 						Update: &spannerpb.Mutation_Write{
@@ -454,8 +464,17 @@ func TestReadAndWriteTransaction_AtomicUpdate(t *testing.T) {
 						},
 					},
 				},
+			}
+		}
+
+		_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
 			},
+			Mutations: mus,
 		})
+
 		return err
 	}
 
@@ -473,6 +492,7 @@ func TestReadAndWriteTransaction_AtomicUpdate(t *testing.T) {
 		{pKey: "1001", concurrency: 10, tries: 10},
 		{pKey: "1002", concurrency: 20, tries: 10},
 		{pKey: "1003", concurrency: 50, tries: 5},
+		{pKey: "1004", concurrency: 100, tries: 30},
 	}
 
 	for _, tc := range table {
@@ -550,7 +570,7 @@ func TestReadAndWriteTransaction_AtomicUpdate(t *testing.T) {
 							next := n + 1
 
 							// write +1 value
-							if err := commit(session, tx, pKey, next); err != nil {
+							if err := commit(session, tx, pKey, useSql, next); err != nil {
 								if code := status.Code(err); code == codes.Aborted {
 									continue
 								}
