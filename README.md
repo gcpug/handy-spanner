@@ -48,7 +48,7 @@ Note that the fake spanner server has no databases nor tables by default. You ne
 If you use a fake spanner server in tests in Go, it's easier to run it in a process.
 See an [example](https://github.com/gcpug/handy-spanner/blob/master/fake/example_test.go) for the details.
 
-Note that it becomes specific implementations for a fake server, which means you cannot switch the backend depending on the situation. If you want to test on both real spanner and fake, it's better to use a fake server as an independent process.
+Note that it becomes specific implementations for a fake server, which means you cannot switch the backend depending on the situation. If you want to test on both Cloud Spanner and fake, it's better to use a fake server as an independent process.
 
 ## Can and Cannot
 
@@ -79,8 +79,9 @@ Note that it becomes specific implementations for a fake server, which means you
    * All mutation types: Insert, Update, InsertOrUpdate, Replace, Delete
    * Commit timestamp
 * Transaction
+   * Isolation level: SERIALIZABLE
 * DML
-   * fully not yet supported
+   * Insert, Update, Delete
 * DDL
    * CreateTable, CreateIndex only
 * Data Types
@@ -98,8 +99,6 @@ Note that it becomes specific implementations for a fake server, which means you
    * Merging INT64 and FLOAT64 in SET operations
    * Array operations
    * Struct
-* DML
-   * not yet
 * DDL
    * Alter Table, Drop Table, Drop Index
    * Database management
@@ -111,7 +110,7 @@ Note that it becomes specific implementations for a fake server, which means you
 
 ### Transaction simulation
 
-handy-spanner uses sqlite3 in [Shared-Cache Mode](https://www.sqlite.org/sharedcache.html). There is a characteristic for the trasactions.
+handy-spanner uses sqlite3 in [Shared-Cache Mode](https://www.sqlite.org/sharedcache.html). There is a characteristic in the trasactions.
 
 * Only one transaction can hold write lock per database to write database tables.
     * Other transactions still can hold read lock.
@@ -130,6 +129,15 @@ If we simply use the transactions, dead lock should happen in read and write loc
    * The transactions become "aborted"
 * The aborted transactions are expected to be retried by the client.
 
+![abort](img/abort1.png) ![abort](img/abort2.png)
+
+### DML
+
+Because of transaction limitations, DML also has limitations.
+
+When a transaction(A) updates a table, other transactions cannot read/write the table until the transaction(A) commits. This limitation may become an inconsistency to the Cloud Spanner. Other limitations are same to mutations with commit.
+
+![block](img/read_block.png)
 
 ## Copyright
 
