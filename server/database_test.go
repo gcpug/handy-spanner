@@ -2477,3 +2477,282 @@ func TestMutationError(t *testing.T) {
 		})
 	}
 }
+
+func TestExecute(t *testing.T) {
+	table := map[string]struct {
+		sql    string
+		params map[string]Value
+
+		code          codes.Code
+		msg           *regexp.Regexp
+		expectedCount int64
+		table         string
+		cols          []string
+		expected      [][]interface{}
+	}{
+		"Simple_Update": {
+			sql:           `UPDATE Simple SET Value = "zzz" WHERE Id = 100`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "zzz"},
+			},
+		},
+		"Simple_Update_ParamInWhere": {
+			sql: `UPDATE Simple SET Value = "zzz" WHERE Id = @id`,
+			params: map[string]Value{
+				"id": makeTestValue("100"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "zzz"},
+			},
+		},
+		"Simple_Update_ParamInValue": {
+			sql: `UPDATE Simple SET Value = @value WHERE Id = 100`,
+			params: map[string]Value{
+				"value": makeTestValue("zzz"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "zzz"},
+			},
+		},
+		"Simple_Update_MultipleItems": {
+			sql:  `UPDATE Simple SET Value = "zzz", Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems2": {
+			sql:  `UPDATE Simple AS s SET s.Value = "zzz", Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems3": {
+			sql:  `UPDATE Simple AS s SET Value = "zzz", s.Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item s.Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems4": {
+			sql:  `UPDATE Simple AS s SET s.Value = "zzz", s.Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item s.Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems5": {
+			sql:  `UPDATE Simple SET Simple.Value = "zzz", Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item Value assigned more than once`),
+		},
+		"Simple_Update_ColumnNotFound": {
+			sql:  `UPDATE Simple SET Valu = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Unrecognized name: Valu`),
+		},
+		"Simple_Update_PathNotFound": {
+			sql:  `UPDATE Simple AS s SET s.Valu = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Name Valu not found inside s`),
+		},
+		"Simple_Insert": {
+			sql:           `INSERT INTO Simple (Id, Value) VALUES(101, "yyy")`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(101), "yyy"},
+			},
+		},
+		"Simple_Insert_Param": {
+			sql: `INSERT INTO Simple (Id, Value) VALUES(@a, @b)`,
+			params: map[string]Value{
+				"a": makeTestValue("1000"),
+				"b": makeTestValue("bbbb"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(1000), "bbbb"},
+			},
+		},
+		"Simple_InsertMulti": {
+			sql:           `INSERT INTO Simple (Id, Value) VALUES(101, "yyy"), (102, "zzz")`,
+			expectedCount: 2,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(101), "yyy"},
+				[]interface{}{int64(102), "zzz"},
+			},
+		},
+		"Simple_Insert_Query": {
+			sql:           `INSERT INTO Simple (Id, Value) SELECT FTInt+1, PKey FROM FullTypes`,
+			expectedCount: 2,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(101), "xxx"},
+				[]interface{}{int64(102), "yyy"},
+			},
+		},
+		"Simple_Insert_Subquery": {
+			sql:           `INSERT INTO Simple (Id, Value) VALUES(200, (SELECT PKey FROM FullTypes WHERE PKey = "xxx"))`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(200), "xxx"},
+			},
+		},
+		// "Simple_Insert_Unnest": {
+		// 	sql: `INSERT INTO Simple (Id, Value) SELECT * FROM UNNEST ([(200, "y"), (300, "z")])`,
+
+		// 	expectedCount: 2,
+		// 	table:         "Simple",
+		// 	cols:          []string{"Id", "Value"},
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(100), "xxx"},
+		// 		[]interface{}{int64(200), "y"},
+		// 		[]interface{}{int64(300), "z"},
+		// 	},
+		// },
+		"Simple_Insert_NonNullValue": {
+			sql:  `INSERT INTO Simple (Id) VALUES(101)`,
+			code: codes.FailedPrecondition,
+			msg:  regexp.MustCompile(`A new row in table Simple does not specify a non-null value for these NOT NULL columns: Value`),
+		},
+		"Simple_Insert_MultipleKeys": {
+			sql:  `INSERT INTO Simple (Id, Id, Value) VALUES(101, 102, "x")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`INSERT has columns with duplicate name: Id`),
+		},
+		"Simple_Insert_WrongColumnCount": {
+			sql:  `INSERT INTO Simple (Id, Value) VALUES(101, 102, "x")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Inserted row has wrong column count; Has 3, expected 2`),
+		},
+		"Simple_Insert_ColumnNotFound": {
+			sql:  `INSERT INTO Simple (Id, Valueee) VALUES(101, "x")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Column Valueee is not present in table Simple`),
+		},
+		"Simple_Delete": {
+			sql:           `DELETE FROM Simple WHERE Id = 100`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected:      nil,
+		},
+		"Simple_Delete_SubQuery": {
+			sql:           `DELETE FROM Simple WHERE Id IN (SELECT Id FROM Simple)`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected:      nil,
+		},
+		"Simple_Delete_Param": {
+			sql: `DELETE FROM Simple WHERE Id = @id`,
+			params: map[string]Value{
+				"id": makeTestValue("100"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected:      nil,
+		},
+		"Simple_Delete_NotExist": {
+			sql:           `DELETE FROM Simple WHERE Id = 10000`,
+			expectedCount: 0,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+			},
+		},
+	}
+
+	for name, tt := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			stmt, err := (&parser.Parser{
+				Lexer: &parser.Lexer{
+					File: &token.File{FilePath: "", Buffer: tt.sql},
+				},
+			}).ParseDML()
+			if err != nil {
+				t.Fatalf("failed to parse DML: %q %v", tt.sql, err)
+			}
+
+			db := newDatabase()
+			ses := newSession(db, "foo")
+
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				r, err := db.Execute(ctx, tx, stmt, tt.params)
+				if tt.code == codes.OK {
+					if err != nil {
+						t.Fatalf("Execute failed: %v", err)
+					}
+					if r != tt.expectedCount {
+						t.Fatalf("expect count to be %v, but got %v", tt.expectedCount, r)
+					}
+				} else {
+					st := status.Convert(err)
+					if st.Code() != tt.code {
+						t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
+					}
+					if !tt.msg.MatchString(st.Message()) {
+						t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tt.msg)
+					}
+				}
+			})
+
+			if tt.code != codes.OK {
+				return
+			}
+
+			// check database values
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.table, "", tt.cols, &KeySet{All: true}, 100)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
+		})
+	}
+}

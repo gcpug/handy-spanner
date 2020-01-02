@@ -220,6 +220,7 @@ func newTestServer() *server {
 }
 
 func assertGRPCError(t *testing.T, err error, code codes.Code, msg string) {
+	t.Helper()
 	st := status.Convert(err)
 	if st.Code() != code {
 		t.Errorf("expect code to be %v but got %v", code, st.Code())
@@ -230,9 +231,10 @@ func assertGRPCError(t *testing.T, err error, code codes.Code, msg string) {
 }
 
 func assertStatusCode(t *testing.T, err error, code codes.Code) {
+	t.Helper()
 	st := status.Convert(err)
 	if st.Code() != code {
-		t.Errorf("expect code to be %v but got %v", code, st.Code())
+		t.Errorf("expect code to be %v but got %v: msg=%v", code, st.Code(), st.Message())
 	}
 }
 
@@ -1512,6 +1514,550 @@ func TestExecuteStreamingSql_Error(t *testing.T) {
 	}
 }
 
+func TestExecuteSql_Success(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+
+	preareDBAndSession := func(t *testing.T) *spannerpb.Session {
+		session, dbName := testCreateSession(t, s)
+		db, ok := s.db[dbName]
+		if !ok {
+			t.Fatalf("database not found")
+		}
+		for _, s := range allSchema {
+			ddls := parseDDL(t, s)
+			for _, ddl := range ddls {
+				db.ApplyDDL(ctx, ddl)
+			}
+		}
+
+		for _, query := range []string{
+			`INSERT INTO Simple VALUES(100, "xxx")`,
+			`INSERT INTO Simple VALUES(200, "yyy")`,
+			`INSERT INTO Simple VALUES(300, "zzz")`,
+		} {
+			if _, err := db.db.ExecContext(ctx, query); err != nil {
+				t.Fatalf("Insert failed: %v", err)
+			}
+		}
+
+		return session
+	}
+
+	begin := func(session *spannerpb.Session) *spannerpb.Transaction {
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return tx
+	}
+	commit := func(session *spannerpb.Session, tx *spannerpb.Transaction) error {
+		_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		return err
+	}
+
+	table := map[string]struct {
+		sql    string
+		types  map[string]*spannerpb.Type
+		params *structpb.Struct
+		fields []*spannerpb.StructType_Field
+
+		table    string
+		columns  []string
+		expected [][]*structpb.Value
+	}{
+		"Update": {
+			sql:     `UPDATE Simple SET Value = "xyz" WHERE Id = 200`,
+			table:   "Simple",
+			columns: []string{"Id", "Value"},
+			expected: [][]*structpb.Value{
+				{makeStringValue("100"), makeStringValue("xxx")},
+				{makeStringValue("200"), makeStringValue("xyz")},
+				{makeStringValue("300"), makeStringValue("zzz")},
+			},
+		},
+		"Update_ParamInWhere": {
+			sql: `UPDATE Simple SET Value = "xyz" WHERE Id = @id`,
+			types: map[string]*spannerpb.Type{
+				"id": &spannerpb.Type{
+					Code: spannerpb.TypeCode_INT64,
+				},
+			},
+			params: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"id": &structpb.Value{
+						Kind: &structpb.Value_StringValue{StringValue: "200"},
+					},
+				},
+			},
+			table:   "Simple",
+			columns: []string{"Id", "Value"},
+			expected: [][]*structpb.Value{
+				{makeStringValue("100"), makeStringValue("xxx")},
+				{makeStringValue("200"), makeStringValue("xyz")},
+				{makeStringValue("300"), makeStringValue("zzz")},
+			},
+		},
+	}
+
+	for name, tc := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+
+			session := preareDBAndSession(t)
+			tx := begin(session)
+
+			if _, err := s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+				Session: session.Name,
+				Transaction: &spannerpb.TransactionSelector{
+					Selector: &spannerpb.TransactionSelector_Id{
+						Id: tx.Id,
+					},
+				},
+				Sql:        tc.sql,
+				ParamTypes: tc.types,
+				Params:     tc.params,
+			}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if err := commit(session, tx); err != nil {
+				t.Fatalf("commit error: %v", err)
+			}
+
+			fake := NewFakeExecuteStreamingSqlServer(ctx)
+			if err := s.StreamingRead(&spannerpb.ReadRequest{
+				Session: session.Name,
+				Transaction: &spannerpb.TransactionSelector{
+					Selector: &spannerpb.TransactionSelector_SingleUse{
+						SingleUse: &spannerpb.TransactionOptions{
+							Mode: &spannerpb.TransactionOptions_ReadOnly_{
+								ReadOnly: &spannerpb.TransactionOptions_ReadOnly{},
+							},
+						},
+					},
+				},
+				Table:   tc.table,
+				Columns: tc.columns,
+				KeySet:  &spannerpb.KeySet{All: true},
+			}, fake); err != nil {
+				t.Fatalf("Read failed: %v", err)
+			}
+
+			var results [][]*structpb.Value
+			for _, set := range fake.sets {
+				results = append(results, set.Values)
+			}
+			if diff := cmp.Diff(tc.expected, results); diff != "" {
+				t.Errorf("(-got, +want)\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestExecuteSql_Error(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+	begin := func(ctx context.Context, t *testing.T, session *spannerpb.Session) *spannerpb.Transaction {
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return tx
+	}
+
+	t.Run("RollbackAfterRollback", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx := begin(ctx, t, session)
+
+		_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx.Id,
+				},
+			},
+			Sql: `UPDATE Simple SET Value = "x" WHERE Id = 1000`,
+		})
+		expected := "Cannot start a read or query within a transaction after Commit() or Rollback() has been called."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
+
+	t.Run("CommitAfterRollback", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx := begin(ctx, t, session)
+
+		_, err := s.Rollback(ctx, &spannerpb.RollbackRequest{
+			Session:       session.Name,
+			TransactionId: tx.Id,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx.Id,
+				},
+			},
+			Sql: `UPDATE Simple SET Value = "x" WHERE Id = 1000`,
+		})
+		expected := "Cannot start a read or query within a transaction after Commit() or Rollback() has been called."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
+
+	t.Run("ReadOnlyTransaction", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadOnly_{
+					ReadOnly: &spannerpb.TransactionOptions_ReadOnly{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx.Id,
+				},
+			},
+			Sql: `UPDATE Simple SET Value = "x" WHERE Id = 1000`,
+		})
+		expected := "DML statements can only be performed in a read-write transaction."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
+
+	t.Run("SingleUseTransaction", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		_, err := s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_SingleUse{
+					SingleUse: &spannerpb.TransactionOptions{
+						Mode: &spannerpb.TransactionOptions_ReadWrite_{
+							ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+						},
+					},
+				},
+			},
+			Sql: `UPDATE Simple SET Value = "x" WHERE Id = 1000`,
+		})
+		expected := "DML statements may not be performed in single-use transactions, to avoid replay."
+		assertGRPCError(t, err, codes.InvalidArgument, expected)
+	})
+}
+
+func TestExecuteSql_Transaction(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+
+	preareDBAndSession := func(t *testing.T) *spannerpb.Session {
+		session, dbName := testCreateSession(t, s)
+		db, ok := s.db[dbName]
+		if !ok {
+			t.Fatalf("database not found")
+		}
+		for _, s := range allSchema {
+			ddls := parseDDL(t, s)
+			for _, ddl := range ddls {
+				db.ApplyDDL(ctx, ddl)
+			}
+		}
+
+		for _, query := range []string{
+			`INSERT INTO Simple VALUES(100, "xxx")`,
+		} {
+			if _, err := db.db.ExecContext(ctx, query); err != nil {
+				t.Fatalf("Insert failed: %v", err)
+			}
+		}
+
+		return session
+	}
+
+	begin := func(session *spannerpb.Session) *spannerpb.Transaction {
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return tx
+	}
+	commit := func(session *spannerpb.Session, tx *spannerpb.Transaction) error {
+		_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		return err
+	}
+	readSimple := func(ctx context.Context, session *spannerpb.Session, tx *spannerpb.Transaction) ([]*structpb.Value, error) {
+		fake := NewFakeExecuteStreamingSqlServer(ctx)
+		err := s.StreamingRead(&spannerpb.ReadRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx.Id,
+				},
+			},
+			Table:   "Simple",
+			Columns: []string{"Id", "Value"},
+			KeySet:  &spannerpb.KeySet{All: true},
+		}, fake)
+		if err != nil {
+			return nil, err
+		}
+
+		var results []*structpb.Value
+		for _, set := range fake.sets {
+			results = append(results, set.Values...)
+		}
+
+		return results, nil
+	}
+
+	initialValueSet := []*structpb.Value{
+		makeStringValue("100"),
+		makeStringValue("xxx"),
+	}
+
+	t.Run("ReadBeforeCommit_SameTransaction", func(t *testing.T) {
+		session := preareDBAndSession(t)
+		tx := begin(session)
+		_, err := s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx.Id,
+				},
+			},
+			Sql:        `UPDATE Simple SET Value = "zzz" WHERE Id = 100`,
+			Params:     nil,
+			ParamTypes: nil,
+		})
+		assertStatusCode(t, err, codes.OK)
+
+		expected := []*structpb.Value{
+			makeStringValue("100"),
+			makeStringValue("zzz"),
+		}
+
+		results, err := readSimple(ctx, session, tx)
+		assertStatusCode(t, err, codes.OK)
+		if diff := cmp.Diff(results, expected); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+
+		if err := commit(session, tx); err != nil {
+			t.Fatalf("commit failed: %v", err)
+		}
+	})
+
+	t.Run("ReadBeforeCommit_AnotherTransaction", func(t *testing.T) {
+		session := preareDBAndSession(t)
+		tx1 := begin(session)
+		tx2 := begin(session)
+		defer commit(session, tx1)
+		defer commit(session, tx2)
+
+		_, err := s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx1.Id,
+				},
+			},
+			Sql:        `UPDATE Simple SET Value = "zzz" WHERE Id = 100`,
+			Params:     nil,
+			ParamTypes: nil,
+		})
+		assertStatusCode(t, err, codes.OK)
+
+		expected := []*structpb.Value{
+			makeStringValue("100"),
+			makeStringValue("zzz"),
+		}
+
+		// read in another transaction timeouts
+		ctx2, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancel()
+		_, err = readSimple(ctx2, session, tx2)
+		assertStatusCode(t, err, codes.DeadlineExceeded)
+
+		if err := commit(session, tx1); err != nil {
+			t.Fatalf("commit failed: %v", err)
+		}
+
+		// read in another transaction succeeds after commit
+		ctx3, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancel()
+		results, err := readSimple(ctx3, session, tx2)
+		assertStatusCode(t, err, codes.OK)
+		if diff := cmp.Diff(results, expected); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+	})
+
+	t.Run("ReadBeforeWrite_AnotherTransaction", func(t *testing.T) {
+		session := preareDBAndSession(t)
+		tx1 := begin(session)
+		tx2 := begin(session)
+		defer commit(session, tx1)
+		defer commit(session, tx2)
+
+		expected := []*structpb.Value{
+			makeStringValue("100"),
+			makeStringValue("zzz"),
+		}
+
+		// read in transaction2
+		results, err := readSimple(ctx, session, tx2)
+		assertStatusCode(t, err, codes.OK)
+		if diff := cmp.Diff(results, initialValueSet); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+
+		// write in transaction1 (aborting tx1)
+		_, err = s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx1.Id,
+				},
+			},
+			Sql:        `UPDATE Simple SET Value = "zzz" WHERE Id = 100`,
+			Params:     nil,
+			ParamTypes: nil,
+		})
+		assertStatusCode(t, err, codes.OK)
+
+		if err := commit(session, tx1); err != nil {
+			t.Fatalf("commit failed: %v", err)
+		}
+
+		// read in transaction fails because of abort
+		_, err = readSimple(ctx, session, tx2)
+		assertStatusCode(t, err, codes.Aborted)
+
+		// read in another transaction succeeds after commit
+		tx3 := begin(session)
+		defer commit(session, tx3)
+		results, err = readSimple(ctx, session, tx3)
+		assertStatusCode(t, err, codes.OK)
+		if diff := cmp.Diff(results, expected); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+	})
+
+	t.Run("WriteBeforeWrite_AnotherTransaction", func(t *testing.T) {
+		session := preareDBAndSession(t)
+		tx1 := begin(session)
+		tx2 := begin(session)
+		defer commit(session, tx1)
+		defer commit(session, tx2)
+
+		expected1 := []*structpb.Value{
+			makeStringValue("100"),
+			makeStringValue("xxx"),
+			makeStringValue("101"),
+			makeStringValue("yyy"),
+		}
+
+		// write in transaction2
+		_, err := s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx2.Id,
+				},
+			},
+			Sql: `INSERT INTO Simple (Id, Value) VALUES(101, "yyy")`,
+		})
+		assertStatusCode(t, err, codes.OK)
+
+		// write in transaction1 timeouts because tx2 holds write lock
+		ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancel()
+		_, err = s.ExecuteSql(ctx, &spannerpb.ExecuteSqlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx1.Id,
+				},
+			},
+			Sql:        `UPDATE Simple SET Value = "zzz" WHERE Id = 100`,
+			Params:     nil,
+			ParamTypes: nil,
+		})
+		assertStatusCode(t, err, codes.DeadlineExceeded)
+
+		// commit in transaction2
+		if err := commit(session, tx2); err != nil {
+			t.Fatalf("commit failed: %v", err)
+		}
+
+		// read in another transaction succeeds after commit
+		tx3 := begin(session)
+		defer commit(session, tx3)
+		results, err := readSimple(ctx, session, tx3)
+		assertStatusCode(t, err, codes.OK)
+		if diff := cmp.Diff(results, expected1); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+	})
+}
+
 func TestCommit(t *testing.T) {
 	ctx := context.Background()
 
@@ -1561,7 +2107,7 @@ func TestCommit(t *testing.T) {
 		}
 	})
 
-	t.Run("RollbackAfterRollback", func(t *testing.T) {
+	t.Run("CommitAfterCommit", func(t *testing.T) {
 		session, _ := testCreateSession(t, s)
 		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
 			Session: session.Name,
@@ -2232,6 +2778,21 @@ func TestTransaction(t *testing.T) {
 				KeySet:      &spannerpb.KeySet{All: true},
 			}, stream)
 		},
+		"ExecuteSql": func(session string, tx *spannerpb.TransactionSelector, stream spannerpb.Spanner_StreamingReadServer) error {
+			r, err := s.ExecuteSql(context.Background(), &spannerpb.ExecuteSqlRequest{
+				Session:     session,
+				Transaction: tx,
+				Sql:         `UPDATE Simple SET Value = "xxx" WHERE Id = 10000000`,
+			})
+			if err == nil {
+				// set data with stream to make test easir
+				stream.Send(&spannerpb.PartialResultSet{
+					Metadata: r.Metadata,
+					Stats:    r.Stats,
+				})
+			}
+			return err
+		},
 	}
 
 	for name, fn := range testcase {
@@ -2243,8 +2804,8 @@ func TestTransaction(t *testing.T) {
 				begin := &spannerpb.TransactionSelector{
 					Selector: &spannerpb.TransactionSelector_Begin{
 						Begin: &spannerpb.TransactionOptions{
-							Mode: &spannerpb.TransactionOptions_ReadOnly_{
-								ReadOnly: &spannerpb.TransactionOptions_ReadOnly{},
+							Mode: &spannerpb.TransactionOptions_ReadWrite_{
+								ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
 							},
 						},
 					},

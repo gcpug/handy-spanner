@@ -56,6 +56,33 @@ func (t *Table) TableView() *TableView {
 	return createTableViewFromTable(t)
 }
 
+// NonNullableColumnsExist checks non nullable columns exist in the spciefied columns.
+// It returns true and the columns if non nullable columns exist.
+func (t *Table) NonNullableColumnsExist(columns []string) (bool, []string) {
+	usedColumns := make(map[string]struct{}, len(columns))
+	for _, name := range columns {
+		usedColumns[name] = struct{}{}
+	}
+
+	var noExsitNonNullableColumns []string
+	for _, c := range t.columns {
+		if c.nullable {
+			continue
+		}
+
+		n := c.Name()
+		if _, ok := usedColumns[n]; !ok {
+			noExsitNonNullableColumns = append(noExsitNonNullableColumns, n)
+		}
+	}
+
+	if len(noExsitNonNullableColumns) > 0 {
+		return true, noExsitNonNullableColumns
+	}
+
+	return false, nil
+}
+
 func createTableFromAST(stmt *ast.CreateTable) (*Table, error) {
 	t := newTable()
 	t.Name = stmt.Name.Name
@@ -106,6 +133,14 @@ func (t *Table) createIndex(stmt *ast.CreateIndex) (*TableIndex, error) {
 	}
 	t.index = append(t.index, idx)
 	return idx, nil
+}
+
+func (t *Table) getColumn(name string) (*Column, error) {
+	c, ok := t.columnsMap[name]
+	if !ok {
+		return nil, fmt.Errorf("Column not found: %s", name)
+	}
+	return c, nil
 }
 
 func (t *Table) getColumnsByName(names []string) ([]*Column, error) {

@@ -473,7 +473,101 @@ func (s *server) DeleteSession(ctx context.Context, req *spannerpb.DeleteSession
 }
 
 func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlRequest) (*spannerpb.ResultSet, error) {
-	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ExecuteSql")
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	session, err := s.getSession(req.Session)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, txCreated, err := session.GetTransactionBySelector(req.GetTransaction())
+	if err != nil {
+		return nil, err
+	}
+
+	if tx.SingleUse() {
+		tx.Done(TransactionRollbacked)
+		msg := "DML statements may not be performed in single-use transactions, to avoid replay."
+		return nil, status.Errorf(codes.InvalidArgument, msg)
+	}
+
+	checkAvailability := func() error {
+		switch tx.Status() {
+		case TransactionInvalidated:
+			return status.Errorf(codes.FailedPrecondition, "This transaction has been invalidated by a later transaction in the same session.")
+		case TransactionCommited, TransactionRollbacked:
+			return status.Errorf(codes.FailedPrecondition, "Cannot start a read or query within a transaction after Commit() or Rollback() has been called.")
+		case TransactionAborted:
+			return status.Errorf(codes.Aborted, "transaction aborted")
+		}
+		return status.Errorf(codes.Unknown, "unknown status")
+	}
+
+	if !tx.Available() {
+		return nil, checkAvailability()
+	}
+
+	if !tx.ReadWrite() {
+		msg := "DML statements can only be performed in a read-write transaction."
+		return nil, status.Errorf(codes.FailedPrecondition, msg)
+	}
+
+	if req.Sql == "" {
+		return nil, status.Error(codes.InvalidArgument, "Invalid ExecuteSql request.")
+	}
+
+	dml, err := (&parser.Parser{
+		Lexer: &parser.Lexer{
+			File: &token.File{FilePath: "", Buffer: req.Sql},
+		},
+	}).ParseDML()
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "Syntax error: %q: %v", req.Sql, err)
+	}
+
+	fields := req.GetParams().GetFields()
+	paramTypes := req.ParamTypes
+	params := make(map[string]Value, len(fields))
+	defaultType := &spannerpb.Type{Code: spannerpb.TypeCode_INT64}
+	for key, val := range fields {
+		typ := defaultType
+		if paramTypes != nil {
+			if t, ok := paramTypes[key]; ok {
+				typ = t
+			}
+		}
+
+		v, err := makeValueFromSpannerValue(key, val, typ)
+		if err != nil {
+			return nil, err
+		}
+		params[key] = v
+	}
+
+	count, err := session.database.Execute(ctx, tx, dml, params)
+	if err != nil {
+		if !tx.Available() {
+			return nil, checkAvailability()
+		}
+		return nil, err
+	}
+
+	var metadata *spannerpb.ResultSetMetadata
+	if txCreated {
+		metadata = &spannerpb.ResultSetMetadata{
+			Transaction: tx.Proto(),
+		}
+	}
+
+	return &spannerpb.ResultSet{
+		Metadata: metadata,
+		Stats: &spannerpb.ResultSetStats{
+			RowCount: &spannerpb.ResultSetStats_RowCountExact{
+				RowCountExact: count,
+			},
+		},
+	}, nil
 }
 
 func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream spannerpb.Spanner_ExecuteStreamingSqlServer) error {
@@ -615,7 +709,6 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 		if !tx.Available() {
 			return checkAvailability()
 		}
-
 		return err
 	}
 
