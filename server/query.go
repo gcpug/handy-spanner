@@ -156,6 +156,7 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 	}
 
 	if selectStmt.AsStruct {
+		useSqliteJSON()
 		values := make([]string, len(resultItems))
 		quotedNames := make([]string, len(resultItems))
 		vts := make([]*ValueType, len(resultItems))
@@ -459,6 +460,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 //
 // See the doc comment of buildUnnestExpr about the generated query.
 func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []interface{}, error) {
+	useSqliteJSON()
 	var offset bool
 	var offsetAlias string
 	if src.WithOffset != nil {
@@ -607,6 +609,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			if st.IsTable {
 				exprs = append(exprs, fmt.Sprintf("%s.*", ex.Raw))
 			} else {
+				useSqliteJSON()
 				n := len(st.FieldTypes)
 				for i := 0; i < n; i++ {
 					exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", ex.Raw, i))
@@ -924,6 +927,7 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, error) {
 // If offset for unnest is needed `UNNEST([a, b, c])` generates:
 // `SELECT value, key as offset JSON_EACH(JSON_ARRAY(a, b, c))`
 func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool, asview bool) (Expr, error) {
+	useSqliteJSON()
 	ex, err := b.buildExpr(expr)
 	if err != nil {
 		return NullExpr, wrapExprError(err, expr, "UNNEST")
@@ -962,6 +966,7 @@ func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, error) {
 			Args:      []interface{}{v.Data},
 		}, nil
 	case []bool, []int64, []float64, []string, [][]byte:
+		useSqliteJSON()
 		vv := reflect.ValueOf(v.Data)
 		n := vv.Len()
 
@@ -982,6 +987,7 @@ func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, error) {
 		}, nil
 
 	case ArrayValue:
+		useSqliteJSON()
 		rv := reflect.ValueOf(v.Data.(ArrayValue).Elements())
 		n := rv.Len()
 
@@ -1042,6 +1048,7 @@ func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
 	if st.IsTable {
 		raw = fmt.Sprintf("%s.%s", expr.Raw, name)
 	} else {
+		useSqliteJSON()
 		raw = fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", expr.Raw, idx)
 	}
 
@@ -1192,6 +1199,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.IndexExpr:
+		useSqliteJSON()
 		ex1, err := b.buildExpr(e.Expr)
 		if err != nil {
 			return NullExpr, wrapExprError(err, expr, "Expr")
@@ -1565,6 +1573,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.ArraySubQuery:
+		useSqliteJSON()
 		query, args, items, err := BuildQuery(b.db, e.Query, b.params, true)
 		if err != nil {
 			return NullExpr, wrapExprError(err, expr, "Array")
@@ -1600,6 +1609,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.ArrayLiteral:
+		useSqliteJSON()
 		var args []interface{}
 		var ss []string
 		var vts []ValueType
@@ -1650,6 +1660,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.StructLiteral:
+		useSqliteJSON()
 		var names []string
 		var vt ValueType
 		var typedef bool
