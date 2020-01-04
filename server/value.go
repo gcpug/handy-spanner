@@ -70,7 +70,7 @@ func (t ValueType) String() string {
 	case TCBool, TCInt64, TCFloat64, TCTimestamp, TCDate, TCString, TCBytes:
 		return t.Code.String()
 	case TCArray:
-		return fmt.Sprintf("ARRAY<%s>", t.ArrayType.Code.String())
+		return fmt.Sprintf("ARRAY<%s>", t.ArrayType.String())
 	case TCStruct:
 		n := len(t.StructType.FieldTypes)
 		ss := make([]string, n)
@@ -90,6 +90,23 @@ func (t ValueType) String() string {
 }
 
 func compareValueType(a, b ValueType) bool {
+	if a.Code == TCStruct && b.Code == TCStruct {
+		aStr := a.StructType
+		bStr := b.StructType
+
+		if len(aStr.FieldTypes) != len(bStr.FieldTypes) {
+			return false
+		}
+		for i := 0; i < len(aStr.FieldTypes); i++ {
+			b := compareValueType(*aStr.FieldTypes[i], *bStr.FieldTypes[i])
+			if !b {
+				return false
+			}
+		}
+
+		return true
+	}
+
 	return a == b
 }
 

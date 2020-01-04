@@ -505,7 +505,73 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []i
 	}
 
 	view := createTableViewFromItems(items, nil)
-	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), s.Args, nil
+	raw := fmt.Sprintf("(%s) AS %s", s.Raw, viewName)
+
+	// if the element type is struct, it needs to be expanded
+	// otherwise return as is
+	if s.ValueType.ArrayType.Code != TCStruct {
+		return view, raw, s.Args, nil
+	}
+
+	viewItems := view.AllItems()
+	st := viewItems[0]
+
+	strItems := st.ValueType.StructType.AllItems()
+	var newItems []ResultItem
+	for i := range strItems {
+		newItems = append(newItems, ResultItem{
+			Name:      strItems[i].Name,
+			ValueType: strItems[i].ValueType,
+			Expr: Expr{
+				Raw:       strItems[i].Expr.Raw,
+				ValueType: strItems[i].Expr.ValueType,
+				Args:      strItems[i].Expr.Args,
+			},
+		})
+	}
+
+	var exprs []string
+	for i, item := range newItems {
+		if item.Name == "" {
+			exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", "value", i))
+		} else {
+			exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]') AS %s", "value", i, item.Name))
+		}
+	}
+
+	if src.As != nil {
+		viewName := src.As.Alias.Name
+		view2 := createTableViewFromItems(newItems, nil)
+		if err := b.registerTableAlias(view2, viewName); err != nil {
+			return nil, "", nil, err
+		}
+	}
+
+	var offsetItem []ResultItem
+	if offset {
+		offsetItem = []ResultItem{
+			{
+				Name:      viewItems[1].Name,
+				ValueType: viewItems[1].ValueType,
+				Expr: Expr{
+					Raw:       viewItems[1].Name,
+					ValueType: viewItems[1].Expr.ValueType,
+					Args:      viewItems[1].Expr.Args,
+				},
+			},
+		}
+		if viewItems[1].Name == "" {
+			exprs = append(exprs, viewItems[1].Expr.Raw)
+		} else {
+			exprs = append(exprs, fmt.Sprintf("%s AS %s", viewItems[1].Expr.Raw, viewItems[1].Name))
+		}
+	}
+
+	view3 := createTableViewFromItems(newItems, offsetItem)
+
+	selectQuery := strings.Join(exprs, ", ")
+
+	return view3, fmt.Sprintf("(SELECT %s FROM %s)", selectQuery, raw), s.Args, nil
 }
 
 func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultItem, string, error) {
@@ -1537,7 +1603,21 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		var args []interface{}
 		var ss []string
 		var vts []ValueType
+
+		var nestedStrType *ast.StructType
+		if e.Type != nil {
+			if st, ok := e.Type.(*ast.StructType); ok {
+				nestedStrType = st
+			}
+		}
+
 		for i := range e.Values {
+			// If the element is struct, need to populate the struct type.
+			// Because only top node knows the details of the type if it's a compound type.
+			if str, ok := e.Values[i].(*ast.StructLiteral); ok && nestedStrType != nil {
+				str.Fields = nestedStrType.Fields
+			}
+
 			ex, err := b.buildExpr(e.Values[i])
 			if err != nil {
 				return NullExpr, wrapExprError(err, expr, "ArrayLiteral")

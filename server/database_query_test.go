@@ -675,6 +675,12 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
+				name: "ArraySubquery_Simple_MultiColumns",
+				sql:  `SELECT ARRAY(SELECT Id, Id FROM Simple)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^ARRAY subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values`),
+			},
+			{
 				name: "ArraySubquery_Star",
 				sql:  `SELECT x FROM (SELECT ARRAY(SELECT * FROM (SELECT Id FROM Simple)) x)`,
 				expected: [][]interface{}{
@@ -902,6 +908,22 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(100)},
 				},
 			},
+			// {
+			// 	name: "ArrayStructLiteral_Named",
+			// 	sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(100, "xxx"), (200, "yyy")])`,
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(100), "xxx"},
+			// 		[]interface{}{int64(200), "yyy"},
+			// 	},
+			// },
+			{
+				name: "ArrayStructLiteral_Unnamed",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN UNNEST(ARRAY<STRUCT<INT64, STRING>>[(100, "xxx"), (200, "yyy")])`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+				},
+			},
 		},
 		"FromUnnest": {
 			{
@@ -952,6 +974,7 @@ func TestQuery(t *testing.T) {
 				params: map[string]Value{
 					"foo": makeTestValue([]int64{3, 4}),
 				},
+				names: []string{"", ""},
 				expected: [][]interface{}{
 					[]interface{}{int64(3), int64(0)},
 					[]interface{}{int64(4), int64(1)},
@@ -963,6 +986,7 @@ func TestQuery(t *testing.T) {
 				params: map[string]Value{
 					"foo": makeTestValue([]int64{3, 4}),
 				},
+				names: []string{"x"},
 				expected: [][]interface{}{
 					[]interface{}{int64(3)},
 					[]interface{}{int64(4)},
@@ -974,14 +998,16 @@ func TestQuery(t *testing.T) {
 				params: map[string]Value{
 					"foo": makeTestValue([]int64{3, 4}),
 				},
+				names: []string{"x", "y"},
 				expected: [][]interface{}{
 					[]interface{}{int64(3), int64(0)},
 					[]interface{}{int64(4), int64(1)},
 				},
 			},
 			{
-				name: "Literal_Alias_Star",
-				sql:  `SELECT * FROM UNNEST ([1,2,3]) AS xxx`,
+				name:  "Literal_Alias_Star",
+				sql:   `SELECT * FROM UNNEST ([1,2,3]) AS xxx`,
+				names: []string{"xxx"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1)},
 					[]interface{}{int64(2)},
@@ -989,8 +1015,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "Literal_Alias_Star_WithOffset",
-				sql:  `SELECT * FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+				name:  "Literal_Alias_Star_WithOffset",
+				sql:   `SELECT * FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+				names: []string{"xxx", "yyy"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1), int64(0)},
 					[]interface{}{int64(2), int64(1)},
@@ -998,8 +1025,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "Literal_Alias_Ident",
-				sql:  `SELECT xxx FROM UNNEST ([1,2,3]) AS xxx`,
+				name:  "Literal_Alias_Ident",
+				sql:   `SELECT xxx FROM UNNEST ([1,2,3]) AS xxx`,
+				names: []string{"xxx"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1)},
 					[]interface{}{int64(2)},
@@ -1007,8 +1035,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "Literal_Alias_WithOffset_Ident",
-				sql:  `SELECT xxx, yyy FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+				name:  "Literal_Alias_WithOffset_Ident",
+				sql:   `SELECT xxx, yyy FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+				names: []string{"xxx", "yyy"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1), int64(0)},
 					[]interface{}{int64(2), int64(1)},
@@ -1041,8 +1070,9 @@ func TestQuery(t *testing.T) {
 			// 	},
 			// },
 			{
-				name: "SubQuery_Array",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id FROM Simple))`,
+				name:  "SubQuery_Array",
+				sql:   `SELECT * FROM UNNEST(ARRAY(SELECT Id FROM Simple))`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{int64(100)},
 					[]interface{}{int64(200)},
@@ -1050,8 +1080,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SubQuery_Array_WithoutColumnAlias",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id+1 FROM Simple))`,
+				name:  "SubQuery_Array_WithoutColumnAlias",
+				sql:   `SELECT * FROM UNNEST(ARRAY(SELECT Id+1 FROM Simple))`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{int64(101)},
 					[]interface{}{int64(201)},
@@ -1059,14 +1090,88 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SubQuery_Array_WithColumnAlias",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id As x FROM Simple))`,
+				name:  "SubQuery_Array_WithColumnAlias",
+				sql:   `SELECT * FROM UNNEST(ARRAY(SELECT Id As x FROM Simple))`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{int64(100)},
 					[]interface{}{int64(200)},
 					[]interface{}{int64(300)},
 				},
 			},
+			{
+				name:  "SubQuery_Array_AsStruct",
+				sql:   `SELECT * FROM UNNEST(ARRAY(SELECT AS STRUCT Id, Value FROM Simple))`,
+				names: []string{"Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+					[]interface{}{int64(300), "zzz"},
+				},
+			},
+			{
+				name:  "Literal_Struct_Star",
+				sql:   `SELECT * FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')])`,
+				names: []string{"x", "y"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo"},
+					[]interface{}{int64(3), "bar"},
+				},
+			},
+			{
+				name:  "Literal_Struct_WithOffset_Star",
+				sql:   `SELECT * FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) WITH OFFSET`,
+				names: []string{"x", "y", ""},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo", int64(0)},
+					[]interface{}{int64(3), "bar", int64(1)},
+				},
+			},
+			{
+				name:  "Literal_Struct_WithOffsetAlias_Star",
+				sql:   `SELECT * FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) WITH OFFSET AS offset`,
+				names: []string{"x", "y", "offset"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo", int64(0)},
+					[]interface{}{int64(3), "bar", int64(1)},
+				},
+			},
+			{
+				name:  "Literal_Struct_WithOffsetAlias_Identifer",
+				sql:   `SELECT x, y, offset FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) WITH OFFSET AS offset`,
+				names: []string{"x", "y", "offset"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo", int64(0)},
+					[]interface{}{int64(3), "bar", int64(1)},
+				},
+			},
+			{
+				name:  "Literal_Struct_Alias_Star",
+				sql:   `SELECT * FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) AS foo WITH OFFSET`,
+				names: []string{"x", "y", ""},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo", int64(0)},
+					[]interface{}{int64(3), "bar", int64(1)},
+				},
+			},
+			// {
+			// 	name:  "Literal_Struct_Alias_DotStar",
+			// 	sql:   `SELECT foo.* FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) AS foo WITH OFFSET`,
+			// 	names: []string{"x", "y"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(1), "foo"},
+			// 		[]interface{}{int64(3), "bar"},
+			// 	},
+			// },
+			// {
+			// 	name:  "Literal_Struct_Alias_Identifer",
+			// 	sql:   `SELECT foo.x, foo.y, offset FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) WITH OFFSET AS offset`,
+			// 	names: []string{"x", "y", "offset"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(1), "foo", int64(0)},
+			// 		[]interface{}{int64(3), "bar", int64(1)},
+			// 	},
+			// },
 		},
 
 		"Struct": {
@@ -1192,22 +1297,25 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "DotStar_Ident_StructField",
-				sql:  `SELECT x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x)`,
+				name:  "DotStar_Ident_StructField",
+				sql:   `SELECT x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x)`,
+				names: []string{"Id", "Value"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1), string("xx")},
 				},
 			},
 			{
-				name: "DotStar_Path_StructField",
-				sql:  `SELECT y.x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x) y`,
+				name:  "DotStar_Path_StructField",
+				sql:   `SELECT y.x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x) y`,
+				names: []string{"Id", "Value"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1), string("xx")},
 				},
 			},
 			{
-				name: "SelectAsStruct",
-				sql:  `SELECT ARRAY(SELECT AS STRUCT Id, Value FROM Simple)`,
+				name:  "SelectAsStruct",
+				sql:   `SELECT ARRAY(SELECT AS STRUCT Id, Value FROM Simple)`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{
 						[]*StructValue{
@@ -1228,8 +1336,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SelectAsStruct_Star",
-				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM Simple)`,
+				name:  "SelectAsStruct_Star",
+				sql:   `SELECT ARRAY(SELECT AS STRUCT * FROM Simple)`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{
 						[]*StructValue{
@@ -1250,8 +1359,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SelectAsStruct_Star_SubQuery",
-				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM (SELECT Id+1, CONCAT(Value, "a") FROM Simple))`,
+				name:  "SelectAsStruct_Star_SubQuery",
+				sql:   `SELECT ARRAY(SELECT AS STRUCT * FROM (SELECT Id+1, CONCAT(Value, "a") FROM Simple))`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{
 						[]*StructValue{
@@ -1452,6 +1562,50 @@ func TestQuery(t *testing.T) {
 				sql:  `SELECT [(SELECT STRUCT<Id INT64, STRUCT<Id INT64>>(1, (SELECT AS STRUCT Id FROM Simple)))]`,
 				code: codes.Unimplemented,
 				msg:  regexp.MustCompile(`^Unsupported query shape: A struct value cannot be returned as a column value. Rewrite the query to flatten the struct fields in the result.`),
+			},
+			{
+				name: "Where_Compare_Untyped",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) = (100, "xxx")`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			// TODO
+			// {
+			// 	name: "Where_Compare_TypedWithName",
+			// 	sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) = STRUCT<x INT64, y STRING>(100, "xxx")`,
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(100), "xxx"},
+			// 	},
+			// },
+			{
+				name: "Where_Compare_TypedWithName2",
+				sql:  `SELECT Id, Value FROM Simple WHERE STRUCT<x INT64, y STRING>(Id, Value) = STRUCT<x INT64, y STRING>(100, "xxx")`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			{
+				name: "Where_Compare_TypedWithoutName",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) = STRUCT<INT64, STRING>(100, "xxx")`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			{
+				name: "Where_In",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN ((100, "xxx"), (200, "yyy"))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+				},
+			},
+			{
+				name: "Where_NotIn",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) NOT IN ((100, "xxx"), (200, "yyy"))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(300), "zzz"},
+				},
 			},
 		},
 
