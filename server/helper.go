@@ -14,7 +14,7 @@ func FindParentDDL(stmt ast.DDL, ddls []ast.DDL) (*ast.CreateTable, error) {
 				switch subVal := subStmt.(type) {
 				case *ast.CreateTable:
 					if subVal.Name.Name == val.Cluster.TableName.Name {
-						return val, nil
+						return subVal, nil
 					}
 				}
 			}

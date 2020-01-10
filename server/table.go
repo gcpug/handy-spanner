@@ -30,7 +30,6 @@ type Table struct {
 
 	primaryKey *TableIndex
 	index      []*TableIndex
-	foreignKeyConstraint string
 }
 
 func newTable() *Table {
@@ -57,7 +56,7 @@ func (t *Table) TableView() *TableView {
 	return createTableViewFromTable(t)
 }
 
-func createTableFromAST(stmt *ast.CreateTable, parentStmt *ast.CreateTable) (*Table, error) {
+func createTableFromAST(stmt *ast.CreateTable) (*Table, error) {
 	t := newTable()
 	t.Name = stmt.Name.Name
 	t.ast = stmt
@@ -70,8 +69,6 @@ func createTableFromAST(stmt *ast.CreateTable, parentStmt *ast.CreateTable) (*Ta
 	if err := t.setPrimaryKeys(stmt.PrimaryKeys); err != nil {
 		return nil, err
 	}
-
-	t.addForeignKeyConstraint(stmt, parentStmt)
 
 	return t, nil
 }
@@ -122,20 +119,6 @@ func (t *Table) getColumnsByName(names []string) ([]*Column, error) {
 	}
 
 	return columns, nil
-}
-
-func (t *Table) addForeignKeyConstraint(stmt *ast.CreateTable, parentStmt *ast.CreateTable) {
-	if stmt.Cluster != nil && parentStmt != nil {
-		var columns string
-		for idx, key := range parentStmt.PrimaryKeys {
-			if idx == 0 {
-				columns += fmt.Sprintf("%s", key.Name.Name)
-			} else {
-				columns += fmt.Sprintf(", %s", key.Name.Name)
-			}
-		}
-		t.foreignKeyConstraint = fmt.Sprintf("FOREIGN KEY(%s) REFERENCES %s(%s) %s", columns, parentStmt.Name.Name, columns, stmt.Cluster.OnDelete)
-	}
 }
 
 type Column struct {

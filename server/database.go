@@ -56,7 +56,7 @@ type database struct {
 
 func newDatabase() *database {
 	uuid := uuidpkg.New().String()
-	db, err := sql.Open("sqlite3_spanner", fmt.Sprintf("file:%s.db?cache=shared&mode=memory", uuid))
+	db, err := sql.Open("sqlite3_spanner", fmt.Sprintf("file:%s.db?cache=shared&mode=memory&_foreign_keys=true", uuid))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -476,12 +476,12 @@ func (d *database) Delete(ctx context.Context, tbl string, keyset *KeySet) error
 	return nil
 }
 
-func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable, parentSmt *ast.CreateTable) error {
+func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable, parentStmt *ast.CreateTable) error {
 	if _, ok := db.tables[stmt.Name.Name]; ok {
 		return fmt.Errorf("duplicated table: %v", stmt.Name.Name)
 	}
 
-	t, err := createTableFromAST(stmt, parentSmt)
+	t, err := createTableFromAST(stmt)
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "CreateTable failed: %v", err)
 	}
@@ -501,10 +501,19 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable, pare
 	}
 	columnDefsQuery := strings.Join(columnDefs, ",\n")
 	primaryKeysQuery := strings.Join(t.primaryKey.IndexColumnNames(), ", ")
-	foreignKeyConstraint := ""
+	var foreignKeyConstraint string
 
-	if t.foreignKeyConstraint != "" {
-		foreignKeyConstraint = fmt.Sprintf(",\n %s", t.foreignKeyConstraint)
+	if stmt.Cluster != nil && parentStmt != nil {
+		var columns string
+		for idx, key := range parentStmt.PrimaryKeys {
+			if idx == 0 {
+				columns += fmt.Sprintf("%s", key.Name.Name)
+			} else {
+				columns += fmt.Sprintf(", %s", key.Name.Name)
+			}
+		}
+
+		foreignKeyConstraint = fmt.Sprintf(",\n FOREIGN KEY(%s) REFERENCES %s(%s) %s", columns, parentStmt.Name.Name, columns, stmt.Cluster.OnDelete)
 	}
 
 	query := fmt.Sprintf("CREATE TABLE `%s` (\n%s,\n  PRIMARY KEY (%s)%s\n)", t.Name, columnDefsQuery, primaryKeysQuery, foreignKeyConstraint)
