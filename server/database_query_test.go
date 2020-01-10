@@ -33,7 +33,11 @@ func TestQuery(t *testing.T) {
 	for _, s := range allSchema {
 		ddls := parseDDL(t, s)
 		for _, ddl := range ddls {
-			db.ApplyDDL(ctx, ddl)
+			parentDDL, err := FindParentDDL(ddl, ddls)
+			if err != nil {
+				t.Fatalf("Could not find parent for interleaving: %v", err)
+			}
+			db.ApplyDDL(ctx, ddl, parentDDL)
 		}
 	}
 

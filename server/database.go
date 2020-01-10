@@ -31,7 +31,7 @@ import (
 )
 
 type Database interface {
-	ApplyDDL(ctx context.Context, ddl ast.DDL) error
+	ApplyDDL(ctx context.Context, ddl ast.DDL, parentDDL *ast.CreateTable) error
 
 	Read(ctx context.Context, tbl, index string, cols []string, keyset *KeySet, limit int64) (RowIterator, error)
 	Query(ctx context.Context, query *ast.QueryStatement, params map[string]Value) (RowIterator, error)
@@ -78,13 +78,13 @@ func (d *database) readTable(tbl string) (*Table, func(), error) {
 	return table, func() { d.mu.RUnlock() }, nil
 }
 
-func (d *database) ApplyDDL(ctx context.Context, ddl ast.DDL) error {
+func (d *database) ApplyDDL(ctx context.Context, ddl ast.DDL, parentDDL *ast.CreateTable) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	switch val := ddl.(type) {
 	case *ast.CreateTable:
-		if err := d.CreateTable(ctx, val); err != nil {
+		if err := d.CreateTable(ctx, val, parentDDL); err != nil {
 			return status.Errorf(codes.Internal, "%v", err)
 		}
 		return nil
@@ -476,12 +476,12 @@ func (d *database) Delete(ctx context.Context, tbl string, keyset *KeySet) error
 	return nil
 }
 
-func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) error {
+func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable, parentSmt *ast.CreateTable) error {
 	if _, ok := db.tables[stmt.Name.Name]; ok {
 		return fmt.Errorf("duplicated table: %v", stmt.Name.Name)
 	}
 
-	t, err := createTableFromAST(stmt)
+	t, err := createTableFromAST(stmt, parentSmt)
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "CreateTable failed: %v", err)
 	}
@@ -501,8 +501,13 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 	}
 	columnDefsQuery := strings.Join(columnDefs, ",\n")
 	primaryKeysQuery := strings.Join(t.primaryKey.IndexColumnNames(), ", ")
+	foreignKeyConstraint := ""
 
-	query := fmt.Sprintf("CREATE TABLE `%s` (\n%s,\n  PRIMARY KEY (%s)\n)", t.Name, columnDefsQuery, primaryKeysQuery)
+	if t.foreignKeyConstraint != "" {
+		foreignKeyConstraint = fmt.Sprintf(",\n %s", t.foreignKeyConstraint)
+	}
+
+	query := fmt.Sprintf("CREATE TABLE `%s` (\n%s,\n  PRIMARY KEY (%s)%s\n)", t.Name, columnDefsQuery, primaryKeysQuery, foreignKeyConstraint)
 	if _, err := db.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("failed to create table for %s: %v", t.Name, err)
 	}

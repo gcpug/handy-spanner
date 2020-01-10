@@ -583,7 +583,12 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 	for _, s := range allSchema {
 		ddls := parseDDL(t, s)
 		for _, ddl := range ddls {
-			db.ApplyDDL(ctx, ddl)
+			parentDDL, err := FindParentDDL(ddl, ddls)
+			if err != nil {
+				t.Fatalf("Could not find parent for interleaving: %v", err)
+			}
+
+			db.ApplyDDL(ctx, ddl, parentDDL)
 		}
 	}
 	for _, query := range []string{
@@ -1242,7 +1247,12 @@ func TestStreamingRead_ValueType(t *testing.T) {
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
-					db.ApplyDDL(ctx, ddl)
+					parentDDL, err := FindParentDDL(ddl, ddls)
+					if err != nil {
+						t.Fatalf("Could not find parent for interleaving: %v", err)
+					}
+
+					db.ApplyDDL(ctx, ddl, parentDDL)
 				}
 			}
 
@@ -1318,7 +1328,12 @@ func TestExecuteStreamingSql_Error(t *testing.T) {
 	for _, s := range allSchema {
 		ddls := parseDDL(t, s)
 		for _, ddl := range ddls {
-			db.ApplyDDL(ctx, ddl)
+			parentDDL, err := FindParentDDL(ddl, ddls)
+			if err != nil {
+				t.Fatalf("Could not find parent for interleaving: %v", err)
+			}
+
+			db.ApplyDDL(ctx, ddl, parentDDL)
 		}
 	}
 
@@ -1707,7 +1722,12 @@ func TestCommitMutations(t *testing.T) {
 	for _, schema := range allSchema {
 		ddls := parseDDL(t, schema)
 		for _, ddl := range ddls {
-			if err := s.ApplyDDL(ctx, dbName, ddl); err != nil {
+			parentDDL, err := FindParentDDL(ddl, ddls)
+			if err != nil {
+				t.Fatalf("Could not find parent for interleaving: %v", err)
+			}
+
+			if err := s.ApplyDDL(ctx, dbName, ddl, parentDDL); err != nil {
 				t.Fatalf("ApplyDDL failed: %v", err)
 			}
 		}
@@ -2051,7 +2071,12 @@ func TestTransaction(t *testing.T) {
 		for _, s := range allSchema {
 			ddls := parseDDL(t, s)
 			for _, ddl := range ddls {
-				db.ApplyDDL(ctx, ddl)
+				parentDDL, err := FindParentDDL(ddl, ddls)
+				if err != nil {
+					t.Fatalf("Could not find parent for interleaving: %v", err)
+				}
+
+				db.ApplyDDL(ctx, ddl, parentDDL)
 			}
 		}
 

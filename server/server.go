@@ -37,7 +37,7 @@ import (
 )
 
 type FakeSpannerServer interface {
-	ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL) error
+	ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL, parentStmt *ast.CreateTable) error
 
 	spannerpb.SpannerServer
 	adminv1pb.DatabaseAdminServer
@@ -62,13 +62,13 @@ type server struct {
 	sessions  map[string]*session
 }
 
-func (s *server) ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL) error {
+func (s *server) ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL, parentStmt *ast.CreateTable) error {
 	db, err := s.getOrCreateDatabase(databaseName)
 	if err != nil {
 		return err
 	}
 
-	return db.ApplyDDL(ctx, stmt)
+	return db.ApplyDDL(ctx, stmt, parentStmt)
 }
 
 // CreateDatabase implements adminv1pb.DatabaseAdminServer.
@@ -104,7 +104,7 @@ func (s *server) CreateDatabase(ctx context.Context, req *adminv1pb.CreateDataba
 		return nil, err
 	}
 	for _, ddl := range stmts {
-		if err := s.ApplyDDL(ctx, databaseName, ddl); err != nil {
+		if err := s.ApplyDDL(ctx, databaseName, ddl, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -172,7 +172,13 @@ func (s *server) UpdateDatabaseDdl(ctx context.Context, req *adminv1pb.UpdateDat
 	}
 
 	for _, ddl := range stmts {
-		_ = s.ApplyDDL(ctx, req.Database, ddl)
+		parentDDL, err := FindParentDDL(ddl, stmts)
+
+		if err != nil {
+			return nil, err
+		}
+
+		_ = s.ApplyDDL(ctx, req.Database, ddl, parentDDL)
 	}
 
 	op := &lropb.Operation{
