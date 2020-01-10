@@ -31,7 +31,7 @@ import (
 )
 
 type Database interface {
-	ApplyDDL(ctx context.Context, ddl ast.DDL, parentDDL *ast.CreateTable) error
+	ApplyDDL(ctx context.Context, ddl ast.DDL) error
 
 	Read(ctx context.Context, tbl, index string, cols []string, keyset *KeySet, limit int64) (RowIterator, error)
 	Query(ctx context.Context, query *ast.QueryStatement, params map[string]Value) (RowIterator, error)
@@ -78,13 +78,13 @@ func (d *database) readTable(tbl string) (*Table, func(), error) {
 	return table, func() { d.mu.RUnlock() }, nil
 }
 
-func (d *database) ApplyDDL(ctx context.Context, ddl ast.DDL, parentDDL *ast.CreateTable) error {
+func (d *database) ApplyDDL(ctx context.Context, ddl ast.DDL) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	switch val := ddl.(type) {
 	case *ast.CreateTable:
-		if err := d.CreateTable(ctx, val, parentDDL); err != nil {
+		if err := d.CreateTable(ctx, val); err != nil {
 			return status.Errorf(codes.Internal, "%v", err)
 		}
 		return nil
@@ -476,7 +476,7 @@ func (d *database) Delete(ctx context.Context, tbl string, keyset *KeySet) error
 	return nil
 }
 
-func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable, parentStmt *ast.CreateTable) error {
+func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) error {
 	if _, ok := db.tables[stmt.Name.Name]; ok {
 		return fmt.Errorf("duplicated table: %v", stmt.Name.Name)
 	}
@@ -503,17 +503,17 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable, pare
 	primaryKeysQuery := strings.Join(t.primaryKey.IndexColumnNames(), ", ")
 	var foreignKeyConstraint string
 
-	if stmt.Cluster != nil && parentStmt != nil {
-		var columns string
-		for idx, key := range parentStmt.PrimaryKeys {
-			if idx == 0 {
-				columns += fmt.Sprintf("%s", key.Name.Name)
-			} else {
-				columns += fmt.Sprintf(", %s", key.Name.Name)
-			}
+
+	if stmt.Cluster != nil{
+		parentTableName := stmt.Cluster.TableName.Name
+		parentStmt, ok :=  db.tables[parentTableName]
+		if !ok {
+			return fmt.Errorf("could not find parent table for interleaving: %v", stmt.Name.Name)
 		}
 
-		foreignKeyConstraint = fmt.Sprintf(",\n FOREIGN KEY(%s) REFERENCES %s(%s) %s", columns, parentStmt.Name.Name, columns, stmt.Cluster.OnDelete)
+		columns := strings.Join(parentStmt.primaryKey.IndexColumnNames(), ",")
+
+		foreignKeyConstraint = fmt.Sprintf(",\n FOREIGN KEY(%s) REFERENCES %s(%s) %s", columns, parentTableName, columns, stmt.Cluster.OnDelete)
 	}
 
 	query := fmt.Sprintf("CREATE TABLE `%s` (\n%s,\n  PRIMARY KEY (%s)%s\n)", t.Name, columnDefsQuery, primaryKeysQuery, foreignKeyConstraint)

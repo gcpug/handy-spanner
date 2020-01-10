@@ -536,12 +536,7 @@ func TestApplyDDL(t *testing.T) {
 		db := newDatabase()
 		ddls := parseDDL(t, tt.ddl)
 		for _, ddl := range ddls {
-			parentDDL, err := FindParentDDL(ddl, ddls)
-			if err != nil {
-				t.Fatalf("Could not find parent for interleaving: %v", err)
-			}
-
-			db.ApplyDDL(ctx, ddl, parentDDL)
+			db.ApplyDDL(ctx, ddl)
 		}
 	}
 }
@@ -565,11 +560,7 @@ func TestRead(t *testing.T) {
 	for _, s := range allSchema {
 		ddls := parseDDL(t, s)
 		for _, ddl := range ddls {
-			parentDDL, err := FindParentDDL(ddl, ddls)
-			if err != nil {
-				t.Fatalf("Could not find parent for interleaving: %v", err)
-			}
-			db.ApplyDDL(ctx, ddl, parentDDL)
+			db.ApplyDDL(ctx, ddl)
 		}
 	}
 
@@ -901,11 +892,7 @@ func TestReadError(t *testing.T) {
 	for _, s := range allSchema {
 		ddls := parseDDL(t, s)
 		for _, ddl := range ddls {
-			parentDDL, err := FindParentDDL(ddl, ddls)
-			if err != nil {
-				t.Fatalf("Could not find parent for interleaving: %v", err)
-			}
-			db.ApplyDDL(ctx, ddl, parentDDL)
+			db.ApplyDDL(ctx, ddl)
 		}
 	}
 
@@ -1009,11 +996,7 @@ func TestRead_FullType_Range(t *testing.T) {
 	for _, s := range schema {
 		ddls := parseDDL(t, s)
 		for _, ddl := range ddls {
-			parentDDL, err := FindParentDDL(ddl, ddls)
-			if err != nil {
-				t.Fatalf("Could not find parent for interleaving: %v", err)
-			}
-			db.ApplyDDL(ctx, ddl, parentDDL)
+			db.ApplyDDL(ctx, ddl)
 		}
 	}
 
@@ -1357,12 +1340,7 @@ func TestInsertAndReplace(t *testing.T) {
 					for _, s := range allSchema {
 						ddls := parseDDL(t, s)
 						for _, ddl := range ddls {
-							parentDDL, err := FindParentDDL(ddl, ddls)
-							if err != nil {
-								t.Fatalf("Could not find parent for interleaving: %v", err)
-							}
-
-							db.ApplyDDL(ctx, ddl, parentDDL)
+							db.ApplyDDL(ctx, ddl)
 						}
 					}
 
@@ -1436,12 +1414,7 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 		for _, s := range allSchema {
 			ddls := parseDDL(t, s)
 			for _, ddl := range ddls {
-				parentDDL, err := FindParentDDL(ddl, ddls)
-				if err != nil {
-					t.Fatalf("Could not find parent for interleaving: %v", err)
-				}
-
-				db.ApplyDDL(ctx, ddl, parentDDL)
+				db.ApplyDDL(ctx, ddl)
 			}
 		}
 
@@ -1635,12 +1608,7 @@ func TestReplace(t *testing.T) {
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
-					parentDDL, err := FindParentDDL(ddl, ddls)
-					if err != nil {
-						t.Fatalf("Could not find parent for interleaving: %v", err)
-					}
-
-					db.ApplyDDL(ctx, ddl, parentDDL)
+					db.ApplyDDL(ctx, ddl)
 				}
 			}
 
@@ -1832,12 +1800,7 @@ func TestUpdate(t *testing.T) {
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
-					parentDDL, err := FindParentDDL(ddl, ddls)
-					if err != nil {
-						t.Fatalf("Could not find parent for interleaving: %v", err)
-					}
-
-					db.ApplyDDL(ctx, ddl, parentDDL)
+					db.ApplyDDL(ctx, ddl)
 				}
 			}
 
@@ -2008,12 +1971,7 @@ func TestInsertOrUpdate(t *testing.T) {
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
-					parentDDL, err := FindParentDDL(ddl, ddls)
-					if err != nil {
-						t.Fatalf("Could not find parent for interleaving: %v", err)
-					}
-
-					db.ApplyDDL(ctx, ddl, parentDDL)
+					db.ApplyDDL(ctx, ddl)
 				}
 			}
 
@@ -2162,12 +2120,7 @@ func TestDelete(t *testing.T) {
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
-					parentDDL, err := FindParentDDL(ddl, ddls)
-					if err != nil {
-						t.Fatalf("Could not find parent for interleaving: %v", err)
-					}
-
-					if err := db.ApplyDDL(ctx, ddl, parentDDL); err != nil {
+					if err := db.ApplyDDL(ctx, ddl); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -2431,12 +2384,7 @@ func TestMutationError(t *testing.T) {
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
-					parentDDL, err := FindParentDDL(ddl, ddls)
-					if err != nil {
-						t.Fatalf("Could not find parent for interleaving: %v", err)
-					}
-
-					db.ApplyDDL(ctx, ddl, parentDDL)
+					db.ApplyDDL(ctx, ddl)
 				}
 			}
 
@@ -2633,12 +2581,7 @@ func TestInterleaveInsert(t *testing.T) {
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
-					parentDDL, err := FindParentDDL(ddl, ddls)
-					if err != nil {
-						t.Fatalf("Could not find parent for interleaving: %v", err)
-					}
-
-					db.ApplyDDL(ctx, ddl, parentDDL)
+					db.ApplyDDL(ctx, ddl)
 				}
 			}
 
@@ -2827,12 +2770,7 @@ func TestInterleaveDeleteParent(t *testing.T) {
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
-					parentDDL, err := FindParentDDL(ddl, ddls)
-					if err != nil {
-						t.Fatalf("Could not find parent for interleaving: %v", err)
-					}
-
-					db.ApplyDDL(ctx, ddl, parentDDL)
+					db.ApplyDDL(ctx, ddl)
 				}
 			}
 

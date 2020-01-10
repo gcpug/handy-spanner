@@ -100,7 +100,7 @@ func (s *Server) Stop() {
 
 func (s *Server) ApplyDDL(ctx context.Context, databaseName string, ddl []ast.DDL) error {
 	for _, stmt := range ddl {
-		if err := s.srv.ApplyDDL(ctx, databaseName, stmt, nil); err != nil {
+		if err := s.srv.ApplyDDL(ctx, databaseName, stmt); err != nil {
 			return err
 		}
 	}
@@ -123,13 +123,7 @@ func (s *Server) ParseAndApplyDDL(ctx context.Context, databaseName string, r io
 	}
 
 	for _, stmt := range ddl {
-		parentDDL, err := server.FindParentDDL(stmt, ddl)
-
-		if err != nil {
-			return err
-		}
-
-		if err := s.srv.ApplyDDL(ctx, databaseName, stmt, parentDDL); err != nil {
+		if err := s.srv.ApplyDDL(ctx, databaseName, stmt); err != nil {
 			return err
 		}
 	}
