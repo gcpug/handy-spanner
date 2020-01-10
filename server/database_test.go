@@ -33,11 +33,47 @@ import (
 )
 
 var (
-	allSchema    = []string{schemaSimple, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes}
+	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes}
 	schemaSimple = `CREATE TABLE Simple (
   Id INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
 ) PRIMARY KEY(Id);
+`
+	schemaInterleaved = `CREATE TABLE ParentTable (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+
+CREATE TABLE Interleaved (
+  InterleavedId INT64 NOT NULL,
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id, InterleavedId),
+INTERLEAVE IN PARENT ParentTable;
+`
+	schemaInterleavedCascade = `CREATE TABLE ParentTableCascade (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+
+CREATE TABLE InterleavedCascade (
+  InterleavedId INT64 NOT NULL,
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id, InterleavedId),
+INTERLEAVE IN PARENT ParentTableCascade ON DELETE CASCADE;
+`
+	schemaInterleavedNoAction = `CREATE TABLE ParentTableNoAction (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+
+CREATE TABLE InterleavedNoAction (
+  InterleavedId INT64 NOT NULL,
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id, InterleavedId),
+INTERLEAVE IN PARENT ParentTableNoAction ON DELETE NO ACTION;
 `
 	schemaCompositePrimaryKeys = `CREATE TABLE CompositePrimaryKeys (
   Id INT64 NOT NULL,
@@ -2381,6 +2417,413 @@ func TestMutationError(t *testing.T) {
 						t.Errorf("unexpected error message: %v", st.Message())
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestInterleaveInsert(t *testing.T) {
+	type tableConfig struct {
+		tbl      string
+		wcols    []string
+		values   []*structpb.Value
+		cols     []string
+		limit    int64
+		expected [][]interface{}
+	}
+
+	table := map[string]struct {
+		child        *tableConfig
+		parent       *tableConfig
+		expectsError bool
+	}{
+		"InsertWithoutParent": {
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:     []string{"InterleavedId", "Id", "Value"},
+				limit:    100,
+				expected: nil,
+			},
+			expectsError: true,
+		},
+		"InsertWithParent": {
+			parent: &tableConfig{
+				tbl:   "ParentTable",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"InterleavedId", "Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), int64(100), "xxx"},
+				},
+			},
+			expectsError: false,
+		},
+		"InsertWithoutParent(Cascade)": {
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:     []string{"InterleavedId", "Id", "Value"},
+				limit:    100,
+				expected: nil,
+			},
+			expectsError: true,
+		},
+		"InsertWithParent(Cascade)": {
+			parent: &tableConfig{
+				tbl:   "ParentTable",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"InterleavedId", "Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), int64(100), "xxx"},
+				},
+			},
+			expectsError: false,
+		},
+		"InsertWithoutParent(NoAction)": {
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:     []string{"InterleavedId", "Id", "Value"},
+				limit:    100,
+				expected: nil,
+			},
+			expectsError: true,
+		},
+		"InsertWithParent(NoAction)": {
+			parent: &tableConfig{
+				tbl:   "ParentTable",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"InterleavedId", "Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), int64(100), "xxx"},
+				},
+			},
+			expectsError: false,
+		},
+	}
+
+	for name, tt := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			db := newDatabase()
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			if tt.parent != nil {
+				testInsertInterleaveHelper(t, ctx, db, tt.parent.tbl, tt.parent.cols, tt.parent.wcols, tt.parent.values, tt.parent.limit, tt.parent.expected)
+			}
+
+			if tt.expectsError {
+				listValues := []*structpb.ListValue{
+					{Values: tt.child.values},
+				}
+				if err := db.Insert(ctx, tt.child.tbl, tt.child.wcols, listValues); err == nil {
+					t.Fatalf("Insert succeeded even though it should fail: %v", err)
+				}
+				return
+			}
+
+			testInsertInterleaveHelper(t, ctx, db, tt.child.tbl, tt.child.cols, tt.child.wcols, tt.child.values, tt.child.limit, tt.child.expected)
+		})
+	}
+}
+
+func testInsertInterleaveHelper(
+	t *testing.T,
+	ctx context.Context,
+	db *database,
+	tbl string,
+	cols []string,
+	wcols []string,
+	values []*structpb.Value,
+	limit int64,
+	expected [][]interface{},
+) {
+	listValues := []*structpb.ListValue{
+		{Values: values},
+	}
+
+	if err := db.Insert(ctx, tbl, wcols, listValues); err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	it, err := db.Read(ctx, tbl, "", cols, &KeySet{All: true}, limit)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	var rows [][]interface{}
+	err = it.Do(func(row []interface{}) error {
+		rows = append(rows, row)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error in iteration: %v", err)
+	}
+
+	if diff := cmp.Diff(expected, rows); diff != "" {
+		t.Errorf("(-got, +want)\n%s", diff)
+	}
+}
+
+func TestInterleaveDeleteParent(t *testing.T) {
+	type tableConfig struct {
+		tbl    string
+		wcols  []string
+		values []*structpb.Value
+		cols   []string
+		ks     *KeySet
+	}
+
+	table := map[string]struct {
+		child              *tableConfig
+		parent             *tableConfig
+		expectsDeleteError bool
+	}{
+		"DeleteDefault": {
+			parent: &tableConfig{
+				tbl:   "ParentTable",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(makeStringValue("100")),
+					},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"InterleavedId", "Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(
+							makeStringValue("100"),
+							makeStringValue("100"),
+						),
+					},
+				},
+			},
+			expectsDeleteError: true,
+		},
+		"DeleteCascade": {
+			parent: &tableConfig{
+				tbl:   "ParentTableCascade",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(makeStringValue("100")),
+					},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "InterleavedCascade",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"InterleavedId", "Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(
+							makeStringValue("100"),
+							makeStringValue("100"),
+						),
+					},
+				},
+			},
+			expectsDeleteError: false,
+		},
+		"DeleteNoAction": {
+			parent: &tableConfig{
+				tbl:   "ParentTableNoAction",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(makeStringValue("100")),
+					},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "InterleavedNoAction",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"InterleavedId", "Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(
+							makeStringValue("100"),
+							makeStringValue("100"),
+						),
+					},
+				},
+			},
+			expectsDeleteError: true,
+		},
+	}
+
+	for name, tt := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			db := newDatabase()
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			// Insert data
+
+			parentListValues := []*structpb.ListValue{
+				{Values: tt.parent.values},
+			}
+
+			if err := db.Insert(ctx, tt.parent.tbl, tt.parent.wcols, parentListValues); err != nil {
+				t.Fatalf("Insert failed: %v", err)
+			}
+
+			listValues := []*structpb.ListValue{
+				{Values: tt.child.values},
+			}
+
+			if err := db.Insert(ctx, tt.child.tbl, tt.child.wcols, listValues); err != nil {
+				t.Fatalf("Insert failed: %v", err)
+			}
+
+			// Delete parent entry
+
+			if tt.expectsDeleteError {
+				if err := db.Delete(ctx, tt.parent.tbl, tt.parent.ks); err == nil {
+					t.Fatalf("Delete parent succeeded even though it should fail: %v", err)
+				}
+				return
+			}
+
+			if err := db.Delete(ctx, tt.parent.tbl, tt.parent.ks); err != nil {
+				t.Fatalf("Delete parent failed: %v", err)
+			}
+
+			// Try to read child entry
+
+			it, err := db.Read(ctx, tt.child.tbl, "", tt.child.cols, tt.child.ks, 1)
+			if err != nil {
+				t.Fatalf("Read failed: %v", err)
+			}
+
+			var rows [][]interface{}
+			err = it.Do(func(row []interface{}) error {
+				rows = append(rows, row)
+				return nil
+			})
+
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
+			}
+
+			if rows != nil {
+				t.Fatalf("Child did not get deleted with parent")
 			}
 		})
 	}

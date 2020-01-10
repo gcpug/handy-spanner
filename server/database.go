@@ -56,7 +56,7 @@ type database struct {
 
 func newDatabase() *database {
 	uuid := uuidpkg.New().String()
-	db, err := sql.Open("sqlite3_spanner", fmt.Sprintf("file:%s.db?cache=shared&mode=memory", uuid))
+	db, err := sql.Open("sqlite3_spanner", fmt.Sprintf("file:%s.db?cache=shared&mode=memory&_foreign_keys=true", uuid))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -501,8 +501,22 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 	}
 	columnDefsQuery := strings.Join(columnDefs, ",\n")
 	primaryKeysQuery := strings.Join(t.primaryKey.IndexColumnNames(), ", ")
+	var foreignKeyConstraint string
 
-	query := fmt.Sprintf("CREATE TABLE `%s` (\n%s,\n  PRIMARY KEY (%s)\n)", t.Name, columnDefsQuery, primaryKeysQuery)
+
+	if stmt.Cluster != nil{
+		parentTableName := stmt.Cluster.TableName.Name
+		parentStmt, ok :=  db.tables[parentTableName]
+		if !ok {
+			return fmt.Errorf("could not find parent table for interleaving: %v", stmt.Name.Name)
+		}
+
+		columns := strings.Join(parentStmt.primaryKey.IndexColumnNames(), ",")
+
+		foreignKeyConstraint = fmt.Sprintf(",\n FOREIGN KEY(%s) REFERENCES %s(%s) %s", columns, parentTableName, columns, stmt.Cluster.OnDelete)
+	}
+
+	query := fmt.Sprintf("CREATE TABLE `%s` (\n%s,\n  PRIMARY KEY (%s)%s\n)", t.Name, columnDefsQuery, primaryKeysQuery, foreignKeyConstraint)
 	if _, err := db.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("failed to create table for %s: %v", t.Name, err)
 	}
