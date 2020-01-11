@@ -20,6 +20,7 @@ import (
 	"io/ioutil"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,8 @@ import (
 	cmp "github.com/google/go-cmp/cmp"
 	"google.golang.org/api/option"
 	databasepb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type FullType struct {
@@ -548,6 +551,124 @@ func TestIntegration_ReadWrite_Update(t *testing.T) {
 
 	expected2 := []*Simple{
 		{ID: 100, Value: "200"},
+	}
+
+	var results []*Simple
+	rows := client.Single().Read(ctx, "Simple", spanner.AllKeys(), []string{"Id", "Value"})
+	results, err = read(rows)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	if diff := cmp.Diff(expected2, results); diff != "" {
+		t.Errorf("(-got, +want)\n%s", diff)
+	}
+}
+
+func TestIntegration_ReadWrite_BatchUpdate(t *testing.T) {
+	ctx := context.Background()
+	dbName := "projects/fake/instances/fake/databases/fake"
+
+	f, err := os.Open("./testdata/schema.sql")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+
+	srv, conn, err := Run()
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	defer srv.Stop()
+
+	if err := srv.ParseAndApplyDDL(ctx, dbName, f); err != nil {
+		t.Fatal(err)
+	}
+
+	client, err := spanner.NewClient(ctx, dbName, option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatalf("Connecting to in-memory fake: %v", err)
+	}
+
+	read := func(rows *spanner.RowIterator) ([]*Simple, error) {
+		var results []*Simple
+		err = rows.Do(func(row *spanner.Row) error {
+			var s Simple
+			if err := row.ToStruct(&s); err != nil {
+				return err
+			}
+			results = append(results, &s)
+
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("Iterating over all row read: %v", err)
+		}
+		return results, nil
+	}
+
+	expected1 := []*Simple{
+		{ID: 100, Value: "xxx"},
+		{ID: 101, Value: "yyy2"},
+	}
+
+	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
+		stmt := spanner.NewStatement(`INSERT INTO Simple (Id, Value) VALUES(@id1, @value1), (@id2, @value2)`)
+		stmt.Params = map[string]interface{}{
+			"id1":    100,
+			"value1": "xxx",
+			"id2":    101,
+			"value2": "yyy",
+		}
+		stmt2 := spanner.NewStatement(`UPDATE Simple SET Value = "yyy2" WHERE Id = 101`)
+		affectedRows, err := tx.BatchUpdate(ctx, []spanner.Statement{stmt, stmt2})
+		if err != nil {
+			return err
+		}
+		if diff := cmp.Diff([]int64{2, 1}, affectedRows); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+
+		rows := tx.Read(ctx, "Simple", spanner.AllKeys(), []string{"Id", "Value"})
+		results, err := read(rows)
+		if err != nil {
+			return err
+		}
+
+		if diff := cmp.Diff(expected1, results); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+
+		stmt3 := spanner.NewStatement(`UPDATE Simple SET Value = "200" WHERE Id = @id`)
+		stmt3.Params = map[string]interface{}{
+			"id": 100,
+		}
+		stmt4 := spanner.NewStatement(`UPDAT`)
+		affectedRows, err = tx.BatchUpdate(ctx, []spanner.Statement{stmt3, stmt4})
+		if err == nil {
+			t.Errorf("unexpected success for batch update")
+		}
+
+		st := status.Convert(err)
+		r := regexp.MustCompile(`Statement 1: .* is not valid DML`)
+		if !r.MatchString(st.Message()) {
+			t.Errorf("unexpected error message: %v", st.Message())
+		}
+		if st.Code() != codes.InvalidArgument {
+			t.Errorf("expect error code %v but got %v", codes.InvalidArgument, st.Code())
+		}
+		if diff := cmp.Diff([]int64{1}, affectedRows); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReadWriteTransaction: %v", err)
+	}
+
+	expected2 := []*Simple{
+		{ID: 100, Value: "200"},
+		{ID: 101, Value: "yyy2"},
 	}
 
 	var results []*Simple

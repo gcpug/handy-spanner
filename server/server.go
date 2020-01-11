@@ -30,6 +30,7 @@ import (
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	iamv1pb "google.golang.org/genproto/googleapis/iam/v1"
 	lropb "google.golang.org/genproto/googleapis/longrunning"
+	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	adminv1pb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	"google.golang.org/grpc/codes"
@@ -517,35 +518,11 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 		return nil, status.Error(codes.InvalidArgument, "Invalid ExecuteSql request.")
 	}
 
-	dml, err := (&parser.Parser{
-		Lexer: &parser.Lexer{
-			File: &token.File{FilePath: "", Buffer: req.Sql},
-		},
-	}).ParseDML()
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "Syntax error: %q: %v", req.Sql, err)
-	}
-
-	fields := req.GetParams().GetFields()
-	paramTypes := req.ParamTypes
-	params := make(map[string]Value, len(fields))
-	defaultType := &spannerpb.Type{Code: spannerpb.TypeCode_INT64}
-	for key, val := range fields {
-		typ := defaultType
-		if paramTypes != nil {
-			if t, ok := paramTypes[key]; ok {
-				typ = t
-			}
-		}
-
-		v, err := makeValueFromSpannerValue(key, val, typ)
-		if err != nil {
-			return nil, err
-		}
-		params[key] = v
-	}
-
-	count, err := session.database.Execute(ctx, tx, dml, params)
+	result, err := s.executeDML(ctx, session, tx, &spannerpb.ExecuteBatchDmlRequest_Statement{
+		Sql:        req.GetSql(),
+		Params:     req.GetParams(),
+		ParamTypes: req.GetParamTypes(),
+	})
 	if err != nil {
 		if !tx.Available() {
 			return nil, checkAvailability()
@@ -553,21 +530,13 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 		return nil, err
 	}
 
-	var metadata *spannerpb.ResultSetMetadata
 	if txCreated {
-		metadata = &spannerpb.ResultSetMetadata{
+		result.Metadata = &spannerpb.ResultSetMetadata{
 			Transaction: tx.Proto(),
 		}
 	}
 
-	return &spannerpb.ResultSet{
-		Metadata: metadata,
-		Stats: &spannerpb.ResultSetStats{
-			RowCount: &spannerpb.ResultSetStats_RowCountExact{
-				RowCountExact: count,
-			},
-		},
-	}, nil
+	return result, nil
 }
 
 func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream spannerpb.Spanner_ExecuteStreamingSqlServer) error {
@@ -659,7 +628,123 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 }
 
 func (s *server) ExecuteBatchDml(ctx context.Context, req *spannerpb.ExecuteBatchDmlRequest) (*spannerpb.ExecuteBatchDmlResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ExecuteBatchDml")
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	session, err := s.getSession(req.Session)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, txCreated, err := session.GetTransactionBySelector(req.GetTransaction())
+	if err != nil {
+		return nil, err
+	}
+
+	if tx.SingleUse() {
+		tx.Done(TransactionRollbacked)
+		msg := "DML statements may not be performed in single-use transactions, to avoid replay."
+		return nil, status.Errorf(codes.InvalidArgument, msg)
+	}
+
+	checkAvailability := func() error {
+		switch tx.Status() {
+		case TransactionInvalidated:
+			return status.Errorf(codes.FailedPrecondition, "This transaction has been invalidated by a later transaction in the same session.")
+		case TransactionCommited, TransactionRollbacked:
+			return status.Errorf(codes.FailedPrecondition, "Cannot start a read or query within a transaction after Commit() or Rollback() has been called.")
+		case TransactionAborted:
+			return status.Errorf(codes.Aborted, "transaction aborted")
+		}
+		return status.Errorf(codes.Unknown, "unknown status")
+	}
+
+	if !tx.Available() {
+		return nil, checkAvailability()
+	}
+
+	if !tx.ReadWrite() {
+		msg := "DML statements can only be performed in a read-write transaction."
+		return nil, status.Errorf(codes.FailedPrecondition, msg)
+	}
+
+	if len(req.Statements) == 0 {
+		msg := "No statements in batch DML request."
+		return nil, status.Errorf(codes.InvalidArgument, msg)
+	}
+
+	var resultSets []*spannerpb.ResultSet
+	var resultStatus rpcstatus.Status
+	for i, stmt := range req.Statements {
+		result, err := s.executeDML(ctx, session, tx, stmt)
+		if err != nil {
+			if !tx.Available() {
+				return nil, checkAvailability()
+			}
+			st := status.Convert(err)
+			resultStatus.Code = int32(st.Code())
+			resultStatus.Message = fmt.Sprintf("Statement %d: %s", i, st.Message())
+			break
+		}
+
+		resultSets = append(resultSets, result)
+	}
+
+	if txCreated {
+		if len(resultSets) > 0 {
+			resultSets[0].Metadata = &spannerpb.ResultSetMetadata{
+				Transaction: tx.Proto(),
+			}
+		}
+	}
+
+	return &spannerpb.ExecuteBatchDmlResponse{
+		ResultSets: resultSets,
+		Status:     &resultStatus,
+	}, nil
+}
+
+func (s *server) executeDML(ctx context.Context, session *session, tx *transaction, stmt *spannerpb.ExecuteBatchDmlRequest_Statement) (*spannerpb.ResultSet, error) {
+	dml, err := (&parser.Parser{
+		Lexer: &parser.Lexer{
+			File: &token.File{FilePath: "", Buffer: stmt.Sql},
+		},
+	}).ParseDML()
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%q is not valid DML: %v", stmt.Sql, err)
+	}
+
+	fields := stmt.GetParams().GetFields()
+	paramTypes := stmt.ParamTypes
+	params := make(map[string]Value, len(fields))
+	defaultType := &spannerpb.Type{Code: spannerpb.TypeCode_INT64}
+	for key, val := range fields {
+		typ := defaultType
+		if paramTypes != nil {
+			if t, ok := paramTypes[key]; ok {
+				typ = t
+			}
+		}
+
+		v, err := makeValueFromSpannerValue(key, val, typ)
+		if err != nil {
+			return nil, err
+		}
+		params[key] = v
+	}
+
+	count, err := session.database.Execute(ctx, tx, dml, params)
+	if err != nil {
+		return nil, err
+	}
+
+	return &spannerpb.ResultSet{
+		Stats: &spannerpb.ResultSetStats{
+			RowCount: &spannerpb.ResultSetStats_RowCountExact{
+				RowCountExact: count,
+			},
+		},
+	}, nil
 }
 
 func (s *server) Read(ctx context.Context, req *spannerpb.ReadRequest) (*spannerpb.ResultSet, error) {
