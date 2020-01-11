@@ -2949,6 +2949,7 @@ func TestInterleaveInsert(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			db := newDatabase()
+			ses := newSession(db, "foo")
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -2957,20 +2958,26 @@ func TestInterleaveInsert(t *testing.T) {
 			}
 
 			if tt.parent != nil {
-				testInsertInterleaveHelper(t, ctx, db, tt.parent.tbl, tt.parent.cols, tt.parent.wcols, tt.parent.values, tt.parent.limit, tt.parent.expected)
+				testRunInTransaction(t, ses, func(tx *transaction) {
+					testInsertInterleaveHelper(t, ctx, db, tx, tt.parent.tbl, tt.parent.cols, tt.parent.wcols, tt.parent.values, tt.parent.limit, tt.parent.expected)
+				})
 			}
 
 			if tt.expectsError {
 				listValues := []*structpb.ListValue{
 					{Values: tt.child.values},
 				}
-				if err := db.Insert(ctx, tt.child.tbl, tt.child.wcols, listValues); err == nil {
-					t.Fatalf("Insert succeeded even though it should fail: %v", err)
-				}
+				testRunInTransaction(t, ses, func(tx *transaction) {
+					if err := db.Insert(ctx, tx, tt.child.tbl, tt.child.wcols, listValues); err == nil {
+						t.Fatalf("Insert succeeded even though it should fail: %v", err)
+					}
+				})
 				return
 			}
 
-			testInsertInterleaveHelper(t, ctx, db, tt.child.tbl, tt.child.cols, tt.child.wcols, tt.child.values, tt.child.limit, tt.child.expected)
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				testInsertInterleaveHelper(t, ctx, db, tx, tt.child.tbl, tt.child.cols, tt.child.wcols, tt.child.values, tt.child.limit, tt.child.expected)
+			})
 		})
 	}
 }
@@ -2979,6 +2986,7 @@ func testInsertInterleaveHelper(
 	t *testing.T,
 	ctx context.Context,
 	db *database,
+	tx *transaction,
 	tbl string,
 	cols []string,
 	wcols []string,
@@ -2990,11 +2998,11 @@ func testInsertInterleaveHelper(
 		{Values: values},
 	}
 
-	if err := db.Insert(ctx, tbl, wcols, listValues); err != nil {
+	if err := db.Insert(ctx, tx, tbl, wcols, listValues); err != nil {
 		t.Fatalf("Insert failed: %v", err)
 	}
 
-	it, err := db.Read(ctx, tbl, "", cols, &KeySet{All: true}, limit)
+	it, err := db.Read(ctx, tx, tbl, "", cols, &KeySet{All: true}, limit)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -3138,6 +3146,7 @@ func TestInterleaveDeleteParent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			db := newDatabase()
+			ses := newSession(db, "foo")
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -3151,51 +3160,61 @@ func TestInterleaveDeleteParent(t *testing.T) {
 				{Values: tt.parent.values},
 			}
 
-			if err := db.Insert(ctx, tt.parent.tbl, tt.parent.wcols, parentListValues); err != nil {
-				t.Fatalf("Insert failed: %v", err)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Insert(ctx, tx, tt.parent.tbl, tt.parent.wcols, parentListValues); err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			})
 
 			listValues := []*structpb.ListValue{
 				{Values: tt.child.values},
 			}
 
-			if err := db.Insert(ctx, tt.child.tbl, tt.child.wcols, listValues); err != nil {
-				t.Fatalf("Insert failed: %v", err)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Insert(ctx, tx, tt.child.tbl, tt.child.wcols, listValues); err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			})
 
 			// Delete parent entry
 
 			if tt.expectsDeleteError {
-				if err := db.Delete(ctx, tt.parent.tbl, tt.parent.ks); err == nil {
-					t.Fatalf("Delete parent succeeded even though it should fail: %v", err)
-				}
+				testRunInTransaction(t, ses, func(tx *transaction) {
+					if err := db.Delete(ctx, tx, tt.parent.tbl, tt.parent.ks); err == nil {
+						t.Fatalf("Delete parent succeeded even though it should fail: %v", err)
+					}
+				})
 				return
 			}
 
-			if err := db.Delete(ctx, tt.parent.tbl, tt.parent.ks); err != nil {
-				t.Fatalf("Delete parent failed: %v", err)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Delete(ctx, tx, tt.parent.tbl, tt.parent.ks); err != nil {
+					t.Fatalf("Delete parent failed: %v", err)
+				}
+			})
 
 			// Try to read child entry
 
-			it, err := db.Read(ctx, tt.child.tbl, "", tt.child.cols, tt.child.ks, 1)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.child.tbl, "", tt.child.cols, tt.child.ks, 1)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
 
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if rows != nil {
+					t.Fatalf("Child did not get deleted with parent")
+				}
 			})
-
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
-
-			if rows != nil {
-				t.Fatalf("Child did not get deleted with parent")
-			}
 		})
 	}
 }
