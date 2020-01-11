@@ -2058,6 +2058,357 @@ func TestExecuteSql_Transaction(t *testing.T) {
 	})
 }
 
+func TestExecuteBatchDml_Success(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+
+	preareDBAndSession := func(t *testing.T) *spannerpb.Session {
+		session, dbName := testCreateSession(t, s)
+		db, ok := s.db[dbName]
+		if !ok {
+			t.Fatalf("database not found")
+		}
+		for _, s := range allSchema {
+			ddls := parseDDL(t, s)
+			for _, ddl := range ddls {
+				db.ApplyDDL(ctx, ddl)
+			}
+		}
+
+		for _, query := range []string{
+			`INSERT INTO Simple VALUES(100, "xxx")`,
+			`INSERT INTO Simple VALUES(200, "yyy")`,
+			`INSERT INTO Simple VALUES(300, "zzz")`,
+		} {
+			if _, err := db.db.ExecContext(ctx, query); err != nil {
+				t.Fatalf("Insert failed: %v", err)
+			}
+		}
+
+		return session
+	}
+	begin := func(session *spannerpb.Session) *spannerpb.Transaction {
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return tx
+	}
+	commit := func(session *spannerpb.Session, tx *spannerpb.Transaction) error {
+		_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		return err
+	}
+	read := func(session *spannerpb.Session, tx *spannerpb.Transaction) ([][]*structpb.Value, error) {
+		fake := NewFakeExecuteStreamingSqlServer(ctx)
+		if err := s.StreamingRead(&spannerpb.ReadRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_SingleUse{
+					SingleUse: &spannerpb.TransactionOptions{
+						Mode: &spannerpb.TransactionOptions_ReadOnly_{
+							ReadOnly: &spannerpb.TransactionOptions_ReadOnly{},
+						},
+					},
+				},
+			},
+			Table:   "Simple",
+			Columns: []string{"Id", "Value"},
+			KeySet:  &spannerpb.KeySet{All: true},
+		}, fake); err != nil {
+			return nil, err
+		}
+
+		var results [][]*structpb.Value
+		for _, set := range fake.sets {
+			results = append(results, set.Values)
+		}
+		return results, nil
+	}
+
+	table := map[string]struct {
+		stmts []*spannerpb.ExecuteBatchDmlRequest_Statement
+
+		expectedSetCount      int
+		expectedStatusCode    int32
+		expectedStatusMessage *regexp.Regexp
+		expected              [][]*structpb.Value
+	}{
+		"UpdateSingle": {
+			stmts: []*spannerpb.ExecuteBatchDmlRequest_Statement{
+				{
+					Sql: `UPDATE Simple SET Value = "xyz" WHERE Id = 200`,
+				},
+			},
+			expectedSetCount:      1,
+			expectedStatusCode:    0,
+			expectedStatusMessage: regexp.MustCompile(`^$`),
+			expected: [][]*structpb.Value{
+				{makeStringValue("100"), makeStringValue("xxx")},
+				{makeStringValue("200"), makeStringValue("xyz")},
+				{makeStringValue("300"), makeStringValue("zzz")},
+			},
+		},
+		"UpdateMulti": {
+			stmts: []*spannerpb.ExecuteBatchDmlRequest_Statement{
+				{
+					Sql: `UPDATE Simple SET Value = "xyz" WHERE Id = 200`,
+				},
+				{
+					Sql: `UPDATE Simple SET Value = "z" WHERE Id = 300`,
+				},
+			},
+			expectedSetCount:      2,
+			expectedStatusCode:    0,
+			expectedStatusMessage: regexp.MustCompile(`^$`),
+			expected: [][]*structpb.Value{
+				{makeStringValue("100"), makeStringValue("xxx")},
+				{makeStringValue("200"), makeStringValue("xyz")},
+				{makeStringValue("300"), makeStringValue("z")},
+			},
+		},
+		"PartialSuccess": {
+			stmts: []*spannerpb.ExecuteBatchDmlRequest_Statement{
+				{
+					Sql: `UPDATE Simple SET Value = "xyz" WHERE Id = 200`,
+				},
+				{
+					Sql: `UPD`,
+				},
+			},
+			expectedSetCount:      1,
+			expectedStatusCode:    int32(codes.InvalidArgument),
+			expectedStatusMessage: regexp.MustCompile(`^Statement 1: .* is not valid DML`),
+			expected: [][]*structpb.Value{
+				{makeStringValue("100"), makeStringValue("xxx")},
+				{makeStringValue("200"), makeStringValue("xyz")},
+				{makeStringValue("300"), makeStringValue("zzz")},
+			},
+		},
+		"PartialSuccessStopped": {
+			stmts: []*spannerpb.ExecuteBatchDmlRequest_Statement{
+				{
+					Sql: `UPD`,
+				},
+				{
+					Sql: `UPDATE Simple SET Value = "xyz" WHERE Id = 200`,
+				},
+			},
+			expectedSetCount:      0,
+			expectedStatusCode:    int32(codes.InvalidArgument),
+			expectedStatusMessage: regexp.MustCompile(`^Statement 0: .* is not valid DML`),
+			expected: [][]*structpb.Value{
+				{makeStringValue("100"), makeStringValue("xxx")},
+				{makeStringValue("200"), makeStringValue("yyy")},
+				{makeStringValue("300"), makeStringValue("zzz")},
+			},
+		},
+	}
+
+	for name, tc := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+
+			session := preareDBAndSession(t)
+			tx := begin(session)
+
+			result, err := s.ExecuteBatchDml(ctx, &spannerpb.ExecuteBatchDmlRequest{
+				Session: session.Name,
+				Transaction: &spannerpb.TransactionSelector{
+					Selector: &spannerpb.TransactionSelector_Id{
+						Id: tx.Id,
+					},
+				},
+				Statements: tc.stmts,
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if count := len(result.ResultSets); count != tc.expectedSetCount {
+				t.Errorf("expect the number of ResultSets to be %v, but got %v", tc.expectedSetCount, count)
+			}
+
+			if result.Status.GetCode() != tc.expectedStatusCode {
+				t.Errorf("expect status code to be %v, but got %v", tc.expectedStatusCode, result.Status.GetCode())
+			}
+			if !tc.expectedStatusMessage.MatchString(result.Status.GetMessage()) {
+				t.Errorf("unexpected status message: \n %q\n expected:\n %q", result.Status.GetMessage(), tc.expectedStatusMessage)
+			}
+
+			if err := commit(session, tx); err != nil {
+				t.Fatalf("commit error: %v", err)
+			}
+
+			results, err := read(session, tx)
+			if err != nil {
+				t.Fatalf("read error: %v", err)
+			}
+
+			if diff := cmp.Diff(tc.expected, results); diff != "" {
+				t.Errorf("(-got, +want)\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestExecuteBatchDml_Error(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestServer()
+	begin := func(ctx context.Context, t *testing.T, session *spannerpb.Session) *spannerpb.Transaction {
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadWrite_{
+					ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return tx
+	}
+
+	t.Run("NoStatements", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx := begin(ctx, t, session)
+		_, err := s.ExecuteBatchDml(ctx, &spannerpb.ExecuteBatchDmlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx.Id,
+				},
+			},
+			Statements: []*spannerpb.ExecuteBatchDmlRequest_Statement{},
+		})
+		expected := "No statements in batch DML request."
+		assertGRPCError(t, err, codes.InvalidArgument, expected)
+	})
+
+	t.Run("RollbackAfterRollback", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx := begin(ctx, t, session)
+
+		_, err := s.Commit(ctx, &spannerpb.CommitRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.CommitRequest_TransactionId{
+				TransactionId: tx.Id,
+			},
+			Mutations: []*spannerpb.Mutation{},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.ExecuteBatchDml(ctx, &spannerpb.ExecuteBatchDmlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx.Id,
+				},
+			},
+			Statements: []*spannerpb.ExecuteBatchDmlRequest_Statement{
+				{Sql: `UPDATE Simple SET Value = "x" WHERE Id = 1000`},
+			},
+		})
+		expected := "Cannot start a read or query within a transaction after Commit() or Rollback() has been called."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
+
+	t.Run("CommitAfterRollback", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx := begin(ctx, t, session)
+
+		_, err := s.Rollback(ctx, &spannerpb.RollbackRequest{
+			Session:       session.Name,
+			TransactionId: tx.Id,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.ExecuteBatchDml(ctx, &spannerpb.ExecuteBatchDmlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx.Id,
+				},
+			},
+			Statements: []*spannerpb.ExecuteBatchDmlRequest_Statement{
+				{Sql: `UPDATE Simple SET Value = "x" WHERE Id = 1000`},
+			},
+		})
+		expected := "Cannot start a read or query within a transaction after Commit() or Rollback() has been called."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
+
+	t.Run("ReadOnlyTransaction", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		tx, err := s.BeginTransaction(ctx, &spannerpb.BeginTransactionRequest{
+			Session: session.Name,
+			Options: &spannerpb.TransactionOptions{
+				Mode: &spannerpb.TransactionOptions_ReadOnly_{
+					ReadOnly: &spannerpb.TransactionOptions_ReadOnly{},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_, err = s.ExecuteBatchDml(ctx, &spannerpb.ExecuteBatchDmlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_Id{
+					Id: tx.Id,
+				},
+			},
+			Statements: []*spannerpb.ExecuteBatchDmlRequest_Statement{
+				{Sql: `UPDATE Simple SET Value = "x" WHERE Id = 1000`},
+			},
+		})
+		expected := "DML statements can only be performed in a read-write transaction."
+		assertGRPCError(t, err, codes.FailedPrecondition, expected)
+	})
+
+	t.Run("SingleUseTransaction", func(t *testing.T) {
+		session, _ := testCreateSession(t, s)
+		_, err := s.ExecuteBatchDml(ctx, &spannerpb.ExecuteBatchDmlRequest{
+			Session: session.Name,
+			Transaction: &spannerpb.TransactionSelector{
+				Selector: &spannerpb.TransactionSelector_SingleUse{
+					SingleUse: &spannerpb.TransactionOptions{
+						Mode: &spannerpb.TransactionOptions_ReadWrite_{
+							ReadWrite: &spannerpb.TransactionOptions_ReadWrite{},
+						},
+					},
+				},
+			},
+			Statements: []*spannerpb.ExecuteBatchDmlRequest_Statement{
+				{Sql: `UPDATE Simple SET Value = "x" WHERE Id = 1000`},
+			},
+		})
+		expected := "DML statements may not be performed in single-use transactions, to avoid replay."
+		assertGRPCError(t, err, codes.InvalidArgument, expected)
+	})
+}
+
 func TestCommit(t *testing.T) {
 	ctx := context.Background()
 
@@ -2790,6 +3141,25 @@ func TestTransaction(t *testing.T) {
 					Metadata: r.Metadata,
 					Stats:    r.Stats,
 				})
+			}
+			return err
+		},
+		"ExecuteBatchDml": func(session string, tx *spannerpb.TransactionSelector, stream spannerpb.Spanner_StreamingReadServer) error {
+			r, err := s.ExecuteBatchDml(context.Background(), &spannerpb.ExecuteBatchDmlRequest{
+				Session:     session,
+				Transaction: tx,
+				Statements: []*spannerpb.ExecuteBatchDmlRequest_Statement{
+					{Sql: `UPDATE Simple SET Value = "xxx" WHERE Id = 10000000`},
+				},
+			})
+			if err == nil {
+				// set data with stream to make test easir
+				for i := range r.ResultSets {
+					stream.Send(&spannerpb.PartialResultSet{
+						Metadata: r.ResultSets[i].Metadata,
+						Stats:    r.ResultSets[i].Stats,
+					})
+				}
 			}
 			return err
 		},
