@@ -267,18 +267,35 @@ var initialData = []struct {
 	},
 }
 
-func createInitialData(t *testing.T, ctx context.Context, db Database) {
+func testRunInTransaction(t *testing.T, ses *session, fn func(*transaction)) {
+	t.Helper()
+
+	tx, err := ses.createTransaction(txReadWrite, false)
+	if err != nil {
+		t.Fatalf("createTransaction failed: %v", err)
+	}
+	defer tx.Done(TransactionCommited)
+
+	fn(tx)
+
+	if err := ses.database.Commit(tx); err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+}
+
+func createInitialData(t *testing.T, ctx context.Context, db Database, tx *transaction) {
+	t.Helper()
+
 	for _, d := range initialData {
 		for _, values := range d.values {
 			listValues := []*structpb.ListValue{
 				{Values: values},
 			}
-			if err := db.Insert(ctx, d.table, d.cols, listValues); err != nil {
+			if err := db.Insert(ctx, tx, d.table, d.cols, listValues); err != nil {
 				t.Fatalf("Insert failed: %v", err)
 			}
 		}
 	}
-
 }
 
 func makeNullValue() *structpb.Value {
@@ -865,23 +882,28 @@ func TestRead(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			it, err := db.Read(ctx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
 
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
-
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
 		})
 	}
 }
@@ -973,14 +995,19 @@ func TestReadError(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			_, err := db.Read(ctx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
-			st := status.Convert(err)
-			if st.Code() != tt.code {
-				t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
-			}
-			if !tt.msg.MatchString(st.Message()) {
-				t.Errorf("unexpected error message: %v", st.Message())
-			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				_, err := db.Read(ctx, tx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
+				st := status.Convert(err)
+				if st.Code() != tt.code {
+					t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
+				}
+				if !tt.msg.MatchString(st.Message()) {
+					t.Errorf("unexpected error message: %v", st.Message())
+				}
+			})
 		})
 	}
 }
@@ -1079,33 +1106,38 @@ func TestRead_FullType_Range(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ks := &KeySet{
-				Ranges: []*KeyRange{
-					{
-						start:       tt.start,
-						end:         tt.end,
-						startClosed: tt.startClosed,
-						endClosed:   tt.endClosed,
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				ks := &KeySet{
+					Ranges: []*KeyRange{
+						{
+							start:       tt.start,
+							end:         tt.end,
+							startClosed: tt.startClosed,
+							endClosed:   tt.endClosed,
+						},
 					},
-				},
-			}
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, ks, 100)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
+				}
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, ks, 100)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
 
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
-
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
 		})
 	}
 }
@@ -1335,8 +1367,12 @@ func TestInsertAndReplace(t *testing.T) {
 		t.Run(op, func(t *testing.T) {
 			for name, tt := range table {
 				t.Run(name, func(t *testing.T) {
-					ctx := context.Background()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+
 					db := newDatabase()
+					ses := newSession(db, "foo")
+
 					for _, s := range allSchema {
 						ddls := parseDDL(t, s)
 						for _, ddl := range ddls {
@@ -1344,37 +1380,40 @@ func TestInsertAndReplace(t *testing.T) {
 						}
 					}
 
-					listValues := []*structpb.ListValue{
-						{Values: tt.values},
-					}
-
-					if op == "INSERT" {
-						if err := db.Insert(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-							t.Fatalf("Insert failed: %v", err)
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						listValues := []*structpb.ListValue{
+							{Values: tt.values},
 						}
-					} else if op == "REPLACE" {
-						if err := db.Replace(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-							t.Fatalf("Replace failed: %v", err)
+						if op == "INSERT" {
+							if err := db.Insert(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+								t.Fatalf("Insert failed: %v", err)
+							}
+						} else if op == "REPLACE" {
+							if err := db.Replace(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+								t.Fatalf("Replace failed: %v", err)
+							}
 						}
-					}
-
-					it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-					if err != nil {
-						t.Fatalf("Read failed: %v", err)
-					}
-
-					var rows [][]interface{}
-					err = it.Do(func(row []interface{}) error {
-						rows = append(rows, row)
-						return nil
 					})
-					if err != nil {
-						t.Fatalf("unexpected error in iteration: %v", err)
-					}
 
-					if diff := cmp.Diff(tt.expected, rows); diff != "" {
-						t.Errorf("(-got, +want)\n%s", diff)
-					}
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+						if err != nil {
+							t.Fatalf("Read failed: %v", err)
+						}
+
+						var rows [][]interface{}
+						err = it.Do(func(row []interface{}) error {
+							rows = append(rows, row)
+							return nil
+						})
+						if err != nil {
+							t.Fatalf("unexpected error in iteration: %v", err)
+						}
+
+						if diff := cmp.Diff(tt.expected, rows); diff != "" {
+							t.Errorf("(-got, +want)\n%s", diff)
+						}
+					})
 				})
 			}
 		})
@@ -1409,8 +1448,12 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 	limit := int64(100)
 
 	for _, op := range []string{"INSERT", "REPLACE"} {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		db := newDatabase()
+		ses := newSession(db, "foo")
+
 		for _, s := range allSchema {
 			ddls := parseDDL(t, s)
 			for _, ddl := range ddls {
@@ -1418,56 +1461,59 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 			}
 		}
 
-		listValues := []*structpb.ListValue{
-			{Values: values},
-		}
-
-		if op == "INSERT" {
-			if err := db.Insert(ctx, tbl, wcols, listValues); err != nil {
-				t.Fatalf("Insert failed: %v", err)
+		testRunInTransaction(t, ses, func(tx *transaction) {
+			listValues := []*structpb.ListValue{
+				{Values: values},
 			}
-		} else if op == "REPLACE" {
-			if err := db.Replace(ctx, tbl, wcols, listValues); err != nil {
-				t.Fatalf("Replace failed: %v", err)
+			if op == "INSERT" {
+				if err := db.Insert(ctx, tx, tbl, wcols, listValues); err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			} else if op == "REPLACE" {
+				if err := db.Replace(ctx, tx, tbl, wcols, listValues); err != nil {
+					t.Fatalf("Replace failed: %v", err)
+				}
 			}
-		}
-
-		it, err := db.Read(ctx, tbl, "", cols, &KeySet{All: true}, limit)
-		if err != nil {
-			t.Fatalf("Read failed: %v", err)
-		}
-
-		var rows [][]interface{}
-		err = it.Do(func(row []interface{}) error {
-			rows = append(rows, row)
-			return nil
 		})
-		if err != nil {
-			t.Fatalf("unexpected error in iteration: %v", err)
-		}
 
-		if len(rows) != 1 {
-			t.Fatalf("unexpected numbers of rows: %v", len(rows))
+		testRunInTransaction(t, ses, func(tx *transaction) {
+			it, err := db.Read(ctx, tx, tbl, "", cols, &KeySet{All: true}, limit)
+			if err != nil {
+				t.Fatalf("Read failed: %v", err)
+			}
 
-		}
-		row := rows[0]
+			var rows [][]interface{}
+			err = it.Do(func(row []interface{}) error {
+				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
+			}
 
-		var a, b string
-		a = row[0].(string)
-		b = row[1].(string)
-		if got := "2012-03-04T12:34:56.123456789Z"; a != got {
-			t.Errorf("expect %v, but got %v", got, a)
-		}
+			if len(rows) != 1 {
+				t.Fatalf("unexpected numbers of rows: %v", len(rows))
 
-		timestamp, err := time.Parse(time.RFC3339Nano, b)
-		if err != nil {
-			t.Fatalf("unexpected format timestamp: %v", err)
-		}
+			}
+			row := rows[0]
 
-		d := time.Since(timestamp)
-		if d >= 10*time.Millisecond {
-			t.Fatalf("unexpected time: %v", d)
-		}
+			var a, b string
+			a = row[0].(string)
+			b = row[1].(string)
+			if got := "2012-03-04T12:34:56.123456789Z"; a != got {
+				t.Errorf("expect %v, but got %v", got, a)
+			}
+
+			timestamp, err := time.Parse(time.RFC3339Nano, b)
+			if err != nil {
+				t.Fatalf("unexpected format timestamp: %v", err)
+			}
+
+			d := time.Since(timestamp)
+			if d >= 30*time.Millisecond {
+				t.Fatalf("unexpected time: %v", d)
+			}
+		})
 	}
 }
 
@@ -1603,8 +1649,12 @@ func TestReplace(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, "foo")
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -1612,32 +1662,38 @@ func TestReplace(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
-
-			listValues := []*structpb.ListValue{
-				{Values: tt.values},
-			}
-			if err := db.Replace(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-				t.Fatalf("Replace failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				listValues := []*structpb.ListValue{
+					{Values: tt.values},
+				}
+				if err := db.Replace(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+					t.Fatalf("Replace failed: %v", err)
+				}
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -1795,8 +1851,12 @@ func TestUpdate(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, "foo")
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -1804,32 +1864,38 @@ func TestUpdate(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
-
-			listValues := []*structpb.ListValue{
-				{Values: tt.values},
-			}
-			if err := db.Update(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-				t.Fatalf("Update failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				listValues := []*structpb.ListValue{
+					{Values: tt.values},
+				}
+				if err := db.Update(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+					t.Fatalf("Update failed: %v", err)
+				}
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -1966,8 +2032,12 @@ func TestInsertOrUpdate(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, name)
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -1975,32 +2045,38 @@ func TestInsertOrUpdate(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
-
-			listValues := []*structpb.ListValue{
-				{Values: tt.values},
-			}
-			if err := db.InsertOrUpdate(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-				t.Fatalf("InsertOrUpdate failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				listValues := []*structpb.ListValue{
+					{Values: tt.values},
+				}
+				if err := db.InsertOrUpdate(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+					t.Fatalf("InsertOrUpdate failed: %v", err)
+				}
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -2115,8 +2191,12 @@ func TestDelete(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, name)
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -2142,27 +2222,31 @@ func TestDelete(t *testing.T) {
 				}
 			}
 
-			if err := db.Delete(ctx, tt.tbl, tt.ks); err != nil {
-				t.Fatalf("Update failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, 100)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Delete(ctx, tx, tt.tbl, tt.ks); err != nil {
+					t.Fatalf("Update failed: %v", err)
+				}
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, 100)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -2379,8 +2463,12 @@ func TestMutationError(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, "foo")
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -2388,7 +2476,9 @@ func TestMutationError(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
+			})
 
 			for _, op := range tt.op {
 				t.Run(op, func(t *testing.T) {
@@ -2396,28 +2486,309 @@ func TestMutationError(t *testing.T) {
 						{Values: tt.values},
 					}
 
-					var err error
-					switch op {
-					case "INSERT":
-						err = db.Insert(ctx, tt.tbl, tt.wcols, listValues)
-					case "UPDATE":
-						err = db.Update(ctx, tt.tbl, tt.wcols, listValues)
-					case "UPSERT":
-						err = db.InsertOrUpdate(ctx, tt.tbl, tt.wcols, listValues)
-					case "REPLACE":
-						err = db.Replace(ctx, tt.tbl, tt.wcols, listValues)
-					default:
-						t.Fatalf("unexpected op: %v", op)
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						var err error
+						switch op {
+						case "INSERT":
+							err = db.Insert(ctx, tx, tt.tbl, tt.wcols, listValues)
+						case "UPDATE":
+							err = db.Update(ctx, tx, tt.tbl, tt.wcols, listValues)
+						case "UPSERT":
+							err = db.InsertOrUpdate(ctx, tx, tt.tbl, tt.wcols, listValues)
+						case "REPLACE":
+							err = db.Replace(ctx, tx, tt.tbl, tt.wcols, listValues)
+						default:
+							t.Fatalf("unexpected op: %v", op)
+						}
+						st := status.Convert(err)
+						if st.Code() != tt.code {
+							t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
+						}
+						if !tt.msg.MatchString(st.Message()) {
+							t.Errorf("unexpected error message: %v", st.Message())
+						}
+					})
+				})
+			}
+		})
+	}
+}
+
+func TestExecute(t *testing.T) {
+	table := map[string]struct {
+		sql    string
+		params map[string]Value
+
+		code          codes.Code
+		msg           *regexp.Regexp
+		expectedCount int64
+		table         string
+		cols          []string
+		expected      [][]interface{}
+	}{
+		"Simple_Update": {
+			sql:           `UPDATE Simple SET Value = "zzz" WHERE Id = 100`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "zzz"},
+			},
+		},
+		"Simple_Update_ParamInWhere": {
+			sql: `UPDATE Simple SET Value = "zzz" WHERE Id = @id`,
+			params: map[string]Value{
+				"id": makeTestValue("100"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "zzz"},
+			},
+		},
+		"Simple_Update_ParamInValue": {
+			sql: `UPDATE Simple SET Value = @value WHERE Id = 100`,
+			params: map[string]Value{
+				"value": makeTestValue("zzz"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "zzz"},
+			},
+		},
+		"Simple_Update_MultipleItems": {
+			sql:  `UPDATE Simple SET Value = "zzz", Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems2": {
+			sql:  `UPDATE Simple AS s SET s.Value = "zzz", Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems3": {
+			sql:  `UPDATE Simple AS s SET Value = "zzz", s.Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item s.Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems4": {
+			sql:  `UPDATE Simple AS s SET s.Value = "zzz", s.Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item s.Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems5": {
+			sql:  `UPDATE Simple SET Simple.Value = "zzz", Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item Value assigned more than once`),
+		},
+		"Simple_Update_ColumnNotFound": {
+			sql:  `UPDATE Simple SET Valu = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Unrecognized name: Valu`),
+		},
+		"Simple_Update_PathNotFound": {
+			sql:  `UPDATE Simple AS s SET s.Valu = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Name Valu not found inside s`),
+		},
+		"Simple_Insert": {
+			sql:           `INSERT INTO Simple (Id, Value) VALUES(101, "yyy")`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(101), "yyy"},
+			},
+		},
+		"Simple_Insert_Param": {
+			sql: `INSERT INTO Simple (Id, Value) VALUES(@a, @b)`,
+			params: map[string]Value{
+				"a": makeTestValue("1000"),
+				"b": makeTestValue("bbbb"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(1000), "bbbb"},
+			},
+		},
+		"Simple_InsertMulti": {
+			sql:           `INSERT INTO Simple (Id, Value) VALUES(101, "yyy"), (102, "zzz")`,
+			expectedCount: 2,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(101), "yyy"},
+				[]interface{}{int64(102), "zzz"},
+			},
+		},
+		"Simple_Insert_Query": {
+			sql:           `INSERT INTO Simple (Id, Value) SELECT FTInt+1, PKey FROM FullTypes`,
+			expectedCount: 2,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(101), "xxx"},
+				[]interface{}{int64(102), "yyy"},
+			},
+		},
+		"Simple_Insert_Subquery": {
+			sql:           `INSERT INTO Simple (Id, Value) VALUES(200, (SELECT PKey FROM FullTypes WHERE PKey = "xxx"))`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(200), "xxx"},
+			},
+		},
+		// "Simple_Insert_Unnest": {
+		// 	sql: `INSERT INTO Simple (Id, Value) SELECT * FROM UNNEST ([(200, "y"), (300, "z")])`,
+
+		// 	expectedCount: 2,
+		// 	table:         "Simple",
+		// 	cols:          []string{"Id", "Value"},
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(100), "xxx"},
+		// 		[]interface{}{int64(200), "y"},
+		// 		[]interface{}{int64(300), "z"},
+		// 	},
+		// },
+		"Simple_Insert_NonNullValue": {
+			sql:  `INSERT INTO Simple (Id) VALUES(101)`,
+			code: codes.FailedPrecondition,
+			msg:  regexp.MustCompile(`A new row in table Simple does not specify a non-null value for these NOT NULL columns: Value`),
+		},
+		"Simple_Insert_MultipleKeys": {
+			sql:  `INSERT INTO Simple (Id, Id, Value) VALUES(101, 102, "x")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`INSERT has columns with duplicate name: Id`),
+		},
+		"Simple_Insert_WrongColumnCount": {
+			sql:  `INSERT INTO Simple (Id, Value) VALUES(101, 102, "x")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Inserted row has wrong column count; Has 3, expected 2`),
+		},
+		"Simple_Insert_ColumnNotFound": {
+			sql:  `INSERT INTO Simple (Id, Valueee) VALUES(101, "x")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Column Valueee is not present in table Simple`),
+		},
+		"Simple_Delete": {
+			sql:           `DELETE FROM Simple WHERE Id = 100`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected:      nil,
+		},
+		"Simple_Delete_SubQuery": {
+			sql:           `DELETE FROM Simple WHERE Id IN (SELECT Id FROM Simple)`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected:      nil,
+		},
+		"Simple_Delete_Param": {
+			sql: `DELETE FROM Simple WHERE Id = @id`,
+			params: map[string]Value{
+				"id": makeTestValue("100"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected:      nil,
+		},
+		"Simple_Delete_NotExist": {
+			sql:           `DELETE FROM Simple WHERE Id = 10000`,
+			expectedCount: 0,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+			},
+		},
+	}
+
+	for name, tt := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			stmt, err := (&parser.Parser{
+				Lexer: &parser.Lexer{
+					File: &token.File{FilePath: "", Buffer: tt.sql},
+				},
+			}).ParseDML()
+			if err != nil {
+				t.Fatalf("failed to parse DML: %q %v", tt.sql, err)
+			}
+
+			db := newDatabase()
+			ses := newSession(db, "foo")
+
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				r, err := db.Execute(ctx, tx, stmt, tt.params)
+				if tt.code == codes.OK {
+					if err != nil {
+						t.Fatalf("Execute failed: %v", err)
 					}
+					if r != tt.expectedCount {
+						t.Fatalf("expect count to be %v, but got %v", tt.expectedCount, r)
+					}
+				} else {
 					st := status.Convert(err)
 					if st.Code() != tt.code {
 						t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
 					}
 					if !tt.msg.MatchString(st.Message()) {
-						t.Errorf("unexpected error message: %v", st.Message())
+						t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tt.msg)
 					}
-				})
+				}
+			})
+
+			if tt.code != codes.OK {
+				return
 			}
+
+			// check database values
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.table, "", tt.cols, &KeySet{All: true}, 100)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }

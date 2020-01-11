@@ -123,8 +123,10 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
 * Mutation
    * All mutation types: Insert, Update, InsertOrUpdate, Replace, Delete
    * Commit timestamp
+* Transaction
+   * Isolation level: SERIALIZABLE
 * DML
-   * fully not yet supported
+   * Insert, Update, Delete
 * DDL
    * CreateTable, CreateIndex only
 * Data Types
@@ -133,9 +135,7 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
 ### Not supported features
 
 * Transaction
-   * Applying mutations is not transactional
-   * Optimistic lock
-   * No check for transaction type RO/RW
+   * Timestamp bound read
 * Query
    * Strict type checking
    * More functions
@@ -153,6 +153,39 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
    * Long running operations
 * Replace
    * wrong behavior on conflict
+
+## Implementation
+
+### Transaction simulation
+
+handy-spanner uses sqlite3 in [Shared-Cache Mode](https://www.sqlite.org/sharedcache.html). There is a characteristic in the trasactions.
+
+* Only one transaction can hold write lock per database to write database tables.
+    * Other transactions still can hold read lock.
+* Write transaction holds write lock against database tables while writing the tables.
+    * Other read transactions cannot read the table while locked
+* Read transaction holds read lock against database tables while reading the tables.
+    * Other read transactions can read the table by holding read lock
+    * Write transaction cannot write the table while read-locked
+
+If we simply use the transactions, dead lock should happen in read and write locks. To simulate spanner transactions correctly as possible, handy-spanner manages sqlite3 transactions inside.
+
+* Each spanner transaction starts own sqlite3 transaction.
+* Only one spanner transaction can hold write lock per database.
+* While a transaction holds write lock, other spanner transactions cannot newly get read or write lock.
+* When write transaction tries to write a table, it forces transactions that hold read lock to the table to release the lock.
+   * The transactions become "aborted"
+* The aborted transactions are expected to be retried by the client.
+
+![abort](img/abort1.png) ![abort](img/abort2.png)
+
+### DML
+
+Because of transaction limitations, DML also has limitations.
+
+When a transaction(A) updates a table, other transactions cannot read/write the table until the transaction(A) commits. This limitation may become an inconsistency to the Cloud Spanner. Other limitations are same to mutations with commit.
+
+![block](img/read_block.png)
 
 ## Feature Request and Bug Report
 

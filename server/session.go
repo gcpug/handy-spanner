@@ -88,6 +88,10 @@ func (s *session) createTransaction(txMode transactionMode, single bool) (*trans
 		}
 		s.transactions[tx.Name()] = tx
 
+		if err := s.database.BeginTransaction(tx); err != nil {
+			return nil, err // TODO
+		}
+
 		// read write transactions are kept only 32 in a session
 		// it seems no limitation for read only transactions
 		if txMode == txReadWrite {
@@ -195,79 +199,5 @@ func newSession(db *database, dbName string) *session {
 		createdAt:    time.Now(),
 		transactions: make(map[string]*transaction),
 		activeRWTx:   make([]*transaction, 0, 8),
-	}
-}
-
-type transactionMode int
-
-const (
-	txReadOnly       transactionMode = 1
-	txReadWrite      transactionMode = 2
-	txPartitionedDML transactionMode = 3
-)
-
-type TransactionStatus int
-
-const (
-	TransactionActive      TransactionStatus = 1
-	TransactionInvalidated TransactionStatus = 2
-	TransactionCommited    TransactionStatus = 3
-	TransactionRollbacked  TransactionStatus = 4
-)
-
-type transaction struct {
-	id        []byte
-	name      string
-	session   *session
-	single    bool
-	mode      transactionMode
-	status    TransactionStatus
-	createdAt time.Time
-}
-
-func (tx *transaction) ID() []byte {
-	return tx.id
-}
-
-func (tx *transaction) Name() string {
-	return tx.name
-}
-
-func (tx *transaction) Proto() *spannerpb.Transaction {
-	return &spannerpb.Transaction{
-		Id: tx.id,
-	}
-}
-
-func (tx *transaction) Status() TransactionStatus {
-	return tx.status
-}
-
-func (tx *transaction) ReadWrite() bool {
-	return tx.mode == txReadWrite
-}
-
-func (tx *transaction) Available() bool {
-	return tx.status == TransactionActive
-}
-
-func (tx *transaction) SingleUse() bool {
-	return tx.single
-}
-
-func (tx *transaction) Done(status TransactionStatus) {
-	tx.status = status
-}
-
-func newTransaction(s *session, mode transactionMode, single bool) *transaction {
-	id := uuidpkg.New().String()
-	return &transaction{
-		id:        []byte(id),
-		name:      id,
-		session:   s,
-		single:    single,
-		mode:      mode,
-		status:    TransactionActive,
-		createdAt: time.Now(),
 	}
 }

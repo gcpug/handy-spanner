@@ -3039,62 +3039,65 @@ func TestQuery(t *testing.T) {
 			for _, tc := range tcs {
 				t.Run(tc.name, func(t *testing.T) {
 					tc := tc
-					stmt, err := (&parser.Parser{
-						Lexer: &parser.Lexer{
-							File: &token.File{FilePath: "", Buffer: tc.sql},
-						},
-					}).ParseQuery()
-					if err != nil {
-						t.Fatalf("failed to parse sql: %q %v", tc.sql, err)
-					}
-
-					// The test case expects OK, it checks respons values.
-					// otherwise it checks the error code and the error message.
-					if tc.code == codes.OK {
-						it, err := db.Query(ctx, stmt, tc.params)
+					ses := newSession(db, "foo")
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						stmt, err := (&parser.Parser{
+							Lexer: &parser.Lexer{
+								File: &token.File{FilePath: "", Buffer: tc.sql},
+							},
+						}).ParseQuery()
 						if err != nil {
-							t.Fatalf("Query failed: %v", err)
+							t.Fatalf("failed to parse sql: %q %v", tc.sql, err)
 						}
 
-						var rows [][]interface{}
-						err = it.Do(func(row []interface{}) error {
-							rows = append(rows, row)
-							return nil
-						})
-						if err != nil {
-							t.Fatalf("unexpected error in iteration: %v", err)
-						}
-
-						if diff := cmp.Diff(tc.expected, rows); diff != "" {
-							t.Errorf("(-got, +want)\n%s", diff)
-						}
-
-						// TODO: add names to all test cases. now this is optional check
-						if tc.names != nil {
-							var gotnames []string
-							for _, item := range it.ResultSet() {
-								gotnames = append(gotnames, item.Name)
+						// The test case expects OK, it checks respons values.
+						// otherwise it checks the error code and the error message.
+						if tc.code == codes.OK {
+							it, err := db.Query(ctx, tx, stmt, tc.params)
+							if err != nil {
+								t.Fatalf("Query failed: %v", err)
 							}
 
-							if diff := cmp.Diff(tc.names, gotnames); diff != "" {
-								t.Errorf("(-got, +want)\n%s", diff)
-							}
-						}
-					} else {
-						it, err := db.Query(ctx, stmt, tc.params)
-						if err == nil {
-							err = it.Do(func([]interface{}) error {
+							var rows [][]interface{}
+							err = it.Do(func(row []interface{}) error {
+								rows = append(rows, row)
 								return nil
 							})
+							if err != nil {
+								t.Fatalf("unexpected error in iteration: %v", err)
+							}
+
+							if diff := cmp.Diff(tc.expected, rows); diff != "" {
+								t.Errorf("(-got, +want)\n%s", diff)
+							}
+
+							// TODO: add names to all test cases. now this is optional check
+							if tc.names != nil {
+								var gotnames []string
+								for _, item := range it.ResultSet() {
+									gotnames = append(gotnames, item.Name)
+								}
+
+								if diff := cmp.Diff(tc.names, gotnames); diff != "" {
+									t.Errorf("(-got, +want)\n%s", diff)
+								}
+							}
+						} else {
+							it, err := db.Query(ctx, tx, stmt, tc.params)
+							if err == nil {
+								err = it.Do(func([]interface{}) error {
+									return nil
+								})
+							}
+							st := status.Convert(err)
+							if st.Code() != tc.code {
+								t.Errorf("expect code to be %v but got %v", tc.code, st.Code())
+							}
+							if !tc.msg.MatchString(st.Message()) {
+								t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tc.msg)
+							}
 						}
-						st := status.Convert(err)
-						if st.Code() != tc.code {
-							t.Errorf("expect code to be %v but got %v", tc.code, st.Code())
-						}
-						if !tc.msg.MatchString(st.Message()) {
-							t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tc.msg)
-						}
-					}
+					})
 				})
 			}
 		})
