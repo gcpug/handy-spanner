@@ -76,6 +76,14 @@ func TestQuery(t *testing.T) {
            json_array(0.1, 0.2),
            json_array("2012-03-04", "2012-03-05")
         )`,
+
+		`INSERT INTO JoinA VALUES(100, "xxx")`,
+		`INSERT INTO JoinA VALUES(200, "yyy")`,
+		`INSERT INTO JoinA VALUES(300, "zzz")`,
+
+		`INSERT INTO JoinB VALUES(100, "aaa")`,
+		`INSERT INTO JoinB VALUES(200, "bbb")`,
+		`INSERT INTO JoinB VALUES(400, "ddd")`,
 	} {
 		if _, err := db.db.ExecContext(ctx, query); err != nil {
 			t.Fatalf("Insert failed: %v", err)
@@ -1611,107 +1619,181 @@ func TestQuery(t *testing.T) {
 
 		"FromJoin": {
 			{
-				name: "From_Join_CommaJoin",
-				sql:  `SELECT * FROM Simple a, Simple b`,
+				name:  "InnerJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a INNER JOIN JoinB b USING (Id)`,
+				names: []string{"Id", "Value", "Id", "Value"},
 				expected: [][]interface{}{
-					[]interface{}{int64(100), "xxx", int64(100), "xxx"},
-					[]interface{}{int64(100), "xxx", int64(200), "yyy"},
-					[]interface{}{int64(100), "xxx", int64(300), "zzz"},
-					[]interface{}{int64(200), "yyy", int64(100), "xxx"},
-					[]interface{}{int64(200), "yyy", int64(200), "yyy"},
-					[]interface{}{int64(200), "yyy", int64(300), "zzz"},
-					[]interface{}{int64(300), "zzz", int64(100), "xxx"},
-					[]interface{}{int64(300), "zzz", int64(200), "yyy"},
-					[]interface{}{int64(300), "zzz", int64(300), "zzz"},
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
 				},
 			},
 			{
-				name: "From_Join_ON",
-				sql:  `SELECT a.* FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE b.Value = "xxx"`,
+				name:  "CrossJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a CROSS JOIN JoinB b`,
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(100), "xxx", int64(200), "bbb"},
+					[]interface{}{int64(100), "xxx", int64(400), "ddd"},
+					[]interface{}{int64(200), "yyy", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+					[]interface{}{int64(200), "yyy", int64(400), "ddd"},
+					[]interface{}{int64(300), "zzz", int64(100), "aaa"},
+					[]interface{}{int64(300), "zzz", int64(200), "bbb"},
+					[]interface{}{int64(300), "zzz", int64(400), "ddd"},
+				},
+			},
+			{
+				name:  "CommaJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a, JoinB b`,
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(100), "xxx", int64(200), "bbb"},
+					[]interface{}{int64(100), "xxx", int64(400), "ddd"},
+					[]interface{}{int64(200), "yyy", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+					[]interface{}{int64(200), "yyy", int64(400), "ddd"},
+					[]interface{}{int64(300), "zzz", int64(100), "aaa"},
+					[]interface{}{int64(300), "zzz", int64(200), "bbb"},
+					[]interface{}{int64(300), "zzz", int64(400), "ddd"},
+				},
+			},
+			{
+				name:  "LeftOuterJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a LEFT OUTER JOIN JoinB b USING (Id)`,
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+					[]interface{}{int64(300), "zzz", nil, nil},
+				},
+			},
+			// RIGHT and Full Outer join are not supported by sqlite
+			// {
+			// 	name:  "RightOuterJoin",
+			// 	sql:   `SELECT a.*, b.* FROM JoinA a Right OUTER JOIN JoinB b USING (Id)`,
+			// 	names: []string{"Id", "Value", "Id", "Value"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+			// 		[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+			// 		[]interface{}{nil, nil, int64(400), "ddd"},
+			// 	},
+			// },
+			// {
+			// 	name:  "FullOuterJoin",
+			// 	sql:   `SELECT a.*, b.* FROM JoinA a FULL OUTER JOIN JoinB b USING (Id)`,
+			// 	names: []string{"Id", "Value", "Id", "Value"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+			// 		[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+			// 		[]interface{}{int64(300), "zzz", nil, nil},
+			// 		[]interface{}{nil, nil, int64(400), "ddd"},
+			// 	},
+			// },
+			{
+				name:  "Cond_ON",
+				sql:   `SELECT a.* FROM JoinA AS a JOIN JoinB AS b ON a.Id = b.Id WHERE b.Value = "aaa"`,
+				names: []string{"Id", "Value"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100), "xxx"},
 				},
 			},
 			{
-				name: "From_Join_ON1",
-				sql:  `SELECT a.Id, a.Value FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE b.Value = "xxx"`,
+				name:  "Cond_ON1",
+				sql:   `SELECT a.Id, a.Value FROM JoinA AS a JOIN JoinB AS b ON a.Id = b.Id WHERE b.Value = "aaa"`,
+				names: []string{"Id", "Value"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100), "xxx"},
 				},
 			},
 			{
-				name: "From_Join_ON2",
-				sql:  `SELECT a.* FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE a.Id = @id`,
+				name: "Cond_ON2",
+				sql:  `SELECT * FROM JoinA AS a JOIN JoinB AS b ON a.Id = b.Id WHERE a.Id = @id`,
 				params: map[string]Value{
 					"id": makeTestValue(200),
 				},
+				names: []string{"Id", "Value", "Id", "Value"},
 				expected: [][]interface{}{
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+				},
+			},
+			{
+				name: "Cond_ON3",
+				sql:  `SELECT * FROM JoinA AS a JOIN JoinB AS b ON a.Id = b.Id WHERE a.Id = @id`,
+				params: map[string]Value{
+					"id": makeTestValue(200),
+				},
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+				},
+			},
+			{
+				name:  "Cond_Using_SingleIdentifier",
+				sql:   `SELECT * FROM JoinA AS a JOIN JoinB AS b USING (Id) WHERE b.Value = "aaa"`,
+				names: []string{"Id", "Value", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", "aaa"},
+				},
+			},
+			{
+				name:  "Cond_Using_MultiIdentifer",
+				sql:   `SELECT * FROM JoinA AS a JOIN Simple AS b USING (Id, Value)`,
+				names: []string{"Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
 					[]interface{}{int64(200), "yyy"},
+					[]interface{}{int64(300), "zzz"},
 				},
 			},
 			{
-				name: "From_Join_ON3",
-				sql:  `SELECT * FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE a.Id = @id`,
-				params: map[string]Value{
-					"id": makeTestValue(200),
-				},
-				expected: [][]interface{}{
-					[]interface{}{int64(200), "yyy", int64(200), "yyy"},
-				},
-			},
-			{
-				name: "From_Join_USING",
-				sql:  `SELECT a.* FROM Simple AS a JOIN Simple AS b USING (Id) WHERE b.Value = "xxx"`,
-				expected: [][]interface{}{
-					[]interface{}{int64(100), "xxx"},
-				},
-			},
-			{
-				name: "From_Join_Using_ColumnNotExist",
-				sql:  `SELECT 1 FROM Simple a JOIN Simple b USING (foo)`,
+				name: "Cond_Using_ColumnNotExist",
+				sql:  `SELECT 1 FROM JoinA a JOIN JoinB b USING (foo)`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Column foo in USING clause not found on left side of join`),
 			},
 			{
-				name: "From_Join_Using_ColumnNotExist_RightSide",
-				sql:  `SELECT 1 FROM Simple a JOIN CompositePrimaryKeys b USING (Value)`,
+				name: "Cond_Using_ColumnNotExist_RightSide",
+				sql:  `SELECT 1 FROM JoinA a JOIN CompositePrimaryKeys b USING (Value)`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Column Value in USING clause not found on right side of join`),
 			},
 			{
-				name: "From_Join_Using_ColumnNotExist_Subquery",
-				sql:  `SELECT 1 FROM Simple a JOIN (SELECT Value FROM Simple) b USING (Id)`,
+				name: "Cond_Using_ColumnNotExist_Subquery",
+				sql:  `SELECT 1 FROM JoinA a JOIN (SELECT Value FROM JoinB) b USING (Id)`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Column Id in USING clause not found on right side of join`),
 			},
 			{
-				name: "From_Join_Subquery_USING",
-				sql:  `SELECT a.* FROM Simple AS a JOIN (SELECT Id FROM Simple) AS b USING (Id) WHERE a.Value = "xxx"`,
+				name:  "Subquery_USING",
+				sql:   `SELECT a.* FROM JoinA AS a JOIN (SELECT Id FROM JoinB) AS b USING (Id) WHERE a.Value = "xxx"`,
+				names: []string{"Id", "Value"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100), "xxx"},
 				},
 			},
-
 			{
-				name: "From_Join_Paren",
-				sql:  `SELECT a.Id FROM (Simple AS a JOIN Simple AS b USING (Id))`,
+				name:  "From_Join_Paren",
+				sql:   `SELECT a.Id FROM (JoinA AS a JOIN JoinB AS b USING (Id))`,
+				names: []string{"Id"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100)},
 					[]interface{}{int64(200)},
-					[]interface{}{int64(300)},
 				},
 			},
-
 			{
-				name: "From_Subquery_Simple",
-				sql:  `SELECT s.* FROM (SELECT 1) s`,
+				name:  "From_Subquery_Simple",
+				sql:   `SELECT s.* FROM (SELECT 1) s`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{int64(1)},
 				},
 			},
 			{
-				name: "From_Subquery_Table",
-				sql:  `SELECT s.* FROM (SELECT Id FROM Simple WHERE Value = "xxx") s`,
+				name:  "From_Subquery_Table",
+				sql:   `SELECT s.* FROM (SELECT Id FROM Simple WHERE Value = "xxx") s`,
+				names: []string{"Id"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100)},
 				},

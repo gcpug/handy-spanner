@@ -605,26 +605,26 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 
 		return view, query, nil, nil
 	case *ast.Join:
-		var data []interface{}
-		view1, q1, d1, err := b.buildQueryTable(src.Left)
+		leftView, leftQuery, leftData, err := b.buildQueryTable(src.Left)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("left table error %v", err)
 		}
-		if view1 == nil {
+		if leftView == nil {
 			return nil, "", nil, fmt.Errorf("left table view is nil")
 		}
 
-		view2, q2, d2, err := b.buildQueryTable(src.Right)
+		rightView, rightQuery, rightData, err := b.buildQueryTable(src.Right)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("right table error %v", err)
 		}
-		if view2 == nil {
+		if rightView == nil {
 			return nil, "", nil, fmt.Errorf("right table view is nil")
 		}
 
-		data = append(data, d1...)
-		data = append(data, d2...)
+		leftItems := leftView.AllItems()
+		rightItems := rightView.AllItems()
 
+		var condData []interface{}
 		var condition string
 		switch cond := src.Cond.(type) {
 		case *ast.On:
@@ -635,7 +635,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 					return nil, "", nil, wrapExprError(err, expr, "ON")
 				}
 				condition = fmt.Sprintf("ON %s", ex.Raw)
-				data = append(data, ex.Args...)
+				condData = append(condData, ex.Args...)
 
 			default:
 				return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for JOIN condition", expr)
@@ -645,19 +645,38 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 			names := make([]string, len(cond.Idents))
 			for i := range cond.Idents {
 				name := cond.Idents[i].Name
-				if _, ok := view1.ResultItemsMap[name]; !ok {
+				if _, ok := leftView.ResultItemsMap[name]; !ok {
 					return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on left side of join", name)
 				}
-				if _, ok := view2.ResultItemsMap[name]; !ok {
+				if _, ok := rightView.ResultItemsMap[name]; !ok {
 					return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on right side of join", name)
 				}
 				names[i] = name
 			}
+
 			condition = fmt.Sprintf("USING (%s)", strings.Join(names, ", "))
+
+			// filter ResultItems that used in USING columns from right view
+			var newRightItems []ResultItem
+			for i := range rightItems {
+				var found bool
+				for _, name := range names {
+					if rightItems[i].Name == name {
+						found = true
+						break
+					}
+				}
+				if !found {
+					newRightItems = append(newRightItems, rightItems[i])
+				}
+			}
+			rightItems = newRightItems
 		}
 
-		newView := createTableViewFromItems(view1.AllItems(), view2.AllItems())
-		return newView, fmt.Sprintf("%s %s %s %s", q1, src.Op, q2, condition), data, nil
+		newView := createTableViewFromItems(leftItems, rightItems)
+		data := append(append(leftData, rightData...), condData...)
+
+		return newView, fmt.Sprintf("%s %s %s %s", leftQuery, src.Op, rightQuery, condition), data, nil
 
 	case *ast.Unnest:
 		return b.buildUnnestView(src)
