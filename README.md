@@ -127,8 +127,10 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
    * Isolation level: SERIALIZABLE
 * DML
    * Insert, Update, Delete
+   * Batch DML
 * DDL
    * CreateTable, CreateIndex only
+   * Respect INTERLEAVE
 * Data Types
    * Int, Float, String, Bool, Byte, Date, Timestamp, Array<Any>, Struct
 
@@ -140,13 +142,12 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
    * Strict type checking
    * More functions
    * Partionan Query
-   * EXCEPT ALL and INTERSECT ALL
+   * EXCEPT ALL and INTERSECT ALL (because of sqlite)
+   * RIGHT and FULL OUTER JOIN (because of sqlite)
    * Merging INT64 and FLOAT64 in SET operations
    * Array operations
 * Struct
    * wrong struct comparison
-* DML
-   * not yet
 * DDL
    * Alter Table, Drop Table, Drop Index
    * Database management
