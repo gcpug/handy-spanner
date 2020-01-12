@@ -488,13 +488,13 @@ func (d *database) ApplyDDL(ctx context.Context, ddl ast.DDL) error {
 	switch val := ddl.(type) {
 	case *ast.CreateTable:
 		if err := d.CreateTable(ctx, val); err != nil {
-			return status.Errorf(codes.Internal, "%v", err)
+			return status.Errorf(codes.Unknown, "%v", err)
 		}
 		return nil
 
 	case *ast.CreateIndex:
 		if err := d.CreateIndex(ctx, val); err != nil {
-			return status.Errorf(codes.Internal, "%v", err)
+			return status.Errorf(codes.Unknown, "%v", err)
 		}
 		return nil
 
@@ -582,7 +582,7 @@ func (d *database) Read(ctx context.Context, tx *transaction, tbl, idx string, c
 	err = tx.ReadTransaction(func(ctx context.Context, dbtx databaseReader) error {
 		r, err := dbtx.QueryContext(ctx, query, args...)
 		if err != nil {
-			return status.Errorf(codes.Internal, "query failed: %v, query: %v", err, query)
+			return status.Errorf(codes.Unknown, "query failed: %v, query: %v", err, query)
 		}
 		sqlRows = r
 		return nil
@@ -608,7 +608,7 @@ func (d *database) Query(ctx context.Context, tx *transaction, stmt *ast.QuerySt
 	err = tx.ReadTransaction(func(ctx context.Context, dbtx databaseReader) error {
 		r, err := dbtx.QueryContext(ctx, query, args...)
 		if err != nil {
-			return status.Errorf(codes.Internal, "query failed: %v, query: %v", err, query)
+			return status.Errorf(codes.Unknown, "query failed: %v, query: %v", err, query)
 		}
 		sqlRows = r
 		return nil
@@ -653,7 +653,7 @@ func (d *database) Execute(ctx context.Context, tx *transaction, dml ast.DML, pa
 				}
 			}
 
-			return status.Errorf(codes.Internal, "failed to write into sqlite: %v", err)
+			return status.Errorf(codes.Unknown, "failed to write into sqlite: %v", err)
 		}
 
 		affectedRows, err = r.RowsAffected()
@@ -800,7 +800,7 @@ func (d *database) write(ctx context.Context, tx *transaction, tbl string, cols 
 					}
 				}
 
-				return status.Errorf(codes.Internal, "failed to write into sqlite: %v", err)
+				return status.Errorf(codes.Unknown, "failed to write into sqlite: %v", err)
 			}
 
 			if affectedRowsCheck {
@@ -809,7 +809,7 @@ func (d *database) write(ctx context.Context, tx *transaction, tbl string, cols 
 				// But spanner should return NotFound
 				n, err := r.RowsAffected()
 				if err != nil {
-					return status.Errorf(codes.Internal, "failed to get RowsAffected: %v", err)
+					return status.Errorf(codes.Unknown, "failed to get RowsAffected: %v", err)
 				}
 				if n == 0 {
 					return status.Errorf(codes.NotFound, "Row %v in table %s is missing. Row cannot be updated.", data, tbl)
@@ -974,7 +974,7 @@ func (d *database) Delete(ctx context.Context, tx *transaction, tbl string, keys
 	err = tx.WriteTransaction(func(dbtx databaseWriter) error {
 		query := fmt.Sprintf("DELETE FROM %s %s", tbl, whereClause)
 		if _, err := dbtx.ExecContext(ctx, query, args...); err != nil {
-			return status.Errorf(codes.Internal, "failed to delete: %v", err)
+			return status.Errorf(codes.Unknown, "failed to delete: %v", err)
 		}
 		return nil
 	})
@@ -1118,10 +1118,9 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 	primaryKeysQuery := strings.Join(t.primaryKey.IndexColumnNames(), ", ")
 	var foreignKeyConstraint string
 
-
-	if stmt.Cluster != nil{
+	if stmt.Cluster != nil {
 		parentTableName := stmt.Cluster.TableName.Name
-		parentStmt, ok :=  db.tables[parentTableName]
+		parentStmt, ok := db.tables[parentTableName]
 		if !ok {
 			return fmt.Errorf("could not find parent table for interleaving: %v", stmt.Name.Name)
 		}

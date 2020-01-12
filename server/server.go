@@ -302,7 +302,7 @@ func (s *server) createSession(db *database, dbName string) (*session, error) {
 		return session, nil
 	}
 
-	return nil, status.Errorf(codes.Internal, "create session failed")
+	return nil, status.Errorf(codes.Unknown, "create session failed")
 }
 
 func (s *server) createDatabase(name string) (*database, error) {
@@ -376,7 +376,7 @@ func (s *server) dropDatabase(name string) error {
 	}
 
 	if err := db.Close(); err != nil {
-		return status.Errorf(codes.Internal, "Failed to close the database: %s", err)
+		return status.Errorf(codes.Unknown, "Failed to close the database: %s", err)
 	}
 
 	s.dbMu.Lock()
