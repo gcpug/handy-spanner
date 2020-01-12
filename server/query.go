@@ -1442,7 +1442,14 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 
 		var vt ValueType
 		switch e.Op {
-		case ast.OpOr, ast.OpAnd, ast.OpEqual, ast.OpNotEqual, ast.OpLess, ast.OpGreater, ast.OpLessEqual, ast.OpGreaterEqual, ast.OpLike, ast.OpNotLike:
+		case ast.OpEqual, ast.OpNotEqual, ast.OpLess, ast.OpGreater, ast.OpLessEqual, ast.OpGreaterEqual:
+			if !isComparable(left.ValueType, right.ValueType) {
+				return NullExpr, newExprErrorf(expr, true, "No matching signature for operator %s for argument types: %s, %s.", e.Op, left.ValueType, right.ValueType)
+			}
+			vt = ValueType{
+				Code: TCBool,
+			}
+		case ast.OpOr, ast.OpAnd, ast.OpLike, ast.OpNotLike:
 			vt = ValueType{
 				Code: TCBool,
 			}
@@ -1683,125 +1690,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 
 		target := astTypeToValueType(e.Type)
 
-		if target.Code == TCStruct {
-			return NullExpr, newExprErrorf(expr, false, "Struct type is not supported in Cast")
-		}
-
-		raw := ex.Raw
-		switch ex.ValueType.Code {
-		case TCInt64:
-			switch target.Code {
-			case TCBool:
-				raw = fmt.Sprintf("___CAST_INT64_TO_BOOL(%s)", raw)
-			case TCString:
-				raw = fmt.Sprintf("___CAST_INT64_TO_STRING(%s)", raw)
-			case TCInt64:
-				// do nothing
-			case TCFloat64:
-				raw = fmt.Sprintf("___CAST_INT64_TO_FLOAT64(%s)", raw)
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
-			}
-		case TCFloat64:
-			switch target.Code {
-			case TCString:
-				raw = fmt.Sprintf("___CAST_FLOAT64_TO_STRING(%s)", raw)
-			case TCInt64:
-				raw = fmt.Sprintf("___CAST_FLOAT64_TO_INT64(%s)", raw)
-			case TCFloat64:
-				// do nothing
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
-			}
-
-		case TCBool:
-			switch target.Code {
-			case TCString:
-				raw = fmt.Sprintf("___CAST_BOOL_TO_STRING(%s)", raw)
-			case TCBool:
-				// do nothing
-			case TCInt64:
-				raw = fmt.Sprintf("___CAST_BOOL_TO_INT64(%s)", raw)
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCString:
-			switch target.Code {
-			case TCString:
-				// do nothing
-			case TCBool:
-				raw = fmt.Sprintf("___CAST_STRING_TO_BOOL(%s)", raw)
-			case TCInt64:
-				raw = fmt.Sprintf("___CAST_STRING_TO_INT64(%s)", raw)
-			case TCFloat64:
-				raw = fmt.Sprintf("___CAST_STRING_TO_FLOAT64(%s)", raw)
-			case TCDate:
-				raw = fmt.Sprintf("___CAST_STRING_TO_DATE(%s)", raw)
-			case TCTimestamp:
-				raw = fmt.Sprintf("___CAST_STRING_TO_TIMESTAMP(%s)", raw)
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCBytes:
-			switch target.Code {
-			case TCBytes:
-				// do nothing
-			case TCString:
-				// do nothing?
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCDate:
-			switch target.Code {
-			case TCString:
-				raw = fmt.Sprintf("___CAST_DATE_TO_STRING(%s)", raw)
-			case TCDate:
-				// do nothing
-			case TCTimestamp:
-				raw = fmt.Sprintf("___CAST_DATE_TO_TIMESTAMP(%s)", raw)
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCTimestamp:
-			switch target.Code {
-			case TCString:
-				raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_STRING(%s)", raw)
-			case TCDate:
-				raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_DATE(%s)", raw)
-			case TCTimestamp:
-				// do nothing
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCArray:
-			if !compareValueType(ex.ValueType, target) {
-				if ex.ValueType.Code == TCArray && target.Code == TCArray {
-					msg := "Casting between arrays with incompatible element types is not supported: Invalid cast from %s to %s"
-					return NullExpr, newExprErrorf(expr, true, msg, ex.ValueType, target)
-				}
-
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-		case TCStruct:
-			if !compareValueType(ex.ValueType, target) {
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-			return NullExpr, newExprErrorf(expr, false, "struct is not supported")
-		}
-
-		return Expr{
-			ValueType: target,
-			Raw:       raw,
-			Args:      ex.Args,
-		}, nil
-
-		return NullExpr, newExprErrorf(expr, false, "Cast not supported yet")
-
+		return castTo(ex, target)
 	case *ast.ExtractExpr:
 		ex, err := b.buildExpr(e.Expr)
 		if err != nil {
@@ -2356,4 +2245,204 @@ func parseTimestampLiteral(s string) (time.Time, bool) {
 	}
 
 	return time.Time{}, false
+}
+
+func castTo(ex Expr, target ValueType) (Expr, error) {
+	if target.Code == TCStruct {
+		return NullExpr, newExprErrorf(nil, false, "Struct type is not supported in Cast")
+	}
+
+	raw := ex.Raw
+	switch ex.ValueType.Code {
+	case TCInt64:
+		switch target.Code {
+		case TCBool:
+			raw = fmt.Sprintf("___CAST_INT64_TO_BOOL(%s)", raw)
+		case TCString:
+			raw = fmt.Sprintf("___CAST_INT64_TO_STRING(%s)", raw)
+		case TCInt64:
+			// do nothing
+		case TCFloat64:
+			raw = fmt.Sprintf("___CAST_INT64_TO_FLOAT64(%s)", raw)
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
+		}
+	case TCFloat64:
+		switch target.Code {
+		case TCString:
+			raw = fmt.Sprintf("___CAST_FLOAT64_TO_STRING(%s)", raw)
+		case TCInt64:
+			raw = fmt.Sprintf("___CAST_FLOAT64_TO_INT64(%s)", raw)
+		case TCFloat64:
+			// do nothing
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
+		}
+
+	case TCBool:
+		switch target.Code {
+		case TCString:
+			raw = fmt.Sprintf("___CAST_BOOL_TO_STRING(%s)", raw)
+		case TCBool:
+			// do nothing
+		case TCInt64:
+			raw = fmt.Sprintf("___CAST_BOOL_TO_INT64(%s)", raw)
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCString:
+		switch target.Code {
+		case TCString:
+			// do nothing
+		case TCBool:
+			raw = fmt.Sprintf("___CAST_STRING_TO_BOOL(%s)", raw)
+		case TCInt64:
+			raw = fmt.Sprintf("___CAST_STRING_TO_INT64(%s)", raw)
+		case TCFloat64:
+			raw = fmt.Sprintf("___CAST_STRING_TO_FLOAT64(%s)", raw)
+		case TCDate:
+			raw = fmt.Sprintf("___CAST_STRING_TO_DATE(%s)", raw)
+		case TCTimestamp:
+			raw = fmt.Sprintf("___CAST_STRING_TO_TIMESTAMP(%s)", raw)
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCBytes:
+		switch target.Code {
+		case TCBytes:
+			// do nothing
+		case TCString:
+			// do nothing?
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCDate:
+		switch target.Code {
+		case TCString:
+			raw = fmt.Sprintf("___CAST_DATE_TO_STRING(%s)", raw)
+		case TCDate:
+			// do nothing
+		case TCTimestamp:
+			raw = fmt.Sprintf("___CAST_DATE_TO_TIMESTAMP(%s)", raw)
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCTimestamp:
+		switch target.Code {
+		case TCString:
+			raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_STRING(%s)", raw)
+		case TCDate:
+			raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_DATE(%s)", raw)
+		case TCTimestamp:
+			// do nothing
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCArray:
+		if !compareValueType(ex.ValueType, target) {
+			if ex.ValueType.Code == TCArray && target.Code == TCArray {
+				msg := "Casting between arrays with incompatible element types is not supported: Invalid cast from %s to %s"
+				return NullExpr, newExprErrorf(nil, true, msg, ex.ValueType, target)
+			}
+
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+	case TCStruct:
+		if !compareValueType(ex.ValueType, target) {
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+		return NullExpr, newExprErrorf(nil, false, "struct is not supported")
+	}
+
+	return Expr{
+		ValueType: target,
+		Raw:       raw,
+		Args:      ex.Args,
+	}, nil
+}
+
+func isComparable(a, b ValueType) bool {
+	t1 := a.Code
+	t2 := b.Code
+	switch t1 {
+	case TCInt64:
+		if t2 == TCInt64 || t2 == TCFloat64 {
+			return true
+		}
+		return false
+	case TCFloat64:
+		if t2 == TCInt64 || t2 == TCFloat64 {
+			return true
+		}
+		return false
+	case TCString:
+		if t2 == TCString {
+			return true
+		}
+		if t2 == TCDate || t2 == TCTimestamp {
+			return true
+		}
+		return false
+	case TCDate:
+		if t2 == TCDate {
+			return true
+		}
+		if t2 == TCString || t2 == TCTimestamp {
+			return true
+		}
+		return false
+	case TCTimestamp:
+		if t2 == TCTimestamp {
+			return true
+		}
+		if t2 == TCDate || t2 == TCTimestamp {
+			return true
+		}
+		return false
+	}
+
+	// TODO: false by default
+	return true
+}
+
+func isCoerceableTo(a, b ValueType) bool {
+	t1 := a.Code
+	t2 := b.Code
+	switch t1 {
+	case TCInt64:
+		return t2 == TCFloat64
+	case TCString:
+		return t2 == TCDate || t2 == TCTimestamp
+	}
+
+	return false
+}
+
+func isCastableTo(a, b ValueType) bool {
+	t1 := a.Code
+	t2 := b.Code
+	// See: https://cloud.google.com/spanner/docs/functions-and-operators#casting
+	switch t1 {
+	case TCInt64:
+		return t2 == TCString || t2 == TCFloat64 || t2 == TCBool
+	case TCFloat64:
+		return t2 == TCString || t2 == TCInt64
+	case TCBool:
+		return t2 == TCString || t2 == TCInt64
+	case TCString:
+		return true
+	case TCBytes:
+		return t2 == TCString
+	case TCDate:
+		return t2 == TCString || t2 == TCTimestamp
+	case TCTimestamp:
+		return t2 == TCString || t2 == TCDate
+	}
+
+	return false
 }

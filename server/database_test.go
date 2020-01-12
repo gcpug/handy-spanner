@@ -2548,7 +2548,7 @@ func TestExecute(t *testing.T) {
 		"Simple_Update_ParamInWhere": {
 			sql: `UPDATE Simple SET Value = "zzz" WHERE Id = @id`,
 			params: map[string]Value{
-				"id": makeTestValue("100"),
+				"id": makeTestValue(100),
 			},
 			expectedCount: 1,
 			table:         "Simple",
@@ -2709,7 +2709,7 @@ func TestExecute(t *testing.T) {
 		"Simple_Delete_Param": {
 			sql: `DELETE FROM Simple WHERE Id = @id`,
 			params: map[string]Value{
-				"id": makeTestValue("100"),
+				"id": makeTestValue(100),
 			},
 			expectedCount: 1,
 			table:         "Simple",

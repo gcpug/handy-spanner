@@ -2157,6 +2157,79 @@ func TestQuery(t *testing.T) {
 			},
 		},
 
+		"BinaryOp": {
+			{
+				name: "Equal_IntInt",
+				sql:  `SELECT 1 = 1`,
+				expected: [][]interface{}{
+					[]interface{}{true},
+				},
+			},
+			{
+				name: "Equal_IntFloat1",
+				sql:  `SELECT 1 = 1.0`,
+				expected: [][]interface{}{
+					[]interface{}{true},
+				},
+			},
+			{
+				name: "Equal_IntFloat2",
+				sql:  `SELECT 1 = 1.000000000000000000000000000000000000001`,
+				expected: [][]interface{}{
+					[]interface{}{true},
+				},
+			},
+			{
+				name: "Equal_IntFloat3",
+				sql:  `SELECT 1 = 1.1`,
+				expected: [][]interface{}{
+					[]interface{}{false},
+				},
+			},
+			{
+				name: "Equal_IntString",
+				sql:  `SELECT 1 = "1"`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: INT64, STRING.`),
+			},
+			{
+				name: "Equal_IntBool",
+				sql:  `SELECT 1 = TRUE`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: INT64, BOOL.`),
+			},
+			{
+				name: "Equal_FloatString",
+				sql:  `SELECT 1.0 = "1.0"`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: FLOAT64, STRING.`),
+			},
+			{
+				name: "Equal_StringFloat",
+				sql:  `SELECT "1.0" = 1.0`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: STRING, FLOAT64.`),
+			},
+			{
+				name: "Equal_StringFloat",
+				sql:  `SELECT "1.0" = 1.0`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: STRING, FLOAT64.`),
+			},
+			{
+				name: "Equal_StringBool",
+				sql:  `SELECT "TRUE" = TRUE`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: STRING, BOOL.`),
+			},
+			{
+				name: "Equal_StringBytes",
+				sql:  `SELECT "xxx" = B'xxx'`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: STRING, BYTES.`),
+			},
+		},
+
 		"Arithmetic": {
 			{
 				name: "Arithmetic_Add",
