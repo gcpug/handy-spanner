@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes}
+	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB}
 	schemaSimple = `CREATE TABLE Simple (
   Id INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
@@ -118,6 +118,16 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
   ArrayInt ARRAY<INT64>,
   ArrayFloat ARRAY<FLOAT64>,
   ArrayDate ARRAY<DATE>,
+) PRIMARY KEY(Id);
+`
+	schemaJoinA = `CREATE TABLE JoinA (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+`
+	schemaJoinB = `CREATE TABLE JoinB (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
 ) PRIMARY KEY(Id);
 `
 	compositePrimaryKeysKeys = []string{

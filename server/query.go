@@ -588,76 +588,23 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 			}
 			return nil, "", nil, err
 		}
-		view := t.TableView()
 
-		var query string
-		if src.As == nil {
-			query = t.Name
-			if err := b.registerTableAlias(view, t.Name); err != nil {
-				return nil, "", nil, err
-			}
-		} else {
+		query := t.Name
+		alias := t.Name
+		if src.As != nil {
 			query = fmt.Sprintf("%s AS %s", t.Name, src.As.Alias.Name)
-			if err := b.registerTableAlias(view, src.As.Alias.Name); err != nil {
-				return nil, "", nil, err
-			}
+			alias = src.As.Alias.Name
+		}
+
+		view := t.TableViewWithAlias(alias)
+
+		if err := b.registerTableAlias(view, alias); err != nil {
+			return nil, "", nil, err
 		}
 
 		return view, query, nil, nil
 	case *ast.Join:
-		var data []interface{}
-		view1, q1, d1, err := b.buildQueryTable(src.Left)
-		if err != nil {
-			return nil, "", nil, fmt.Errorf("left table error %v", err)
-		}
-		if view1 == nil {
-			return nil, "", nil, fmt.Errorf("left table view is nil")
-		}
-
-		view2, q2, d2, err := b.buildQueryTable(src.Right)
-		if err != nil {
-			return nil, "", nil, fmt.Errorf("right table error %v", err)
-		}
-		if view2 == nil {
-			return nil, "", nil, fmt.Errorf("right table view is nil")
-		}
-
-		data = append(data, d1...)
-		data = append(data, d2...)
-
-		var condition string
-		switch cond := src.Cond.(type) {
-		case *ast.On:
-			switch expr := cond.Expr.(type) {
-			case *ast.BinaryExpr:
-				ex, err := b.buildExpr(expr)
-				if err != nil {
-					return nil, "", nil, wrapExprError(err, expr, "ON")
-				}
-				condition = fmt.Sprintf("ON %s", ex.Raw)
-				data = append(data, ex.Args...)
-
-			default:
-				return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for JOIN condition", expr)
-			}
-
-		case *ast.Using:
-			names := make([]string, len(cond.Idents))
-			for i := range cond.Idents {
-				name := cond.Idents[i].Name
-				if _, ok := view1.ResultItemsMap[name]; !ok {
-					return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on left side of join", name)
-				}
-				if _, ok := view2.ResultItemsMap[name]; !ok {
-					return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on right side of join", name)
-				}
-				names[i] = name
-			}
-			condition = fmt.Sprintf("USING (%s)", strings.Join(names, ", "))
-		}
-
-		newView := createTableViewFromItems(view1.AllItems(), view2.AllItems())
-		return newView, fmt.Sprintf("%s %s %s %s", q1, src.Op, q2, condition), data, nil
+		return b.buildJoinedView(src)
 
 	case *ast.Unnest:
 		return b.buildUnnestView(src)
@@ -691,6 +638,170 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 	default:
 		return nil, "", nil, status.Errorf(codes.Unknown, "unknown expression %T for FROM", src)
 	}
+}
+
+func (b *QueryBuilder) buildJoinedView(src *ast.Join) (*TableView, string, []interface{}, error) {
+	leftView, leftQuery, leftData, err := b.buildQueryTable(src.Left)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("left table error %v", err)
+	}
+	if leftView == nil {
+		return nil, "", nil, fmt.Errorf("left table view is nil")
+	}
+
+	rightView, rightQuery, rightData, err := b.buildQueryTable(src.Right)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("right table error %v", err)
+	}
+	if rightView == nil {
+		return nil, "", nil, fmt.Errorf("right table view is nil")
+	}
+
+	leftItems := leftView.AllItems()
+	rightItems := rightView.AllItems()
+
+	var condData []interface{}
+	var condition string
+	var usingColumns []string
+	switch cond := src.Cond.(type) {
+	case *ast.On:
+		switch expr := cond.Expr.(type) {
+		case *ast.BinaryExpr:
+			ex, err := b.buildExpr(expr)
+			if err != nil {
+				return nil, "", nil, wrapExprError(err, expr, "ON")
+			}
+			condition = fmt.Sprintf("ON %s", ex.Raw)
+			condData = append(condData, ex.Args...)
+
+		default:
+			return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for JOIN condition", expr)
+		}
+
+	case *ast.Using:
+		names := make([]string, len(cond.Idents))
+		for i := range cond.Idents {
+			name := cond.Idents[i].Name
+			if _, ok := leftView.ResultItemsMap[name]; !ok {
+				return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on left side of join", name)
+			}
+			if _, ok := rightView.ResultItemsMap[name]; !ok {
+				return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on right side of join", name)
+			}
+			names[i] = name
+		}
+
+		usingColumns = names // used for FULL OUTER JOIN
+		condition = fmt.Sprintf("USING (%s)", strings.Join(names, ", "))
+
+		// filter ResultItems that used in USING columns from right view
+		var newRightItems []ResultItem
+		for i := range rightItems {
+			var found bool
+			for _, name := range names {
+				if rightItems[i].Name == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				newRightItems = append(newRightItems, rightItems[i])
+			}
+		}
+		rightItems = newRightItems
+	}
+
+	switch src.Op {
+	case ast.CommaJoin,
+		ast.CrossJoin,
+		ast.InnerJoin,
+		ast.LeftOuterJoin:
+		newView := createTableViewFromItems(leftItems, rightItems)
+		data := append(append(leftData, rightData...), condData...)
+
+		return newView, fmt.Sprintf("%s %s %s %s", leftQuery, src.Op, rightQuery, condition), data, nil
+
+	case ast.RightOuterJoin:
+		// RIGHT OUTER JOIN is not supported by sqlite
+		// Reverse left and right, then use LEFT OUTER JOIN to simulate RIGHT OUTER JOIN
+		newView := createTableViewFromItems(leftItems, rightItems)
+		data := append(append(rightData, leftData...), condData...)
+
+		return newView, fmt.Sprintf("%s LEFT OUTER JOIN %s %s", rightQuery, leftQuery, condition), data, nil
+
+	case ast.FullOuterJoin:
+		// FULL OUTER JOIN is not supported by sqlite
+		// Use LEFT OUTER JOIN and RIGHT OUTER JOIN, then UNION ALL to simulate FULL OUTER JOIN
+		// Ref. https://www.sqlitetutorial.net/sqlite-full-outer-join/
+
+		if len(usingColumns) == 0 {
+			msg := "hanndy-spanner: Full Outer Join with ON condition is not supported yet."
+			return nil, "", nil, status.Errorf(codes.Unknown, msg)
+		}
+
+		var leftUsingColumns []string
+		var leftRemainingColumns []string
+		for _, item := range leftView.AllItems() {
+			var found bool
+			for _, name := range usingColumns {
+				if item.Name == name {
+					found = true
+					break
+				}
+			}
+			if found {
+				leftUsingColumns = append(leftUsingColumns, item.Expr.Raw)
+			} else {
+				leftRemainingColumns = append(leftRemainingColumns, item.Expr.Raw)
+			}
+		}
+
+		var rightUsingColumns []string
+		var rightRemainingColumns []string
+		for _, item := range rightView.AllItems() {
+			var found bool
+			for _, name := range usingColumns {
+				if item.Name == name {
+					found = true
+					break
+				}
+			}
+			if found {
+				rightUsingColumns = append(rightUsingColumns, item.Expr.Raw)
+			} else {
+				rightRemainingColumns = append(rightRemainingColumns, item.Expr.Raw)
+			}
+		}
+		remainingColumns := append(leftRemainingColumns, rightRemainingColumns...)
+
+		var secondWhere []string
+		for _, c := range leftUsingColumns {
+			secondWhere = append(secondWhere, fmt.Sprintf("%s IS NULL", c))
+		}
+
+		first := fmt.Sprintf(`SELECT %s FROM %s LEFT JOIN %s %s`,
+			strings.Join(append(leftUsingColumns, remainingColumns...), ", "),
+			leftQuery, rightQuery, condition)
+		second := fmt.Sprintf(`SELECT %s FROM %s LEFT JOIN %s %s WHERE %s`,
+			strings.Join(append(rightUsingColumns, remainingColumns...), ", "),
+			rightQuery, leftQuery, condition,
+			strings.Join(secondWhere, " AND "),
+		)
+		query := fmt.Sprintf("(%s UNION ALL %s)", first, second)
+
+		newView := createTableViewFromItems(leftItems, rightItems)
+
+		data1 := append(append(leftData, rightData...), condData...)
+		data2 := append(append(rightData, leftData...), condData...)
+		data := append(data1, data2...)
+
+		// TODO: FullOuterJoin is simulated by using subquery with UNION, so table alias cannot be used
+		// See the test case
+
+		return newView, query, data, nil
+	}
+
+	return nil, "", nil, status.Errorf(codes.Unknown, "unknown Join operation: %v", src.Op)
 }
 
 // buildUnnestView creates a Tableview from an UNNEST() expression.
