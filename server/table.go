@@ -53,7 +53,11 @@ func (t *Table) TableIndex(idx string) (*TableIndex, bool) {
 }
 
 func (t *Table) TableView() *TableView {
-	return createTableViewFromTable(t)
+	return createTableViewFromTable(t, "")
+}
+
+func (t *Table) TableViewWithAlias(alias string) *TableView {
+	return createTableViewFromTable(t, alias)
 }
 
 // NonNullableColumnsExist checks non nullable columns exist in the spciefied columns.
@@ -544,11 +548,15 @@ func createTableViewFromItems(items1 []ResultItem, items2 []ResultItem) *TableVi
 	}
 }
 
-func createTableViewFromTable(table *Table) *TableView {
+func createTableViewFromTable(table *Table, alias string) *TableView {
 	items := make([]ResultItem, 0, len(table.columns))
 	itemsMap := make(map[string]ResultItem, len(table.columns))
 	for _, column := range table.columns {
 		item := createResultItemFromColumn(column)
+		// if alias specified, add the alias to Expr
+		if alias != "" {
+			item.Expr.Raw = fmt.Sprintf("%s.%s", alias, item.Expr.Raw)
+		}
 		items = append(items, item)
 		itemsMap[column.Name()] = item
 	}

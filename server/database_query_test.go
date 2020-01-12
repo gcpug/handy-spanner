@@ -1669,21 +1669,68 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(300), "zzz", nil, nil},
 				},
 			},
-			// RIGHT and Full Outer join are not supported by sqlite
+			{
+				name:  "RightOuterJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a Right OUTER JOIN JoinB b USING (Id)`,
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+					[]interface{}{nil, nil, int64(400), "ddd"},
+				},
+			},
+			{
+				name:  "FullOuterJoin",
+				sql:   `SELECT * FROM JoinA a FULL OUTER JOIN JoinB b USING (Id)`,
+				names: []string{"Id", "Value", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", "aaa"},
+					[]interface{}{int64(200), "yyy", "bbb"},
+					[]interface{}{int64(300), "zzz", nil},
+					[]interface{}{int64(400), nil, "ddd"},
+				},
+			},
+			{
+				name:  "FullOuterJoin_UsingMultiIdentifer",
+				sql:   `SELECT * FROM JoinA a FULL OUTER JOIN JoinB b USING (Id, Value)`,
+				names: []string{"Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+					[]interface{}{int64(300), "zzz"},
+					[]interface{}{int64(100), "aaa"},
+					[]interface{}{int64(200), "bbb"},
+					[]interface{}{int64(400), "ddd"},
+				},
+			},
+			// TODO: FullOuterJoin is simulated only for USING
 			// {
-			// 	name:  "RightOuterJoin",
-			// 	sql:   `SELECT a.*, b.* FROM JoinA a Right OUTER JOIN JoinB b USING (Id)`,
+			// 	name:  "FullOuterJoin_On",
+			// 	sql:   `SELECT * FROM JoinA a FULL OUTER JOIN JoinB b ON a.Id = b.Id`,
 			// 	names: []string{"Id", "Value", "Id", "Value"},
 			// 	expected: [][]interface{}{
 			// 		[]interface{}{int64(100), "xxx", int64(100), "aaa"},
 			// 		[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+			// 		[]interface{}{int64(300), "zzz", nil, nil},
 			// 		[]interface{}{nil, nil, int64(400), "ddd"},
 			// 	},
 			// },
+			// TODO: FullOuterJoin is simulated by using subquery with UNION, so table alias cannot be used
 			// {
-			// 	name:  "FullOuterJoin",
+			// 	name:  "FullOuterJoin_WithColumnNames",
+			// 	sql:   `SELECT a.Id, a.Value, b.Value FROM JoinA a FULL OUTER JOIN JoinB b USING (Id)`,
+			// 	names: []string{"Id", "Value", "Value"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(100), "xxx", "aaa"},
+			// 		[]interface{}{int64(200), "yyy", "bbb"},
+			// 		[]interface{}{int64(300), "zzz", nil},
+			// 		[]interface{}{int64(400), nil, "ddd"},
+			// 	},
+			// },
+			// {
+			// 	name:  "FullOuterJoin_WithTableAlias",
 			// 	sql:   `SELECT a.*, b.* FROM JoinA a FULL OUTER JOIN JoinB b USING (Id)`,
-			// 	names: []string{"Id", "Value", "Id", "Value"},
+			// 	names: []string{"Id", "Value"},
 			// 	expected: [][]interface{}{
 			// 		[]interface{}{int64(100), "xxx", int64(100), "aaa"},
 			// 		[]interface{}{int64(200), "yyy", int64(200), "bbb"},

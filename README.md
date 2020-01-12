@@ -114,7 +114,8 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
    * SELECT alias
    * Query Parameters
    * Literals
-   * JOINs
+   * JOINs: COMMMA, CROSS, INNER, LEFT/RIGHT/FULL OUTER
+      * FULL OUTER has some limitations
    * Subquery
    * SET operations: UNION, INTERSECT, EXCEPT
    * UNNEST: IN UNNEST, FROM UNNEST
@@ -143,7 +144,9 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
    * More functions
    * Partionan Query
    * EXCEPT ALL and INTERSECT ALL (because of sqlite)
-   * RIGHT and FULL OUTER JOIN (because of sqlite)
+   * FULL OUTER JOIN
+     * Not support table alias. Use `*` for now
+     * Not support ON condition. Use USING condition for now
    * Merging INT64 and FLOAT64 in SET operations
    * Array operations
 * Struct
