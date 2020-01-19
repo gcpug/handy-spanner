@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB}
+	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable}
 	schemaSimple = `CREATE TABLE Simple (
   Id INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
@@ -130,6 +130,12 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
   Value STRING(MAX) NOT NULL,
 ) PRIMARY KEY(Id);
 `
+	schemaFromTable = "CREATE TABLE `From` (" +
+		"`ALL` INT64 NOT NULL," +
+		"`CAST` INT64 NOT NULL, " +
+		"`JOIN` INT64 NOT NULL, " +
+		") PRIMARY KEY(`ALL`); \n" +
+		"CREATE INDEX `ALL` ON `From`(`ALL`);"
 	compositePrimaryKeysKeys = []string{
 		"Id", "PKey1", "PKey2", "Error", "X", "Y", "Z",
 	}
@@ -160,6 +166,7 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
 		"ArrayFloat",
 		"ArrayDate",
 	}
+	fromTableKeys = []string{"ALL", "CAST", "JOIN"}
 )
 
 var initialData = []struct {
@@ -272,6 +279,17 @@ var initialData = []struct {
 					makeStringValue("2012-03-04"),
 					makeStringValue("2012-03-04"),
 				)),
+			},
+		},
+	},
+	{
+		table: "From",
+		cols:  fromTableKeys,
+		values: [][]*structpb.Value{
+			{
+				makeStringValue("1"),
+				makeStringValue("1"),
+				makeStringValue("1"),
 			},
 		},
 	},
@@ -601,6 +619,8 @@ func TestRead(t *testing.T) {
 		`INSERT INTO CompositePrimaryKeys VALUES(3, "bbb", 3, 0, "x1", "y3", "z")`,
 		`INSERT INTO CompositePrimaryKeys VALUES(4, "ccc", 3, 0, "x2", "y4", "z")`,
 		`INSERT INTO CompositePrimaryKeys VALUES(5, "ccc", 4, 0, "x2", "y5", "z")`,
+
+		"INSERT INTO `From` VALUES(1, 1, 1)",
 	} {
 		if _, err := db.db.ExecContext(ctx, query); err != nil {
 			t.Fatalf("Insert failed: %v", err)
@@ -886,6 +906,61 @@ func TestRead(t *testing.T) {
 				[]interface{}{"aaa", int64(1), "x1", "y1", "z"},
 				[]interface{}{"ccc", int64(4), "x2", "y5", "z"},
 				[]interface{}{"ccc", int64(3), "x2", "y4", "z"},
+			},
+		},
+
+		// Escape Keywork
+		"Keyword_All": {
+			tbl:   "From",
+			idx:   "",
+			cols:  fromTableKeys,
+			ks:    &KeySet{All: true},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(1), int64(1)},
+			},
+		},
+		"Keyword_Keys": {
+			tbl:  "From",
+			idx:  "",
+			cols: fromTableKeys,
+			ks: &KeySet{
+				Keys: []*structpb.ListValue{
+					makeListValue(makeStringValue("1")),
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(1), int64(1)},
+			},
+		},
+		"Keyword_Ranges": {
+			tbl:  "From",
+			idx:  "",
+			cols: fromTableKeys,
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("1")),
+						end:         makeListValue(makeStringValue("1")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(1), int64(1)},
+			},
+		},
+		"Keyword_Index": {
+			tbl:   "From",
+			idx:   "ALL",
+			cols:  []string{"ALL"},
+			ks:    &KeySet{All: true},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1)},
 			},
 		},
 	}
@@ -1371,6 +1446,20 @@ func TestInsertAndReplace(t *testing.T) {
 				},
 			},
 		},
+		"Keyword": {
+			tbl:   "From",
+			wcols: fromTableKeys,
+			values: []*structpb.Value{
+				makeStringValue("2"),
+				makeStringValue("2"),
+				makeStringValue("2"),
+			},
+			cols:  fromTableKeys,
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(2), int64(2), int64(2)},
+			},
+		},
 	}
 
 	for _, op := range []string{"INSERT", "REPLACE"} {
@@ -1655,6 +1744,20 @@ func TestReplace(t *testing.T) {
 				},
 			},
 		},
+		"Keyword": {
+			tbl:   "From",
+			wcols: fromTableKeys,
+			values: []*structpb.Value{
+				makeStringValue("1"),
+				makeStringValue("2"),
+				makeStringValue("3"),
+			},
+			cols:  fromTableKeys,
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(2), int64(3)},
+			},
+		},
 	}
 
 	for name, tt := range table {
@@ -1855,6 +1958,20 @@ func TestUpdate(t *testing.T) {
 					float64(0.5), float64(0.5),
 					"2012-03-04", "2012-03-04",
 				},
+			},
+		},
+		"Keyword": {
+			tbl:   "From",
+			wcols: fromTableKeys,
+			values: []*structpb.Value{
+				makeStringValue("1"),
+				makeStringValue("2"),
+				makeStringValue("3"),
+			},
+			cols:  fromTableKeys,
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(2), int64(3)},
 			},
 		},
 	}
@@ -2197,6 +2314,39 @@ func TestDelete(t *testing.T) {
 				[]interface{}{"ccc", int64(3)},
 			},
 		},
+
+		// Escape keywords
+		"Keyword_All": {
+			tbl:      "From",
+			ks:       &KeySet{All: true},
+			cols:     []string{"ALL"},
+			expected: nil,
+		},
+		"Keyword_Keys": {
+			tbl: "From",
+			ks: &KeySet{
+				Keys: []*structpb.ListValue{
+					makeListValue(makeStringValue("1")),
+				},
+			},
+			cols:     []string{"ALL"},
+			expected: nil,
+		},
+		"Keyword_Ranges": {
+			tbl: "From",
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("1")),
+						end:         makeListValue(makeStringValue("1")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			cols:     []string{"ALL"},
+			expected: nil,
+		},
 	}
 
 	for name, tt := range table {
@@ -2226,6 +2376,8 @@ func TestDelete(t *testing.T) {
 				`INSERT INTO CompositePrimaryKeys VALUES(3, "bbb", 3, 0, "x1", "y3", "z")`,
 				`INSERT INTO CompositePrimaryKeys VALUES(4, "ccc", 3, 0, "x2", "y4", "z")`,
 				`INSERT INTO CompositePrimaryKeys VALUES(5, "ccc", 4, 0, "x2", "y5", "z")`,
+
+				"INSERT INTO `From` VALUES(1, 1, 1)",
 			} {
 				if _, err := db.db.ExecContext(ctx, query); err != nil {
 					t.Fatalf("Insert failed: %v", err)
@@ -2234,7 +2386,7 @@ func TestDelete(t *testing.T) {
 
 			testRunInTransaction(t, ses, func(tx *transaction) {
 				if err := db.Delete(ctx, tx, tt.tbl, tt.ks); err != nil {
-					t.Fatalf("Update failed: %v", err)
+					t.Fatalf("Delete failed: %v", err)
 				}
 			})
 
@@ -2545,6 +2697,16 @@ func TestExecute(t *testing.T) {
 				[]interface{}{int64(100), "zzz"},
 			},
 		},
+		// TODO
+		// "Simple_Update_Alias": {
+		// 	sql:           `UPDATE Simple AS s SET s.Value = "zzz" WHERE s.Id = 100`,
+		// 	expectedCount: 1,
+		// 	table:         "Simple",
+		// 	cols:          []string{"Id", "Value"},
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(100), "zzz"},
+		// 	},
+		// },
 		"Simple_Update_ParamInWhere": {
 			sql: `UPDATE Simple SET Value = "zzz" WHERE Id = @id`,
 			params: map[string]Value{
@@ -2604,6 +2766,25 @@ func TestExecute(t *testing.T) {
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`Name Valu not found inside s`),
 		},
+		"EscapeKeyword_Update": {
+			sql:           "UPDATE `From` SET `CAST` = 2 WHERE `ALL` = 1",
+			expectedCount: 1,
+			table:         "From",
+			cols:          fromTableKeys,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(2), int64(1)},
+			},
+		},
+		// TODO
+		// "EscapeKeyword_Update_Alias": {
+		// 	sql:           "UPDATE `From` AS `AND` SET `AND`.`CAST` = 2 WHERE `ALL` = 1",
+		// 	expectedCount: 1,
+		// 	table:         "From",
+		// 	cols:          fromTableKeys,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(1), int64(2), int64(1)},
+		// 	},
+		// },
 		"Simple_Insert": {
 			sql:           `INSERT INTO Simple (Id, Value) VALUES(101, "yyy")`,
 			expectedCount: 1,
@@ -2692,6 +2873,16 @@ func TestExecute(t *testing.T) {
 			code: codes.InvalidArgument,
 			msg:  regexp.MustCompile(`Column Valueee is not present in table Simple`),
 		},
+		"EscapeKeyword_Insert": {
+			sql:           "INSERT INTO `From` (`ALL`, `CAST`, `JOIN`) VALUES(2, 2, 2)",
+			expectedCount: 1,
+			table:         "From",
+			cols:          fromTableKeys,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(1), int64(1)},
+				[]interface{}{int64(2), int64(2), int64(2)},
+			},
+		},
 		"Simple_Delete": {
 			sql:           `DELETE FROM Simple WHERE Id = 100`,
 			expectedCount: 1,
@@ -2724,6 +2915,13 @@ func TestExecute(t *testing.T) {
 			expected: [][]interface{}{
 				[]interface{}{int64(100), "xxx"},
 			},
+		},
+		"EscapeKeyword_Delete": {
+			sql:           "DELETE FROM `From` WHERE `ALL` = 1",
+			expectedCount: 1,
+			table:         "From",
+			cols:          fromTableKeys,
+			expected:      nil,
 		},
 	}
 

@@ -368,13 +368,13 @@ func (b *QueryBuilder) buildUpdate(up *ast.Update) (string, []interface{}, error
 	var fromClause string
 	var tableAliiasName string
 	if up.As == nil {
-		fromClause = t.Name
+		fromClause = QuoteString(t.Name)
 		tableAliiasName = t.Name
 		if err := b.registerTableAlias(view, t.Name); err != nil {
 			return "", nil, err
 		}
 	} else {
-		fromClause = fmt.Sprintf("%s AS %s", t.Name, up.As.Alias.Name)
+		fromClause = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(up.As.Alias.Name))
 		tableAliiasName = up.As.Alias.Name
 		if err := b.registerTableAlias(view, up.As.Alias.Name); err != nil {
 			return "", nil, err
@@ -536,7 +536,7 @@ func (b *QueryBuilder) buildInsert(up *ast.Insert) (string, []interface{}, error
 		values = query
 	}
 
-	query := fmt.Sprintf(`INSERT INTO %s (%s) %s`, tableName, strings.Join(columns, ", "), values)
+	query := fmt.Sprintf(`INSERT INTO %s (%s) %s`, QuoteString(tableName), strings.Join(QuoteStringSlice(columns), ", "), values)
 
 	return query, b.args, nil
 }
@@ -555,12 +555,12 @@ func (b *QueryBuilder) buildDelete(up *ast.Delete) (string, []interface{}, error
 	// build FROM
 	var fromClause string
 	if up.As == nil {
-		fromClause = t.Name
+		fromClause = QuoteString(t.Name)
 		if err := b.registerTableAlias(view, t.Name); err != nil {
 			return "", nil, err
 		}
 	} else {
-		fromClause = fmt.Sprintf("%s AS %s", t.Name, up.As.Alias.Name)
+		fromClause = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(up.As.Alias.Name))
 		if err := b.registerTableAlias(view, up.As.Alias.Name); err != nil {
 			return "", nil, err
 		}
@@ -589,10 +589,10 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 			return nil, "", nil, err
 		}
 
-		query := t.Name
+		query := QuoteString(t.Name)
 		alias := t.Name
 		if src.As != nil {
-			query = fmt.Sprintf("%s AS %s", t.Name, src.As.Alias.Name)
+			query = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(src.As.Alias.Name))
 			alias = src.As.Alias.Name
 		}
 
@@ -692,7 +692,7 @@ func (b *QueryBuilder) buildJoinedView(src *ast.Join) (*TableView, string, []int
 		}
 
 		usingColumns = names // used for FULL OUTER JOIN
-		condition = fmt.Sprintf("USING (%s)", strings.Join(names, ", "))
+		condition = fmt.Sprintf("USING (%s)", strings.Join(QuoteStringSlice(names), ", "))
 
 		// filter ResultItems that used in USING columns from right view
 		var newRightItems []ResultItem
@@ -988,7 +988,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 				Expr: Expr{
 					// This is a trick. This Expr is referred as subquery.
 					// At the reference, it should be just referred as alias name instead of s.Raw.
-					Raw:       alias,
+					Raw:       QuoteString(alias),
 					ValueType: ex.ValueType,
 				},
 			})
@@ -1008,11 +1008,11 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 				Expr: Expr{
 					// This is a trick. This Expr is referred as subquery.
 					// At the reference, it should be just referred as alias name instead of s.Raw.
-					Raw:       alias,
+					Raw:       QuoteString(alias),
 					ValueType: ex.ValueType,
 				},
 			})
-			exprs = append(exprs, fmt.Sprintf("%s AS %s", ex.Raw, alias))
+			exprs = append(exprs, fmt.Sprintf("%s AS %s", ex.Raw, QuoteString(alias)))
 
 		default:
 			return nil, "", status.Errorf(codes.Unimplemented, "not supported %T in result set", item)
@@ -1388,8 +1388,15 @@ func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
 	}
 	if idx == -1 {
 		if st.IsTable {
+			// TODO: stop adhoc fix for unescape
+			// This unescapes the expression if it is quoted
+			exp := expr.Raw
+			if exp[0] == '`' && exp[len(exp)-1] == '`' {
+				exp = exp[1 : len(exp)-1]
+			}
+
 			msg := "Name %s not found inside %s"
-			return NullExpr, newExprErrorf(nil, true, msg, name, expr.Raw)
+			return NullExpr, newExprErrorf(nil, true, msg, name, exp)
 		} else {
 			msg := "Field name %s does not exist in %s"
 			return NullExpr, newExprErrorf(nil, true, msg, name, expr.ValueType)
@@ -1398,7 +1405,7 @@ func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
 
 	var raw string
 	if st.IsTable {
-		raw = fmt.Sprintf("%s.%s", expr.Raw, name)
+		raw = fmt.Sprintf("%s.%s", expr.Raw, QuoteString(name))
 	} else {
 		useSqliteJSON()
 		raw = fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", expr.Raw, idx)
@@ -2049,7 +2056,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 					Code:       TCStruct,
 					StructType: tbl.ToStruct(),
 				},
-				Raw: e.Name,
+				Raw: QuoteString(e.Name),
 			}, nil
 		} else {
 			if b.rootView == nil {
@@ -2078,7 +2085,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 					Code:       TCStruct,
 					StructType: tbl.ToStruct(),
 				},
-				Raw: firstName,
+				Raw: QuoteString(firstName),
 			}
 		} else {
 			// If not found in tables, look the results items of root

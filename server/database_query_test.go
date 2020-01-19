@@ -84,6 +84,8 @@ func TestQuery(t *testing.T) {
 		`INSERT INTO JoinB VALUES(100, "aaa")`,
 		`INSERT INTO JoinB VALUES(200, "bbb")`,
 		`INSERT INTO JoinB VALUES(400, "ddd")`,
+
+		"INSERT INTO `From` VALUES(1, 1, 1)",
 	} {
 		if _, err := db.db.ExecContext(ctx, query); err != nil {
 			t.Fatalf("Insert failed: %v", err)
@@ -194,7 +196,7 @@ func TestQuery(t *testing.T) {
 				name: "Identifer_NotFound3",
 				sql:  "SELECT a.foo FROM Simple a",
 				code: codes.InvalidArgument,
-				msg:  regexp.MustCompile(`Name foo not found inside a`),
+				msg:  regexp.MustCompile("Name foo not found inside a"),
 			},
 			{
 				name: "Identifer_NotFound_WithoutFromClause",
@@ -275,6 +277,36 @@ func TestQuery(t *testing.T) {
 						makeTestArray(TCString, "2012-03-04", "2012-03-05"),
 					},
 				},
+			},
+			{
+				name:     "EscapeKeyword_Table",
+				sql:      "SELECT * FROM `From`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
+			},
+			{
+				name:     "EscapeKeyword_TableAlias",
+				sql:      "SELECT * FROM `From` AS `ALL`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
+			},
+			{
+				name:     "EscapeKeyword_Columns",
+				sql:      "SELECT `ALL`, `CAST`, `JOIN` FROM `From`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
+			},
+			{
+				name:     "EscapeKeyword_ColumnsWithAlias",
+				sql:      "SELECT `ALL`.`ALL`, `ALL`.`CAST`, `ALL`.`JOIN` FROM `From` AS `ALL`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
+			},
+			{
+				name:     "EscapeKeyword_ColumnAlias",
+				sql:      "SELECT `ALL` AS `AND`, `CAST` `OR`, `JOIN` AS `IF` FROM `From`",
+				names:    []string{"AND", "OR", "IF"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
 			},
 		},
 		"SimpleWhere": {
@@ -558,6 +590,12 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(200), "yyy"},
 					[]interface{}{int64(100), "xxx"},
 				},
+			},
+			{
+				name:     "EscapeKeyword",
+				sql:      "SELECT * FROM `From` ORDER BY `ALL`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
 			},
 		},
 
@@ -1811,6 +1849,12 @@ func TestQuery(t *testing.T) {
 				sql:  `SELECT 1 FROM JoinA a JOIN (SELECT Value FROM JoinB) b USING (Id)`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Column Id in USING clause not found on right side of join`),
+			},
+			{
+				name:     "Cond_USING_EscapeKeyword",
+				sql:      "SELECT `AND`.*, `OR`.* FROM `From` `AND` JOIN `From` `OR` USING (`ALL`)",
+				names:    []string{"ALL", "CAST", "JOIN", "ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1), int64(1), int64(1), int64(1)}},
 			},
 			{
 				name:  "Subquery_USING",

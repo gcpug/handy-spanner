@@ -555,7 +555,7 @@ func createTableViewFromTable(table *Table, alias string) *TableView {
 		item := createResultItemFromColumn(column)
 		// if alias specified, add the alias to Expr
 		if alias != "" {
-			item.Expr.Raw = fmt.Sprintf("%s.%s", alias, item.Expr.Raw)
+			item.Expr.Raw = fmt.Sprintf("%s.%s", QuoteString(alias), item.Expr.Raw)
 		}
 		items = append(items, item)
 		itemsMap[column.Name()] = item
@@ -578,7 +578,7 @@ func createResultItemFromColumn(column *Column) ResultItem {
 		Name:      column.Name(),
 		ValueType: column.valueType,
 		Expr: Expr{
-			Raw:       column.Name(),
+			Raw:       QuoteString(column.Name()),
 			ValueType: column.valueType,
 		},
 	}
