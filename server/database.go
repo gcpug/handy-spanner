@@ -554,10 +554,10 @@ func (d *database) Read(ctx context.Context, tx *transaction, tbl, idx string, c
 		resultItems[i] = createResultItemFromColumn(columns[i])
 	}
 
-	indexColumnsName := strings.Join(index.IndexColumnNames(), ", ")
+	indexColumnsName := strings.Join(QuoteStringSlice(index.IndexColumnNames()), ", ")
 	indexColumns := index.IndexColumns()
 	indexColumnDirs := index.IndexColumnDirections()
-	colName := strings.Join(cols, ", ")
+	colName := strings.Join(QuoteStringSlice(cols), ", ")
 
 	var args []interface{}
 
@@ -569,11 +569,11 @@ func (d *database) Read(ctx context.Context, tx *transaction, tbl, idx string, c
 
 	orderByItems := make([]string, len(indexColumns))
 	for i := range indexColumns {
-		orderByItems[i] = fmt.Sprintf("%s %s", indexColumns[i].Name(), indexColumnDirs[i])
+		orderByItems[i] = fmt.Sprintf("%s %s", QuoteString(indexColumns[i].Name()), indexColumnDirs[i])
 	}
 	orderByClause := strings.Join(orderByItems, ", ")
 
-	query := fmt.Sprintf(`SELECT %s FROM %s %s ORDER BY %s`, colName, table.Name, whereClause, orderByClause)
+	query := fmt.Sprintf(`SELECT %s FROM %s %s ORDER BY %s`, colName, QuoteString(table.Name), whereClause, orderByClause)
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
@@ -827,12 +827,12 @@ func (d *database) write(ctx context.Context, tx *transaction, tbl string, cols 
 
 func (d *database) Insert(ctx context.Context, tx *transaction, tbl string, cols []string, values []*structpb.ListValue) error {
 	buildQueryFn := func(table *Table, columns []*Column) string {
-		columnName := strings.Join(cols, ", ")
+		columnName := strings.Join(QuoteStringSlice(cols), ", ")
 		placeholder := "?"
 		if len(cols) > 1 {
 			placeholder += strings.Repeat(", ?", len(cols)-1)
 		}
-		return fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`, tbl, columnName, placeholder)
+		return fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`, QuoteString(tbl), columnName, placeholder)
 	}
 
 	buildArgsFn := func(table *Table, columns []*Column, data []interface{}) []interface{} {
@@ -849,7 +849,7 @@ func (d *database) Update(ctx context.Context, tx *transaction, tbl string, cols
 			if c.isPrimaryKey {
 				continue
 			}
-			assigns = append(assigns, fmt.Sprintf("%s = ?", c.Name()))
+			assigns = append(assigns, fmt.Sprintf("%s = ?", QuoteString(c.Name())))
 		}
 
 		// If no columns to be updated exist, it should be no-op.
@@ -862,11 +862,11 @@ func (d *database) Update(ctx context.Context, tx *transaction, tbl string, cols
 		pKeysNames := table.primaryKey.IndexColumnNames()
 		pkeysAssign := make([]string, len(pKeysNames))
 		for i, col := range pKeysNames {
-			pkeysAssign[i] = fmt.Sprintf("%s = ?", col)
+			pkeysAssign[i] = fmt.Sprintf("%s = ?", QuoteString(col))
 		}
 		whereClause := strings.Join(pkeysAssign, " AND ")
 
-		return fmt.Sprintf(`UPDATE %s SET %s WHERE %s`, tbl, setClause, whereClause)
+		return fmt.Sprintf(`UPDATE %s SET %s WHERE %s`, QuoteString(tbl), setClause, whereClause)
 	}
 
 	buildArgsFn := func(table *Table, columns []*Column, data []interface{}) []interface{} {
@@ -894,12 +894,12 @@ func (d *database) Update(ctx context.Context, tx *transaction, tbl string, cols
 
 func (d *database) Replace(ctx context.Context, tx *transaction, tbl string, cols []string, values []*structpb.ListValue) error {
 	buildQueryFn := func(table *Table, columns []*Column) string {
-		columnName := strings.Join(cols, ", ")
+		columnName := strings.Join(QuoteStringSlice(cols), ", ")
 		placeholder := "?"
 		if len(cols) > 1 {
 			placeholder += strings.Repeat(", ?", len(cols)-1)
 		}
-		return fmt.Sprintf(`REPLACE INTO %s (%s) VALUES (%s)`, tbl, columnName, placeholder)
+		return fmt.Sprintf(`REPLACE INTO %s (%s) VALUES (%s)`, QuoteString(tbl), columnName, placeholder)
 	}
 
 	buildArgsFn := func(table *Table, columns []*Column, data []interface{}) []interface{} {
@@ -916,21 +916,21 @@ func (d *database) InsertOrUpdate(ctx context.Context, tx *transaction, tbl stri
 			if c.isPrimaryKey {
 				continue
 			}
-			assigns = append(assigns, fmt.Sprintf("%s = ?", c.Name()))
+			assigns = append(assigns, fmt.Sprintf("%s = ?", QuoteString(c.Name())))
 		}
 		setClause := strings.Join(assigns, ", ")
 
 		pkeysNamesSlice := table.primaryKey.IndexColumnNames()
-		pkeysNames := strings.Join(pkeysNamesSlice, ", ")
+		pkeysNames := strings.Join(QuoteStringSlice(pkeysNamesSlice), ", ")
 
-		columnName := strings.Join(cols, ", ")
+		columnName := strings.Join(QuoteStringSlice(cols), ", ")
 		placeholder := "?"
 		if len(cols) > 1 {
 			placeholder += strings.Repeat(", ?", len(cols)-1)
 		}
 
 		return fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO UPDATE SET %s`,
-			tbl, columnName, placeholder, pkeysNames, setClause)
+			QuoteString(tbl), columnName, placeholder, pkeysNames, setClause)
 	}
 
 	buildArgsFn := func(table *Table, columns []*Column, data []interface{}) []interface{} {
@@ -963,7 +963,7 @@ func (d *database) Delete(ctx context.Context, tx *transaction, tbl string, keys
 
 	index := table.primaryKey
 
-	indexColumnsName := strings.Join(index.IndexColumnNames(), ", ")
+	indexColumnsName := strings.Join(QuoteStringSlice(index.IndexColumnNames()), ", ")
 	indexColumns := index.IndexColumns()
 
 	whereClause, args, err := buildWhereClauseFromKeySet(keyset, indexColumnsName, indexColumns)
@@ -972,7 +972,7 @@ func (d *database) Delete(ctx context.Context, tx *transaction, tbl string, keys
 	}
 
 	err = tx.WriteTransaction(func(dbtx databaseWriter) error {
-		query := fmt.Sprintf("DELETE FROM %s %s", tbl, whereClause)
+		query := fmt.Sprintf("DELETE FROM %s %s", QuoteString(tbl), whereClause)
 		if _, err := dbtx.ExecContext(ctx, query, args...); err != nil {
 			return status.Errorf(codes.Unknown, "failed to delete: %v", err)
 		}
@@ -1104,7 +1104,7 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 
 	var columnDefs []string
 	for _, col := range t.columns {
-		s := fmt.Sprintf("  %s %s", col.Name(), col.dbDataType)
+		s := fmt.Sprintf("  %s %s", QuoteString(col.Name()), col.dbDataType)
 		if !col.nullable {
 			// Array data type is not supported for now
 			// so values for array data type are handled as null always
@@ -1115,7 +1115,7 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 		columnDefs = append(columnDefs, s)
 	}
 	columnDefsQuery := strings.Join(columnDefs, ",\n")
-	primaryKeysQuery := strings.Join(t.primaryKey.IndexColumnNames(), ", ")
+	primaryKeysQuery := strings.Join(QuoteStringSlice(t.primaryKey.IndexColumnNames()), ", ")
 	var foreignKeyConstraint string
 
 	if stmt.Cluster != nil {
@@ -1125,12 +1125,12 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 			return fmt.Errorf("could not find parent table for interleaving: %v", stmt.Name.Name)
 		}
 
-		columns := strings.Join(parentStmt.primaryKey.IndexColumnNames(), ",")
+		columns := strings.Join(QuoteStringSlice(parentStmt.primaryKey.IndexColumnNames()), ",")
 
-		foreignKeyConstraint = fmt.Sprintf(",\n FOREIGN KEY(%s) REFERENCES %s(%s) %s", columns, parentTableName, columns, stmt.Cluster.OnDelete)
+		foreignKeyConstraint = fmt.Sprintf(",\n FOREIGN KEY(%s) REFERENCES %s(%s) %s", columns, QuoteString(parentTableName), columns, stmt.Cluster.OnDelete)
 	}
 
-	query := fmt.Sprintf("CREATE TABLE `%s` (\n%s,\n  PRIMARY KEY (%s)%s\n)", t.Name, columnDefsQuery, primaryKeysQuery, foreignKeyConstraint)
+	query := fmt.Sprintf("CREATE TABLE %s (\n%s,\n  PRIMARY KEY (%s)%s\n)", QuoteString(t.Name), columnDefsQuery, primaryKeysQuery, foreignKeyConstraint)
 	if _, err := db.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("failed to create table for %s: %v", t.Name, err)
 	}
@@ -1153,9 +1153,9 @@ func (db *database) CreateIndex(ctx context.Context, stmt *ast.CreateIndex) erro
 	if index.unique {
 		idxType = "UNIQUE INDEX"
 	}
-	columnsName := strings.Join(index.IndexColumnNames(), ", ")
+	columnsName := strings.Join(QuoteStringSlice(index.IndexColumnNames()), ", ")
 
-	query := fmt.Sprintf("CREATE %s `%s` ON %s (%s)", idxType, index.Name(), table.Name, columnsName)
+	query := fmt.Sprintf("CREATE %s %s ON %s (%s)", idxType, QuoteString(index.Name()), QuoteString(table.Name), columnsName)
 	if _, err := db.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("failed to create index for %s: %v", index.Name(), err)
 	}
@@ -1180,4 +1180,16 @@ func (d *database) Close() error {
 	d.db = nil
 
 	return nil
+}
+
+func QuoteString(s string) string {
+	return fmt.Sprintf("`%s`", s)
+}
+
+func QuoteStringSlice(ss []string) []string {
+	ss2 := make([]string, len(ss))
+	for i := range ss {
+		ss2[i] = QuoteString(ss[i])
+	}
+	return ss2
 }
