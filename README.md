@@ -149,8 +149,6 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
      * Not support ON condition. Use USING condition for now
    * Merging INT64 and FLOAT64 in SET operations
    * Array operations
-* Struct
-   * wrong struct comparison
 * DDL
    * Alter Table, Drop Table, Drop Index
    * Database management

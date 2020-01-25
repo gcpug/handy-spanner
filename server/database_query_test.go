@@ -954,14 +954,14 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(100)},
 				},
 			},
-			// {
-			// 	name: "ArrayStructLiteral_Named",
-			// 	sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(100, "xxx"), (200, "yyy")])`,
-			// 	expected: [][]interface{}{
-			// 		[]interface{}{int64(100), "xxx"},
-			// 		[]interface{}{int64(200), "yyy"},
-			// 	},
-			// },
+			{
+				name: "ArrayStructLiteral_Named",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(100, "xxx"), (200, "yyy")])`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+				},
+			},
 			{
 				name: "ArrayStructLiteral_Unnamed",
 				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN UNNEST(ARRAY<STRUCT<INT64, STRING>>[(100, "xxx"), (200, "yyy")])`,
@@ -1616,14 +1616,13 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(100), "xxx"},
 				},
 			},
-			// TODO
-			// {
-			// 	name: "Where_Compare_TypedWithName",
-			// 	sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) = STRUCT<x INT64, y STRING>(100, "xxx")`,
-			// 	expected: [][]interface{}{
-			// 		[]interface{}{int64(100), "xxx"},
-			// 	},
-			// },
+			{
+				name: "Where_Compare_TypedWithName",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) = STRUCT<x INT64, y STRING>(100, "xxx")`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
 			{
 				name: "Where_Compare_TypedWithName2",
 				sql:  `SELECT Id, Value FROM Simple WHERE STRUCT<x INT64, y STRING>(Id, Value) = STRUCT<x INT64, y STRING>(100, "xxx")`,
@@ -1639,8 +1638,24 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "Where_In",
+				name: "Where_In_Untyped",
 				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN ((100, "xxx"), (200, "yyy"))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+				},
+			},
+			{
+				name: "Where_In_TypedWithName",
+				sql:  `SELECT Id, Value FROM Simple WHERE STRUCT<x INT64, y STRING>(Id, Value) IN ((100, "xxx"), (200, "yyy"))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+				},
+			},
+			{
+				name: "Where_In_TypedWithName2",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN (STRUCT<x INT64, y STRING>(100, "xxx"), STRUCT<x INT64, y STRING>(200, "yyy"))`,
 				expected: [][]interface{}{
 					[]interface{}{int64(100), "xxx"},
 					[]interface{}{int64(200), "yyy"},
@@ -1937,11 +1952,20 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "Subquery_In_WithMultiColumns",
+				name: "SubQuery_In_WithMultiColumns",
 				sql:  `SELECT 1 WHERE 1 IN (SELECT 1, "abc")`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Subquery of type IN must have only one output column`),
 			},
+			// TODO: need to expand struct like buildUnnestView
+			// {
+			// 	name: "SubQuery_In_AsStruct",
+			// 	sql:  `SELECT Id FROM Simple WHERE (Id) IN (SELECT AS STRUCT Id From Simple WHERE Id > 100)`,
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(200)},
+			// 		[]interface{}{int64(300)},
+			// 	},
+			// },
 			{
 				name: "SubQuery_EXISTS",
 				sql:  `SELECT Id FROM Simple WHERE EXISTS(SELECT 1, "xx")`,
@@ -2271,6 +2295,38 @@ func TestQuery(t *testing.T) {
 				sql:  `SELECT "xxx" = B'xxx'`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: STRING, BYTES.`),
+			},
+
+			// {
+			// 	name: "Less_StructStruct_Coerce",
+			// 	sql:  `SELECT (100) < (101)`,
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{false},
+			// 	},
+			// },
+			{
+				name: "Less_StructStruct",
+				sql:  `SELECT (100, 100) < (100, 100)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Less than is not defined for arguments of type STRUCT<INT64, INT64>`),
+			},
+			{
+				name: "LessEqual_StructStruct",
+				sql:  `SELECT (100, 100) <= (100, 100)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Less than is not defined for arguments of type STRUCT<INT64, INT64>`),
+			},
+			{
+				name: "Greater_StructStruct",
+				sql:  `SELECT (100, 100) > (100, 100)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Greater than is not defined for arguments of type STRUCT<INT64, INT64>`),
+			},
+			{
+				name: "GreaterEqual_StructStruct",
+				sql:  `SELECT (100, 100) >= (100, 100)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Greater than is not defined for arguments of type STRUCT<INT64, INT64>`),
 			},
 		},
 

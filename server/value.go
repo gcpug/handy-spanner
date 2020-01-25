@@ -90,6 +90,10 @@ func (t ValueType) String() string {
 }
 
 func compareValueType(a, b ValueType) bool {
+	if a.Code != b.Code {
+		return false
+	}
+
 	if a.Code == TCStruct && b.Code == TCStruct {
 		aStr := a.StructType
 		bStr := b.StructType
@@ -107,7 +111,11 @@ func compareValueType(a, b ValueType) bool {
 		return true
 	}
 
-	return a == b
+	if a.Code == TCArray && b.Code == TCArray {
+		return compareValueType(*a.ArrayType, *b.ArrayType)
+	}
+
+	return true
 }
 
 func compatibleValueType(a, b ValueType) (ValueType, bool) {
