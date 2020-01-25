@@ -31,6 +31,184 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+func TestCompareValueType(t *testing.T) {
+	table := []struct {
+		a      ValueType
+		b      ValueType
+		result bool
+	}{
+		{
+			a:      ValueType{Code: TCInt64},
+			b:      ValueType{Code: TCInt64},
+			result: true,
+		},
+		{
+			a:      ValueType{Code: TCString},
+			b:      ValueType{Code: TCString},
+			result: true,
+		},
+		{
+			a:      ValueType{Code: TCInt64},
+			b:      ValueType{Code: TCString},
+			result: false,
+		},
+		{
+			a: ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCInt64},
+			},
+			b: ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCInt64},
+			},
+			result: true,
+		},
+		{
+			a: ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCString},
+			},
+			b: ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCString},
+			},
+			result: true,
+		},
+		{
+			a: ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCString},
+			},
+			b: ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCInt64},
+			},
+			result: false,
+		},
+		{
+			a: ValueType{Code: TCInt64},
+			b: ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCInt64},
+			},
+			result: false,
+		},
+		{
+			a: ValueType{
+				Code: TCStruct,
+				StructType: &StructType{
+					FieldNames: []string{"", "", ""},
+					FieldTypes: []*ValueType{
+						&ValueType{Code: TCInt64},
+						&ValueType{Code: TCString},
+					},
+					IsTable: false,
+				},
+			},
+			b: ValueType{
+				Code: TCStruct,
+				StructType: &StructType{
+					FieldNames: []string{"", "", ""},
+					FieldTypes: []*ValueType{
+						&ValueType{Code: TCInt64},
+						&ValueType{Code: TCString},
+					},
+					IsTable: false,
+				},
+			},
+			result: true,
+		},
+		{
+			a: ValueType{
+				Code: TCStruct,
+				StructType: &StructType{
+					FieldNames: []string{"", "", ""},
+					FieldTypes: []*ValueType{
+						&ValueType{Code: TCInt64},
+						&ValueType{Code: TCString},
+					},
+					IsTable: false,
+				},
+			},
+			b: ValueType{
+				Code: TCStruct,
+				StructType: &StructType{
+					FieldNames: []string{"a", "b", "c"},
+					FieldTypes: []*ValueType{
+						&ValueType{Code: TCInt64},
+						&ValueType{Code: TCString},
+					},
+					IsTable: true,
+				},
+			},
+			result: true,
+		},
+		{
+			a: ValueType{
+				Code: TCStruct,
+				StructType: &StructType{
+					FieldNames: []string{"", "", ""},
+					FieldTypes: []*ValueType{
+						&ValueType{Code: TCInt64},
+						&ValueType{Code: TCString},
+					},
+					IsTable: false,
+				},
+			},
+			b: ValueType{
+				Code: TCStruct,
+				StructType: &StructType{
+					FieldNames: []string{"", "", ""},
+					FieldTypes: []*ValueType{
+						&ValueType{Code: TCString},
+						&ValueType{Code: TCInt64},
+					},
+					IsTable: false,
+				},
+			},
+			result: false,
+		},
+		{
+			a: ValueType{
+				Code: TCStruct,
+				StructType: &StructType{
+					FieldNames: []string{"", "", ""},
+					FieldTypes: []*ValueType{
+						&ValueType{Code: TCInt64},
+						&ValueType{
+							Code:      TCArray,
+							ArrayType: &ValueType{Code: TCInt64},
+						},
+					},
+					IsTable: false,
+				},
+			},
+			b: ValueType{
+				Code: TCStruct,
+				StructType: &StructType{
+					FieldNames: []string{"", "", ""},
+					FieldTypes: []*ValueType{
+						&ValueType{Code: TCInt64},
+						&ValueType{
+							Code:      TCArray,
+							ArrayType: &ValueType{Code: TCInt64},
+						},
+					},
+					IsTable: false,
+				},
+			},
+			result: true,
+		},
+	}
+
+	for _, tc := range table {
+		r := compareValueType(tc.a, tc.b)
+		if r != tc.result {
+			t.Errorf("expect result %v, but got %v", tc.result, r)
+		}
+	}
+}
+
 func TestDatabaseEncDec(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

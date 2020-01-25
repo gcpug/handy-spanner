@@ -1226,7 +1226,10 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, error) {
 			if err != nil {
 				return NullExpr, wrapExprError(err, e, "IN condition")
 			}
-			ss = append(ss, ex.Raw)
+
+			raw := b.unkeysStruct(ex.Raw, ex.ValueType)
+
+			ss = append(ss, raw)
 			args = append(args, ex.Args...)
 		}
 		return Expr{
@@ -1243,6 +1246,9 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, error) {
 		if len(items) != 1 {
 			return NullExpr, newExprErrorf(nil, true, "Subquery of type IN must have only one output column")
 		}
+
+		// TODO: if subquery uses SELECT AS STRUCT, it needs to expand struct
+
 		return Expr{
 			ValueType: items[0].ValueType, // inherit ValueType from result item
 			Raw:       fmt.Sprintf("(%s)", query),
@@ -1296,10 +1302,15 @@ func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool, asview bool) 
 	}
 
 	var raw string
-	if offset {
-		raw = fmt.Sprintf("SELECT value, key as offset FROM JSON_EACH(%s)", ex.Raw)
+	if asview {
+		if offset {
+			raw = fmt.Sprintf("SELECT value, key as offset FROM JSON_EACH(%s)", ex.Raw)
+		} else {
+			raw = fmt.Sprintf("SELECT value FROM JSON_EACH(%s)", ex.Raw)
+		}
 	} else {
-		raw = fmt.Sprintf("SELECT value FROM JSON_EACH(%s)", ex.Raw)
+		value := b.unkeysStruct("value", *ex.ValueType.ArrayType)
+		raw = fmt.Sprintf("SELECT %s FROM JSON_EACH(%s)", value, ex.Raw)
 	}
 
 	return Expr{
@@ -1307,6 +1318,16 @@ func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool, asview bool) 
 		Raw:       raw,
 		Args:      ex.Args,
 	}, nil
+}
+
+// unkeysStruct removes "keys" from object for struct type.
+// This is required to compare struct values.
+func (b *QueryBuilder) unkeysStruct(raw string, vt ValueType) string {
+	if vt.Code != TCStruct {
+		return raw
+	}
+
+	return fmt.Sprintf("JSON_REMOVE(%s, '$.keys')", raw)
 }
 
 func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, error) {
@@ -1447,16 +1468,41 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		args = append(args, left.Args...)
 		args = append(args, right.Args...)
 
+		opName := map[ast.BinaryOp]string{
+			ast.OpLess:         "Less than",
+			ast.OpGreater:      "Greater than",
+			ast.OpLessEqual:    "Less than",
+			ast.OpGreaterEqual: "Greater than",
+		}
+
 		var vt ValueType
 		switch e.Op {
-		case ast.OpEqual, ast.OpNotEqual, ast.OpLess, ast.OpGreater, ast.OpLessEqual, ast.OpGreaterEqual:
+		case ast.OpEqual, ast.OpNotEqual:
 			if !isComparable(left.ValueType, right.ValueType) {
 				return NullExpr, newExprErrorf(expr, true, "No matching signature for operator %s for argument types: %s, %s.", e.Op, left.ValueType, right.ValueType)
 			}
 			vt = ValueType{
 				Code: TCBool,
 			}
-		case ast.OpOr, ast.OpAnd, ast.OpLike, ast.OpNotLike:
+
+		case ast.OpLess, ast.OpGreater, ast.OpLessEqual, ast.OpGreaterEqual:
+			if !isComparable(left.ValueType, right.ValueType) {
+				return NullExpr, newExprErrorf(expr, true, "No matching signature for operator %s for argument types: %s, %s.", e.Op, left.ValueType, right.ValueType)
+			}
+
+			if left.ValueType.Code == TCStruct {
+				msg := "%s is not defined for arguments of type %s"
+				return NullExpr, newExprErrorf(expr, true, msg, opName[e.Op], left.ValueType)
+			}
+
+			vt = ValueType{
+				Code: TCBool,
+			}
+		case ast.OpOr, ast.OpAnd:
+			vt = ValueType{
+				Code: TCBool,
+			}
+		case ast.OpLike, ast.OpNotLike:
 			vt = ValueType{
 				Code: TCBool,
 			}
@@ -1484,6 +1530,12 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		raw := fmt.Sprintf("%s %s %s", left.Raw, e.Op, right.Raw)
 		if e.Op == ast.OpBitXor {
 			raw = fmt.Sprintf("(%s | %s) - (%s & %s)", left.Raw, right.Raw, left.Raw, right.Raw)
+			// TODO: args
+		}
+		if e.Op == ast.OpEqual || e.Op == ast.OpNotEqual {
+			leftRaw := b.unkeysStruct(left.Raw, left.ValueType)
+			rightRaw := b.unkeysStruct(right.Raw, right.ValueType)
+			raw = fmt.Sprintf("%s %s %s", leftRaw, e.Op, rightRaw)
 		}
 
 		return Expr{
@@ -1511,9 +1563,11 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 			op = "NOT IN"
 		}
 
+		leftRaw := b.unkeysStruct(left.Raw, left.ValueType)
+
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
-			Raw:       fmt.Sprintf("%s %s %s", left.Raw, op, right.Raw),
+			Raw:       fmt.Sprintf("%s %s %s", leftRaw, op, right.Raw),
 			Args:      args,
 		}, nil
 
