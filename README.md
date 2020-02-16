@@ -134,6 +134,8 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
    * Respect INTERLEAVE
 * Data Types
    * Int, Float, String, Bool, Byte, Date, Timestamp, Array<Any>, Struct
+* [Information Schema](https://cloud.google.com/spanner/docs/information-schema)
+   * partially supported
 
 ### Not supported features
 
