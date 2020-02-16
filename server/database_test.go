@@ -1609,7 +1609,7 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 			}
 
 			d := time.Since(timestamp)
-			if d >= 30*time.Millisecond {
+			if d >= 100*time.Millisecond {
 				t.Fatalf("unexpected time: %v", d)
 			}
 		})
