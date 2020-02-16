@@ -3426,3 +3426,453 @@ func TestInterleaveDeleteParent(t *testing.T) {
 		})
 	}
 }
+
+func TestInformationSchema(t *testing.T) {
+	ctx := context.Background()
+	db := newDatabase()
+	for _, s := range allSchema {
+		ddls := parseDDL(t, s)
+		for _, ddl := range ddls {
+			db.ApplyDDL(ctx, ddl)
+		}
+	}
+
+	table := []struct {
+		name     string
+		sql      string
+		params   map[string]Value
+		expected [][]interface{}
+		names    []string
+		code     codes.Code
+		msg      *regexp.Regexp
+	}{
+		{
+			name:  "Schemata1",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.SCHEMATA WHERE EFFECTIVE_TIMESTAMP IS NULL`,
+			names: []string{"CATALOG_NAME", "SCHEMA_NAME", "EFFECTIVE_TIMESTAMP"},
+			expected: [][]interface{}{
+				[]interface{}{"", "INFORMATION_SCHEMA", nil},
+				[]interface{}{"", "SPANNER_SYS", nil},
+			},
+		},
+		{
+			name:  "Schemata2",
+			sql:   `SELECT CATALOG_NAME, SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE EFFECTIVE_TIMESTAMP IS NOT NULL`,
+			names: []string{"CATALOG_NAME", "SCHEMA_NAME"},
+			expected: [][]interface{}{
+				[]interface{}{"", ""},
+			},
+		},
+		{
+			name:  "Tables_Reserved",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA != "" ORDER BY TABLE_SCHEMA, TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "PARENT_TABLE_NAME", "ON_DELETE_ACTION", "SPANNER_STATE"},
+			expected: [][]interface{}{
+				[]interface{}{"", "INFORMATION_SCHEMA", "COLUMNS", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "INDEXES", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "SCHEMATA", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "TABLES", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOP_10MINUTE", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOP_HOUR", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOP_MINUTE", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOTAL_10MINUTE", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOTAL_HOUR", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOTAL_MINUTE", nil, nil, nil},
+			},
+		},
+		{
+			name:  "Tables_NonReserved",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = "" ORDER BY TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "PARENT_TABLE_NAME", "ON_DELETE_ACTION", "SPANNER_STATE"},
+			expected: [][]interface{}{
+				[]interface{}{"", "", "ArrayTypes", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "CompositePrimaryKeys", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "From", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "FullTypes", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "Interleaved", "ParentTable", nil, "COMMITTED"},
+				[]interface{}{"", "", "InterleavedCascade", "ParentTableCascade", "CASCADE", "COMMITTED"},
+				[]interface{}{"", "", "InterleavedNoAction", "ParentTableNoAction", "NO ACTION", "COMMITTED"},
+				[]interface{}{"", "", "JoinA", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "JoinB", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ParentTable", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ParentTableCascade", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ParentTableNoAction", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "Simple", nil, nil, "COMMITTED"},
+			},
+		},
+		{
+			name:  "Columns_Reserved",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA != "" ORDER BY TABLE_NAME, ORDINAL_POSITION`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "COLUMN_NAME", "ORDINAL_POSITION", "COLUMN_DEFAULT", "DATA_TYPE", "IS_NULLABLE", "SPANNER_TYPE"},
+			expected: [][]interface{}{
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "COLUMN_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "ORDINAL_POSITION", int64(5), nil, nil, "NO", "INT64"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "COLUMN_DEFAULT", int64(6), nil, nil, "YES", "BYTES(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "DATA_TYPE", int64(7), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "IS_NULLABLE", int64(8), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "SPANNER_TYPE", int64(9), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "COLUMN_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "OPTION_NAME", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "OPTION_TYPE", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "OPTION_VALUE", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "COLUMN_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_CATALOG", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_SCHEMA", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_NAME", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "CONSTRAINT_CATALOG", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "CONSTRAINT_SCHEMA", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "CONSTRAINT_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "INDEX_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "INDEX_TYPE", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PARENT_TABLE_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "IS_UNIQUE", int64(7), nil, nil, "NO", "BOOL"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "IS_NULL_FILTERED", int64(8), nil, nil, "NO", "BOOL"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "INDEX_STATE", int64(9), nil, nil, "YES", "STRING(100)"}, // TODO
+				{"", "INFORMATION_SCHEMA", "INDEXES", "SPANNER_IS_MANAGED", int64(10), nil, nil, "NO", "BOOL"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "INDEX_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "INDEX_TYPE", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "COLUMN_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "ORDINAL_POSITION", int64(7), nil, nil, "YES", "INT64"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "COLUMN_ORDERING", int64(8), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "IS_NULLABLE", int64(9), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "SPANNER_TYPE", int64(10), nil, nil, "YES", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "CONSTRAINT_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "CONSTRAINT_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "CONSTRAINT_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "TABLE_CATALOG", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "TABLE_SCHEMA", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "TABLE_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "COLUMN_NAME", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "ORDINAL_POSITION", int64(8), nil, nil, "NO", "INT64"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "POSITION_IN_UNIQUE_CONSTRAINT", int64(9), nil, nil, "YES", "INT64"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_CATALOG", int64(4), nil, nil, "YES", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_SCHEMA", int64(5), nil, nil, "YES", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_NAME", int64(6), nil, nil, "YES", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "MATCH_OPTION", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UPDATE_RULE", int64(8), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "DELETE_RULE", int64(9), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "SPANNER_STATE", int64(10), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "CATALOG_NAME", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "SCHEMA_NAME", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "EFFECTIVE_TIMESTAMP", int64(3), nil, nil, "YES", "INT64"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_CATALOG", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_SCHEMA", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_TYPE", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "IS_DEFERRABLE", int64(8), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "INITIALLY_DEFERRED", int64(9), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "ENFORCED", int64(10), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PARENT_TABLE_NAME", int64(4), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "ON_DELETE_ACTION", int64(5), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "SPANNER_STATE", int64(6), nil, nil, "YES", "STRING(MAX)"},
+			},
+		},
+		{
+			name:  "Columns_NonReserved",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "" ORDER BY TABLE_NAME, ORDINAL_POSITION`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "COLUMN_NAME", "ORDINAL_POSITION", "COLUMN_DEFAULT", "DATA_TYPE", "IS_NULLABLE", "SPANNER_TYPE"},
+			expected: [][]interface{}{
+				{"", "", "ArrayTypes", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ArrayTypes", "ArrayString", int64(2), nil, nil, "YES", "ARRAY<STRING(32)>"},
+				{"", "", "ArrayTypes", "ArrayBool", int64(3), nil, nil, "YES", "ARRAY<BOOL>"},
+				{"", "", "ArrayTypes", "ArrayBytes", int64(4), nil, nil, "YES", "ARRAY<BYTES(32)>"},
+				{"", "", "ArrayTypes", "ArrayTimestamp", int64(5), nil, nil, "YES", "ARRAY<TIMESTAMP>"},
+				{"", "", "ArrayTypes", "ArrayInt", int64(6), nil, nil, "YES", "ARRAY<INT64>"},
+				{"", "", "ArrayTypes", "ArrayFloat", int64(7), nil, nil, "YES", "ARRAY<FLOAT64>"},
+				{"", "", "ArrayTypes", "ArrayDate", int64(8), nil, nil, "YES", "ARRAY<DATE>"},
+				{"", "", "CompositePrimaryKeys", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "CompositePrimaryKeys", "PKey1", int64(2), nil, nil, "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "PKey2", int64(3), nil, nil, "NO", "INT64"},
+				{"", "", "CompositePrimaryKeys", "Error", int64(4), nil, nil, "NO", "INT64"},
+				{"", "", "CompositePrimaryKeys", "X", int64(5), nil, nil, "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "Y", int64(6), nil, nil, "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "Z", int64(7), nil, nil, "NO", "STRING(32)"},
+				{"", "", "From", "ALL", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "From", "CAST", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "From", "JOIN", int64(3), nil, nil, "NO", "INT64"},
+				{"", "", "FullTypes", "PKey", int64(1), nil, nil, "NO", "STRING(32)"},
+				{"", "", "FullTypes", "FTString", int64(2), nil, nil, "NO", "STRING(32)"},
+				{"", "", "FullTypes", "FTStringNull", int64(3), nil, nil, "YES", "STRING(32)"},
+				{"", "", "FullTypes", "FTBool", int64(4), nil, nil, "NO", "BOOL"},
+				{"", "", "FullTypes", "FTBoolNull", int64(5), nil, nil, "YES", "BOOL"},
+				{"", "", "FullTypes", "FTBytes", int64(6), nil, nil, "NO", "BYTES(32)"},
+				{"", "", "FullTypes", "FTBytesNull", int64(7), nil, nil, "YES", "BYTES(32)"},
+				{"", "", "FullTypes", "FTTimestamp", int64(8), nil, nil, "NO", "TIMESTAMP"},
+				{"", "", "FullTypes", "FTTimestampNull", int64(9), nil, nil, "YES", "TIMESTAMP"},
+				{"", "", "FullTypes", "FTInt", int64(10), nil, nil, "NO", "INT64"},
+				{"", "", "FullTypes", "FTIntNull", int64(11), nil, nil, "YES", "INT64"},
+				{"", "", "FullTypes", "FTFloat", int64(12), nil, nil, "NO", "FLOAT64"},
+				{"", "", "FullTypes", "FTFloatNull", int64(13), nil, nil, "YES", "FLOAT64"},
+				{"", "", "FullTypes", "FTDate", int64(14), nil, nil, "NO", "DATE"},
+				{"", "", "FullTypes", "FTDateNull", int64(15), nil, nil, "YES", "DATE"},
+				{"", "", "Interleaved", "InterleavedId", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "Interleaved", "Id", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "Interleaved", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "InterleavedCascade", "InterleavedId", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "InterleavedCascade", "Id", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "InterleavedCascade", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "InterleavedNoAction", "InterleavedId", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "InterleavedNoAction", "Id", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "InterleavedNoAction", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "JoinA", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "JoinA", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "JoinB", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "JoinB", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ParentTable", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ParentTable", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ParentTableCascade", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ParentTableCascade", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ParentTableNoAction", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ParentTableNoAction", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "Simple", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "Simple", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+			},
+		},
+		{
+			name:  "ColumnOptions",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.COLUMN_OPTIONS ORDER BY TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "COLUMN_NAME", "OPTION_NAME", "OPTION_TYPE", "OPTION_VALUE"},
+			expected: [][]interface{}{
+				{"", "", "FullTypes", "FTTimestampNull", "allow_commit_timestamp", "BOOL", "TRUE"},
+			},
+		},
+		{
+			name:  "Indexes_ReservedTables",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA != "" ORDER BY TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "PARENT_TABLE_NAME", "IS_UNIQUE", "IS_NULL_FILTERED", "INDEX_STATE", "SPANNER_IS_MANAGED"},
+			expected: [][]interface{}{
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+			},
+		},
+		{
+			name:  "Indexes_NonReservedTables_PrimaryKey",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = "" AND INDEX_TYPE = "PRIMARY_KEY" ORDER BY TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "PARENT_TABLE_NAME", "IS_UNIQUE", "IS_NULL_FILTERED", "INDEX_STATE", "SPANNER_IS_MANAGED"},
+			expected: [][]interface{}{
+				{"", "", "ArrayTypes", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "From", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "InterleavedCascade", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "InterleavedNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "JoinA", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "JoinB", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ParentTable", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ParentTableCascade", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ParentTableNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "Simple", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+			},
+		},
+		{
+			name:  "Indexes_NonReservedTables_Others",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = "" AND INDEX_TYPE != "PRIMARY_KEY" ORDER BY TABLE_NAME, INDEX_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "PARENT_TABLE_NAME", "IS_UNIQUE", "IS_NULL_FILTERED", "INDEX_STATE", "SPANNER_IS_MANAGED"},
+			expected: [][]interface{}{
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByError", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByXY", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "From", "ALL", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "FullTypes", "FullTypesByFTString", "INDEX", "", true, false, "READ_WRITE", false},
+				{"", "", "FullTypes", "FullTypesByIntDate", "INDEX", "", true, false, "READ_WRITE", false},
+				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "FullTypes", "FullTypesByTimestamp", "INDEX", "", false, false, "READ_WRITE", false},
+			},
+		},
+		{
+			name:  "IndexColumns_ReservedTables",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEX_COLUMNS WHERE TABLE_SCHEMA != "" ORDER BY TABLE_NAME, INDEX_NAME, ORDINAL_POSITION`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "COLUMN_NAME", "ORDINAL_POSITION", "COLUMN_ORDERING", "IS_NULLABLE", "SPANNER_TYPE"},
+			expected: [][]interface{}{
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "OPTION_NAME", int64(5), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(4), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(5), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(6), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "INDEX_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "INDEX_TYPE", int64(5), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "INDEX_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "INDEX_TYPE", int64(5), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(6), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "CATALOG_NAME", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "SCHEMA_NAME", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+			},
+		},
+		{
+			name:  "IndexColumns_NonReservedTables",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEX_COLUMNS WHERE TABLE_SCHEMA = "" ORDER BY TABLE_NAME, INDEX_NAME, ORDINAL_POSITION`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "COLUMN_NAME", "ORDINAL_POSITION", "COLUMN_ORDERING", "IS_NULLABLE", "SPANNER_TYPE"},
+			expected: [][]interface{}{
+				{"", "", "ArrayTypes", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByError", "INDEX", "Error", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByXY", "INDEX", "Z", nil, nil, "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByXY", "INDEX", "X", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByXY", "INDEX", "Y", int64(2), "DESC", "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "PKey1", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "PKey2", int64(2), "DESC", "NO", "INT64"},
+				{"", "", "From", "ALL", "INDEX", "ALL", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "From", "PRIMARY_KEY", "PRIMARY_KEY", "ALL", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "FullTypes", "FullTypesByFTString", "INDEX", "FTString", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "FullTypes", "FullTypesByIntDate", "INDEX", "FTInt", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "FullTypes", "FullTypesByIntDate", "INDEX", "FTDate", int64(2), "ASC", "NO", "DATE"},
+				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "FTInt", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "FTTimestamp", int64(2), "ASC", "NO", "TIMESTAMP"},
+				{"", "", "FullTypes", "FullTypesByTimestamp", "INDEX", "FTTimestamp", int64(1), "ASC", "NO", "TIMESTAMP"},
+				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "PKey", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "InterleavedId", int64(2), "ASC", "NO", "INT64"},
+				{"", "", "InterleavedCascade", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "InterleavedCascade", "PRIMARY_KEY", "PRIMARY_KEY", "InterleavedId", int64(2), "ASC", "NO", "INT64"},
+				{"", "", "InterleavedNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "InterleavedNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "InterleavedId", int64(2), "ASC", "NO", "INT64"},
+				{"", "", "JoinA", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "JoinB", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ParentTable", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ParentTableCascade", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ParentTableNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "Simple", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+			},
+		},
+	}
+
+	for _, tc := range table {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				stmt, err := (&parser.Parser{
+					Lexer: &parser.Lexer{
+						File: &token.File{FilePath: "", Buffer: tc.sql},
+					},
+				}).ParseQuery()
+				if err != nil {
+					t.Fatalf("failed to parse sql: %q %v", tc.sql, err)
+				}
+
+				// The test case expects OK, it checks respons values.
+				// otherwise it checks the error code and the error message.
+				if tc.code == codes.OK {
+					it, err := db.Query(ctx, tx, stmt, tc.params)
+					if err != nil {
+						t.Fatalf("Query failed: %v", err)
+					}
+
+					var rows [][]interface{}
+					err = it.Do(func(row []interface{}) error {
+						rows = append(rows, row)
+						return nil
+					})
+					if err != nil {
+						t.Fatalf("unexpected error in iteration: %v", err)
+					}
+
+					if diff := cmp.Diff(tc.expected, rows); diff != "" {
+						t.Errorf("(-got, +want)\n%s", diff)
+					}
+
+					// TODO: add names to all test cases. now this is optional check
+					if tc.names != nil {
+						var gotnames []string
+						for _, item := range it.ResultSet() {
+							gotnames = append(gotnames, item.Name)
+						}
+
+						if diff := cmp.Diff(tc.names, gotnames); diff != "" {
+							t.Errorf("(-got, +want)\n%s", diff)
+						}
+					}
+				} else {
+					it, err := db.Query(ctx, tx, stmt, tc.params)
+					if err == nil {
+						err = it.Do(func([]interface{}) error {
+							return nil
+						})
+					}
+					st := status.Convert(err)
+					if st.Code() != tc.code {
+						t.Errorf("expect code to be %v but got %v", tc.code, st.Code())
+					}
+					if !tc.msg.MatchString(st.Message()) {
+						t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tc.msg)
+					}
+				}
+			})
+		})
+	}
+}
