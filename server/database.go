@@ -272,7 +272,7 @@ func newDatabase() *database {
 		}
 	}(conn)
 
-	return &database{
+	d := &database{
 		tables:      make(map[string]*Table),
 		tablesInUse: make(map[string]*tableTransaction),
 		db:          db,
@@ -284,6 +284,40 @@ func newDatabase() *database {
 
 		writeBarrier: newBarrier(),
 	}
+
+	if err := d.prepareMetaTables(ctx); err != nil {
+		log.Fatalf("failed to prepare meta tables: %v", err)
+	}
+
+	return d
+}
+
+func (d *database) prepareMetaTables(ctx context.Context) error {
+	for _, table := range metaTables {
+		if err := d.CreateTable(ctx, table); err != nil {
+			return fmt.Errorf("failed to create table for %s: %v", table.Name.Name, err)
+		}
+	}
+
+	unixmicro := int64(time.Now().UnixNano() / 1000)
+	initialData := []string{
+		fmt.Sprintf(`INSERT INTO __INFORMATION_SCHEMA__SCHEMATA VALUES("", "", %d)`, unixmicro),
+		`INSERT INTO __INFORMATION_SCHEMA__SCHEMATA VALUES("", "INFORMATION_SCHEMA", NULL)`,
+		`INSERT INTO __INFORMATION_SCHEMA__SCHEMATA VALUES("", "SPANNER_SYS", NULL)`,
+	}
+	for _, query := range initialData {
+		if _, err := d.db.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("failed to prepare initial data: %v", err)
+		}
+	}
+
+	for _, table := range metaTables {
+		if err := d.registerInformationSchemaTables(ctx, table); err != nil {
+			return fmt.Errorf("failed to create table for %s: %v", table.Name.Name, err)
+		}
+	}
+
+	return nil
 }
 
 // waitUntilReadable marks database is used for read.
@@ -1135,6 +1169,98 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 		return fmt.Errorf("failed to create table for %s: %v", t.Name, err)
 	}
 
+	// register the table information INFORMATION_SCHEMA.TABLES exept for handy-spanner preserved tables
+	if !strings.HasPrefix(t.Name, "__") {
+		if err := db.registerInformationSchemaTables(ctx, stmt); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (db *database) registerInformationSchemaTables(ctx context.Context, stmt *ast.CreateTable) error {
+	table, ok := db.tables[stmt.Name.Name]
+	if !ok {
+		return fmt.Errorf("unexpected error: table not found: %v", stmt.Name.Name)
+	}
+
+	schemaName := ""
+	tableName := stmt.Name.Name
+	if schema, ok := metaTablesReverseMap[tableName]; ok {
+		schemaName = schema[0]
+		tableName = schema[1]
+	}
+
+	parentTableName := "NULL"
+	onDeleteAction := "NULL"
+	state := "NULL"
+	if schemaName == "" {
+		state = `"COMMITTED"`
+	}
+
+	if stmt.Cluster != nil {
+		parentTableName = fmt.Sprintf("%q", stmt.Cluster.TableName.Name)
+
+		switch stmt.Cluster.OnDelete {
+		case ast.OnDeleteCascade:
+			onDeleteAction = `"CASCADE"`
+		case ast.OnDeleteNoAction:
+			onDeleteAction = `"NO ACTION"`
+		}
+	}
+
+	// register INFORMATION_SCHEMA.TABLES
+	query := fmt.Sprintf(`INSERT INTO __INFORMATION_SCHEMA__TABLES VALUES("", %q, %q, %s, %s, %s)`,
+		schemaName, tableName, parentTableName, onDeleteAction, state)
+	if _, err := db.db.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("failed to insert into INFORMATION_SCHEMA.TABLES for table %s: %v", tableName, err)
+	}
+
+	// register meta schema for columns
+	for pos, column := range stmt.Columns {
+		nullable := "YES"
+		if column.NotNull {
+			nullable = "NO"
+		}
+		spannerType := schemaTypetoTypString(column.Type)
+
+		// register INFORMATION_SCHEMA.COLUMNS
+		query := fmt.Sprintf(`INSERT INTO __INFORMATION_SCHEMA__COLUMNS VALUES("", %q, %q, %q, %d, NULL, NULL, %q, %q)`,
+			schemaName, tableName, column.Name.Name,
+			pos+1, nullable, spannerType)
+		if _, err := db.db.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("failed to insert into INFORMATION_SCHEMA.COLUMNS for table %s: %v", tableName, err)
+		}
+
+		// register meta schema for column options
+		if column.Options != nil {
+			if column.Options.AllowCommitTimestamp {
+
+				// register INFORMATION_SCHEMA.COLUMN_OPTIONS for `allow_commit_timestamp` option
+				query := fmt.Sprintf(`INSERT INTO __INFORMATION_SCHEMA__COLUMN_OPTIONS VALUES("", %q, %q, %q, %q, %q, %q)`,
+					schemaName, tableName, column.Name.Name,
+					"allow_commit_timestamp", "BOOL", "TRUE")
+				if _, err := db.db.ExecContext(ctx, query); err != nil {
+					return fmt.Errorf("failed to insert into INFORMATION_SCHEMA.COLUMN_OPTIONS for table %s: %v", tableName, err)
+				}
+
+			}
+		}
+	}
+
+	if err := db.registerInformationSchemaIndexes(ctx, table, &ast.CreateIndex{
+		Unique:       true,
+		NullFiltered: false,
+		Name:         &ast.Ident{Name: "PRIMARY_KEY"},
+		TableName:    &ast.Ident{Name: stmt.Name.Name},
+		Keys:         stmt.PrimaryKeys,
+		Storing:      nil,
+		InterleaveIn: nil,
+	}); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -1158,6 +1284,108 @@ func (db *database) CreateIndex(ctx context.Context, stmt *ast.CreateIndex) erro
 	query := fmt.Sprintf("CREATE %s %s ON %s (%s)", idxType, QuoteString(index.Name()), QuoteString(table.Name), columnsName)
 	if _, err := db.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("failed to create index for %s: %v", index.Name(), err)
+	}
+
+	if err := db.registerInformationSchemaIndexes(ctx, table, stmt); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *database) registerInformationSchemaIndexes(ctx context.Context, table *Table, stmt *ast.CreateIndex) error {
+	schemaName := ""
+	tableName := stmt.TableName.Name
+	if schema, ok := metaTablesReverseMap[tableName]; ok {
+		schemaName = schema[0]
+		tableName = schema[1]
+	}
+
+	indexName := stmt.Name.Name
+	isUnique := "FALSE"
+	if stmt.Unique {
+		isUnique = "TRUE"
+	}
+	isNullFiltered := "FALSE"
+	if stmt.NullFiltered {
+		isNullFiltered = "TRUE"
+	}
+
+	indexType := stmt.Name.Name
+	indexState := "NULL"
+	if indexName != "PRIMARY_KEY" {
+		indexType = "INDEX"
+		indexState = `"READ_WRITE"`
+	}
+	managed := "FALSE"    // fixed
+	parentTableName := "" // TODO
+
+	// register INFORMATION_SCHEMA.INDEXES
+	query := fmt.Sprintf(`INSERT INTO __INFORMATION_SCHEMA__INDEXES VALUES("", %q, %q, %q, %q, %q, %s, %s, %s, %s)`,
+		schemaName, tableName, indexName, indexType,
+		parentTableName, isUnique, isNullFiltered, indexState, managed)
+	if _, err := db.db.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("failed to insert into INFORMATION_SCHEMA.INDEXES for table %s: %v", tableName, err)
+	}
+
+	for pos, key := range stmt.Keys {
+		columnName := key.Name.Name
+		column, err := table.getColumn(columnName)
+		if err != nil {
+			return fmt.Errorf("unexpected error: %v", err)
+		}
+
+		ordering := "ASC"
+		switch key.Dir {
+		case ast.DirectionAsc:
+			ordering = "ASC"
+		case ast.DirectionDesc:
+			ordering = "DESC"
+		}
+
+		isNullable := "NO"
+		if column.nullable {
+			isNullable = "YES"
+		}
+		spannerType := ""
+		if column.ast != nil {
+			spannerType = schemaTypetoTypString(column.ast.Type)
+		}
+
+		// register INFORMATION_SCHEMA.INDEX_COLUMNS
+		query := fmt.Sprintf(`INSERT INTO __INFORMATION_SCHEMA__INDEX_COLUMNS VALUES("", %q, %q, %q, %q, %q, %d, %q, %q, %q)`,
+			schemaName, tableName, indexName, indexType, columnName,
+			pos+1, ordering, isNullable, spannerType)
+		if _, err := db.db.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("failed to insert into INFORMATION_SCHEMA.INDEX_COLUMNS for table %s: %v", tableName, err)
+		}
+	}
+
+	if stmt.Storing != nil {
+		for _, ident := range stmt.Storing.Columns {
+			columnName := ident.Name
+			column, err := table.getColumn(columnName)
+			if err != nil {
+				return fmt.Errorf("unexpected error: %v", err)
+			}
+
+			isNullable := "NO"
+			if column.nullable {
+				isNullable = "YES"
+			}
+			spannerType := ""
+			if column.ast != nil {
+				spannerType = schemaTypetoTypString(column.ast.Type)
+			}
+
+			// register INFORMATION_SCHEMA.INDEX_COLUMNS
+			query := fmt.Sprintf(`INSERT INTO __INFORMATION_SCHEMA__INDEX_COLUMNS VALUES("", %q, %q, %q, %q, %q, %s, %s, %q, %q)`,
+				schemaName, tableName, indexName, indexType, columnName,
+				"NULL", "NULL", isNullable, spannerType)
+			if _, err := db.db.ExecContext(ctx, query); err != nil {
+				return fmt.Errorf("failed to insert into INFORMATION_SCHEMA.INDEX_COLUMNS for table %s: %v", tableName, err)
+			}
+		}
 	}
 
 	return nil

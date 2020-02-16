@@ -326,7 +326,28 @@ func toValueType(t ast.SchemaType) ValueType {
 	default:
 		panic(fmt.Sprintf("unknow type %v", t))
 	}
+}
 
+func schemaTypetoTypString(t ast.SchemaType) string {
+	switch v := t.(type) {
+	case *ast.ScalarSchemaType:
+		return astTypeToTypeCode(v.Name).String()
+
+	case *ast.SizedSchemaType:
+		typ := astTypeToTypeCode(v.Name).String()
+		size := "MAX"
+		if !v.Max {
+			intLit := v.Size.(*ast.IntLiteral)
+			size = intLit.Value // TODO: respect base?
+		}
+		return fmt.Sprintf("%s(%s)", typ, size)
+
+	case *ast.ArraySchemaType:
+		arrType := schemaTypetoTypString(v.Item)
+		return fmt.Sprintf("ARRAY<%s>", arrType)
+	default:
+		panic(fmt.Sprintf("unknow type %v", t))
+	}
 }
 
 func toColumnType(t ast.SchemaType) columnType {

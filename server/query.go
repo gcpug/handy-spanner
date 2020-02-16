@@ -607,6 +607,21 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 		return b.buildJoinedView(src)
 
 	case *ast.Unnest:
+		// TODO: fix this hack
+		// memefish handles  _SCHEMA_._TABLE_ table name as unnest.
+		// So if the unnest path is the same to _SCHEMA_._TABLE_ it is handled as table name.
+		if path, ok := src.Expr.(*ast.Path); src.Implicit && ok {
+			names := make([]string, len(path.Idents))
+			for i := range path.Idents {
+				names[i] = path.Idents[i].Name
+			}
+			tableName := strings.ToUpper(strings.Join(names, "."))
+			if specialTableName, ok := metaTablesMap[tableName]; ok {
+				return b.buildQueryTable(&ast.TableName{
+					Table: &ast.Ident{Name: specialTableName},
+				})
+			}
+		}
 		return b.buildUnnestView(src)
 
 	case *ast.SubQueryTableExpr:
