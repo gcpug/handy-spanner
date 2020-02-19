@@ -804,6 +804,24 @@ func TestRead(t *testing.T) {
 				[]interface{}{int64(300), "zzz"},
 			},
 		},
+		"Simple_KeyRange_OpenClose2": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						end:         makeListValue(makeStringValue("ccc"), makeStringValue("3")),
+						startClosed: false,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(4), "ccc", int64(3)},
+			},
+		},
 		"Simple_KeyRange_CloseOpen": {
 			tbl:  "Simple",
 			cols: []string{"Id", "Value"},
@@ -839,6 +857,98 @@ func TestRead(t *testing.T) {
 			limit: 100,
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKey": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("2")),
+						end:         makeListValue(makeStringValue("bbb")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(3), "bbb", int64(3)},
+				[]interface{}{int64(2), "bbb", int64(2)},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKey2": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb")),
+						end:         makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(3), "bbb", int64(3)},
+				[]interface{}{int64(2), "bbb", int64(2)},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKey3": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb")),
+						end:         makeListValue(makeStringValue("bbb")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(3), "bbb", int64(3)},
+				[]interface{}{int64(2), "bbb", int64(2)},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKeyOpenClosed": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("2")),
+						end:         makeListValue(makeStringValue("bbb")),
+						startClosed: false,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(3), "bbb", int64(3)},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKeyClosedOpen": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb")),
+						end:         makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						startClosed: true,
+						endClosed:   false,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(2), "bbb", int64(2)},
 			},
 		},
 
