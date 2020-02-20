@@ -619,6 +619,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 			if specialTableName, ok := metaTablesMap[tableName]; ok {
 				return b.buildQueryTable(&ast.TableName{
 					Table: &ast.Ident{Name: specialTableName},
+					As:    src.As,
 				})
 			}
 		}

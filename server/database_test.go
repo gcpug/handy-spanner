@@ -3920,6 +3920,13 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "Simple", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
 			},
 		},
+		{
+			name: "IndexColumns_WithAlias",
+			sql:  `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS a WHERE a.TABLE_NAME = "Simple"`,
+			expected: [][]interface{}{
+				[]interface{}{"Id"},
+			},
+		},
 	}
 
 	for _, tc := range table {
