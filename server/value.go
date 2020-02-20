@@ -590,14 +590,14 @@ func (it *rows) next() ([]interface{}, bool) {
 }
 
 func convertToDatabaseValues(lv *structpb.ListValue, columns []*Column) ([]interface{}, error) {
-	values := make([]interface{}, len(columns))
+	values := make([]interface{}, 0, len(columns))
 	for i, v := range lv.Values {
 		column := columns[i]
 		vv, err := spannerValue2DatabaseValue(v, *column)
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 		}
-		values[i] = vv
+		values = append(values, vv)
 	}
 	return values, nil
 }

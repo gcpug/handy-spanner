@@ -138,10 +138,10 @@ func buildKeySetQuery(pkeysName string, pkeyColumns []*Column, keys []*structpb.
 
 func buildKeyRangeQuery(pkeysName string, pkeyColumns []*Column, keyrange *KeyRange) (string, []interface{}, error) {
 	numPKeys := len(pkeyColumns)
-	if numPKeys != len(keyrange.start.Values) {
+	if numPKeys < len(keyrange.start.Values) {
 		return "", nil, status.Errorf(codes.InvalidArgument, "TODO: invalid start range key")
 	}
-	if numPKeys != len(keyrange.end.Values) {
+	if numPKeys < len(keyrange.end.Values) {
 		return "", nil, status.Errorf(codes.InvalidArgument, "TODO: invalid end range key")
 	}
 
@@ -154,25 +154,39 @@ func buildKeyRangeQuery(pkeysName string, pkeyColumns []*Column, keyrange *KeyRa
 		return "", nil, err
 	}
 
-	// e.g.  (?, ?, ?)
-	valuesPlaceholder := "(?" + strings.Repeat(", ?", numPKeys-1) + ")"
+	whereClause := make([]string, 0, len(startKeyValues)+len(endKeyValues))
+	args := make([]interface{}, 0, len(whereClause))
 
-	// e.g. WHERE (key1, key2, key3) BETWEEN (?, ?, ?) AND (?, ?, ?)
-	whereClause := fmt.Sprintf("WHERE (%s) BETWEEN %s AND %s", pkeysName, valuesPlaceholder, valuesPlaceholder)
-
-	args := make([]interface{}, 0, numPKeys*4)
-	args = append(args, startKeyValues...)
-	args = append(args, endKeyValues...)
-
-	// sqlite does not support open boundary for between, so explicitly ignore them
-	if !keyrange.startClosed {
-		args = append(args, startKeyValues...)
-		whereClause += fmt.Sprintf(" AND (%s) != %s", pkeysName, valuesPlaceholder)
+	var maxLen int
+	if len(startKeyValues) > len(endKeyValues) {
+		maxLen = len(startKeyValues)
+	} else {
+		maxLen = len(endKeyValues)
 	}
-	if !keyrange.endClosed {
-		args = append(args, endKeyValues...)
-		whereClause += fmt.Sprintf(" AND (%s) != %s", pkeysName, valuesPlaceholder)
+	for i := 0; i < maxLen; i++ {
+		pk := QuoteString(pkeyColumns[i].Name())
+		if len(startKeyValues) > i && len(endKeyValues) > i && startKeyValues[i] == endKeyValues[i] {
+			whereClause = append(whereClause, fmt.Sprintf("%s = ?", pk))
+			args = append(args, startKeyValues[i])
+			continue
+		}
+		if len(startKeyValues) > i {
+			if keyrange.startClosed {
+				whereClause = append(whereClause, fmt.Sprintf("%s >= ?", pk))
+			} else {
+				whereClause = append(whereClause, fmt.Sprintf("%s > ?", pk))
+			}
+			args = append(args, startKeyValues[i])
+		}
+		if len(endKeyValues) > i {
+			if keyrange.endClosed {
+				whereClause = append(whereClause, fmt.Sprintf("%s <= ?", pk))
+			} else {
+				whereClause = append(whereClause, fmt.Sprintf("%s < ?", pk))
+			}
+			args = append(args, endKeyValues[i])
+		}
 	}
 
-	return whereClause, args, nil
+	return fmt.Sprintf("WHERE %s", strings.Join(whereClause, " AND ")), args, nil
 }
