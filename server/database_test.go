@@ -3927,6 +3927,27 @@ func TestInformationSchema(t *testing.T) {
 				[]interface{}{"Id"},
 			},
 		},
+		{
+			name: "IndexColumns_WithOmittedSchema",
+			sql:  `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS WHERE INDEX_COLUMNS.TABLE_NAME = "Simple"`,
+			expected: [][]interface{}{
+				[]interface{}{"Id"},
+			},
+		},
+		{
+			name: "IndexColumns_WithJoin",
+			sql:  `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS LEFT JOIN INFORMATION_SCHEMA.INDEXES ON INDEX_COLUMNS.TABLE_NAME = INDEXES.TABLE_NAME WHERE INDEX_COLUMNS.TABLE_NAME = "Simple"`,
+			expected: [][]interface{}{
+				[]interface{}{"Id"},
+			},
+		},
+		{
+			name: "IndexColumns_WithUsingJoin",
+			sql:  `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS LEFT JOIN INFORMATION_SCHEMA.INDEXES USING(TABLE_NAME) WHERE INDEX_COLUMNS.TABLE_NAME = "Simple"`,
+			expected: [][]interface{}{
+				[]interface{}{"Id"},
+			},
+		},
 	}
 
 	for _, tc := range table {
