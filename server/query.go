@@ -592,8 +592,11 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 		query := QuoteString(t.Name)
 		alias := t.Name
 		if src.As != nil {
-			query = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(src.As.Alias.Name))
 			alias = src.As.Alias.Name
+			query = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(alias))
+		} else if schema, ok := metaTablesReverseMap[t.Name]; ok {
+			alias = schema[1]
+			query = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(alias))
 		}
 
 		view := t.TableViewWithAlias(alias)
