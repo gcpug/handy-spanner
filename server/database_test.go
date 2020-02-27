@@ -50,6 +50,7 @@ CREATE TABLE Interleaved (
   Value STRING(MAX) NOT NULL,
 ) PRIMARY KEY(Id, InterleavedId),
 INTERLEAVE IN PARENT ParentTable;
+CREATE INDEX InterleavedKey ON Interleaved(Id, Value), INTERLEAVE IN ParentTable 
 `
 	schemaInterleavedCascade = `CREATE TABLE ParentTableCascade (
   Id INT64 NOT NULL,
@@ -3830,6 +3831,7 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "FullTypes", "FullTypesByIntDate", "INDEX", "", true, false, "READ_WRITE", false},
 				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "", false, false, "READ_WRITE", false},
 				{"", "", "FullTypes", "FullTypesByTimestamp", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "Interleaved", "InterleavedKey", "INDEX", "ParentTable", false, false, "READ_WRITE", false},
 			},
 		},
 		{
@@ -3906,6 +3908,8 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "FTTimestamp", int64(2), "ASC", "NO", "TIMESTAMP"},
 				{"", "", "FullTypes", "FullTypesByTimestamp", "INDEX", "FTTimestamp", int64(1), "ASC", "NO", "TIMESTAMP"},
 				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "PKey", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "Interleaved", "InterleavedKey", "INDEX", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "Interleaved", "InterleavedKey", "INDEX", "Value", int64(2), "ASC", "NO", "STRING(MAX)"},
 				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "InterleavedId", int64(2), "ASC", "NO", "INT64"},
 				{"", "", "InterleavedCascade", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},

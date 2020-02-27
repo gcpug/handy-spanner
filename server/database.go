@@ -1317,8 +1317,11 @@ func (db *database) registerInformationSchemaIndexes(ctx context.Context, table 
 		indexType = "INDEX"
 		indexState = `"READ_WRITE"`
 	}
-	managed := "FALSE"    // fixed
-	parentTableName := "" // TODO
+	managed := "FALSE" // fixed
+	parentTableName := ""
+	if stmt.InterleaveIn != nil {
+		parentTableName = stmt.InterleaveIn.TableName.Name
+	}
 
 	// register INFORMATION_SCHEMA.INDEXES
 	query := fmt.Sprintf(`INSERT INTO __INFORMATION_SCHEMA__INDEXES VALUES("", %q, %q, %q, %q, %q, %s, %s, %s, %s)`,
