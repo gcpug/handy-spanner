@@ -414,6 +414,18 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 			return ValueType{Code: TCDate}
 		},
 	},
+	"PENDING_COMMIT_TIMESTAMP": {
+		Func: func() string {
+			return time.Now().UTC().Format(time.RFC3339Nano)
+		},
+		NArgs: 0,
+		ArgTypes: func(vts []ValueType) bool {
+			return true
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCTimestamp}
+		},
+	},
 }
 
 func sqlite3FnSign(x int64) int64 {
