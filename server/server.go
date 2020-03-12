@@ -1023,3 +1023,35 @@ func (s *server) PartitionQuery(ctx context.Context, req *spannerpb.PartitionQue
 func (s *server) PartitionRead(ctx context.Context, req *spannerpb.PartitionReadRequest) (*spannerpb.PartitionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: PartitionRead")
 }
+
+func (s *server) CreateBackup(ctx context.Context, req *adminv1pb.CreateBackupRequest) (*lropb.Operation, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: CreateBackup")
+}
+
+func (s *server) GetBackup(ctx context.Context, req *adminv1pb.GetBackupRequest) (*adminv1pb.Backup, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: GetBackup")
+}
+
+func (s *server) UpdateBackup(ctx context.Context, req *adminv1pb.UpdateBackupRequest) (*adminv1pb.Backup, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: UpdateBackup")
+}
+
+func (s *server) DeleteBackup(ctx context.Context, req *adminv1pb.DeleteBackupRequest) (*empty.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: DeleteBackup")
+}
+
+func (s *server) ListBackups(ctx context.Context, req *adminv1pb.ListBackupsRequest) (*adminv1pb.ListBackupsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ListBackups")
+}
+
+func (s *server) RestoreDatabase(ctx context.Context, req *adminv1pb.RestoreDatabaseRequest) (*lropb.Operation, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: RestoreDatabase")
+}
+
+func (s *server) ListDatabaseOperations(ctx context.Context, req *adminv1pb.ListDatabaseOperationsRequest) (*adminv1pb.ListDatabaseOperationsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ListDatabaseOperations")
+}
+
+func (s *server) ListBackupOperations(ctx context.Context, req *adminv1pb.ListBackupOperationsRequest) (*adminv1pb.ListBackupOperationsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ListBackupOperations")
+}
