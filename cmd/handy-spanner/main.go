@@ -59,6 +59,7 @@ func runMain() error {
 			return fmt.Errorf("failed to open schema file: %v", err)
 		}
 		file = f
+		defer file.Close()
 	}
 
 	// root context notifies server shutdown by SIGINT or SIGTERM

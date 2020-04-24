@@ -39,15 +39,15 @@ func init() {
 
 type QueryBuilder struct {
 	db   *database
+	tx   *transaction
 	stmt ast.QueryExpr
+	dml  ast.DML
 
 	views    map[string]*TableView
 	rootView *TableView
 	params   map[string]Value
 
 	args []interface{}
-
-	frees []func()
 
 	unnestViewNum   int
 	subqueryViewNum int
@@ -58,9 +58,10 @@ type QueryBuilder struct {
 	forceColumnAlias bool
 }
 
-func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value, forceColumnAlias bool) (string, []interface{}, []ResultItem, error) {
+func BuildQuery(db *database, tx *transaction, stmt ast.QueryExpr, params map[string]Value, forceColumnAlias bool) (string, []interface{}, []ResultItem, error) {
 	b := &QueryBuilder{
 		db:               db,
+		tx:               tx,
 		stmt:             stmt,
 		views:            make(map[string]*TableView),
 		params:           params,
@@ -69,15 +70,18 @@ func BuildQuery(db *database, stmt ast.QueryExpr, params map[string]Value, force
 	return b.Build()
 }
 
-func (b *QueryBuilder) close() {
-	for _, free := range b.frees {
-		free()
+func BuildDML(db *database, tx *transaction, dml ast.DML, params map[string]Value) (string, []interface{}, error) {
+	b := &QueryBuilder{
+		db:     db,
+		tx:     tx,
+		dml:    dml,
+		views:  make(map[string]*TableView),
+		params: params,
 	}
+	return b.BuildDML()
 }
 
 func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
-	defer b.close()
-
 	switch q := b.stmt.(type) {
 	case *ast.Select:
 		return b.buildSelectQuery(q)
@@ -88,6 +92,19 @@ func (b *QueryBuilder) Build() (string, []interface{}, []ResultItem, error) {
 	}
 
 	return "", nil, nil, status.Errorf(codes.Unimplemented, "not unknown expression %T", b.stmt)
+}
+
+func (b *QueryBuilder) BuildDML() (string, []interface{}, error) {
+	switch q := b.dml.(type) {
+	case *ast.Insert:
+		return b.buildInsert(q)
+	case *ast.Delete:
+		return b.buildDelete(q)
+	case *ast.Update:
+		return b.buildUpdate(q)
+	}
+
+	return "", nil, status.Errorf(codes.Unimplemented, "not unknown expression %T", b.stmt)
 }
 
 func (b *QueryBuilder) registerTableAlias(view *TableView, name string) error {
@@ -156,6 +173,7 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 	}
 
 	if selectStmt.AsStruct {
+		useSqliteJSON()
 		values := make([]string, len(resultItems))
 		quotedNames := make([]string, len(resultItems))
 		vts := make([]*ValueType, len(resultItems))
@@ -199,7 +217,7 @@ func (b *QueryBuilder) buildSelectQuery(selectStmt *ast.Select) (string, []inter
 }
 
 func (b *QueryBuilder) buildSubQuery(sub *ast.SubQuery) (string, []interface{}, []ResultItem, error) {
-	s, data, items, err := BuildQuery(b.db, sub.Query, b.params, b.forceColumnAlias)
+	s, data, items, err := BuildQuery(b.db, b.tx, sub.Query, b.params, b.forceColumnAlias)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -265,7 +283,7 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 		}
 	}
 
-	s, data, items, err := BuildQuery(b.db, compound.Queries[0], b.params, b.forceColumnAlias)
+	s, data, items, err := BuildQuery(b.db, b.tx, compound.Queries[0], b.params, b.forceColumnAlias)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -285,7 +303,7 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 	ss = append(ss, fmt.Sprintf("SELECT * FROM (%s)", s))
 
 	for i, query := range compound.Queries[1:] {
-		s, d, items2, err := BuildQuery(b.db, query, b.params, false)
+		s, d, items2, err := BuildQuery(b.db, b.tx, query, b.params, false)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -335,93 +353,283 @@ func (b *QueryBuilder) buildCompoundQuery(compound *ast.CompoundQuery) (string, 
 	return query, data, items, nil
 }
 
+func (b *QueryBuilder) buildUpdate(up *ast.Update) (string, []interface{}, error) {
+	t, err := b.db.useTableExclusive(up.TableName.Name, b.tx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return "", nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		return "", nil, err
+	}
+	view := t.TableView()
+	b.rootView = view
+
+	// build FROM
+	var fromClause string
+	var tableAliiasName string
+	if up.As == nil {
+		fromClause = QuoteString(t.Name)
+		tableAliiasName = t.Name
+		if err := b.registerTableAlias(view, t.Name); err != nil {
+			return "", nil, err
+		}
+	} else {
+		fromClause = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(up.As.Alias.Name))
+		tableAliiasName = up.As.Alias.Name
+		if err := b.registerTableAlias(view, up.As.Alias.Name); err != nil {
+			return "", nil, err
+		}
+	}
+
+	// build SET
+	var setClause []string
+	usedPaths := make(map[string]struct{}, len(up.Updates))
+	for _, item := range up.Updates {
+		var fullPathName string
+		var normalizedFullPathName string
+
+		var path Expr
+		if len(item.Path) == 1 {
+			ex, err := b.buildExpr(item.Path[0])
+			if err != nil {
+				return "", nil, wrapExprError(err, item.Expr, "Updates")
+			}
+			path = ex
+			fullPathName = item.Path[0].Name
+			normalizedFullPathName = item.Path[0].Name
+		} else {
+			ex, err := b.buildExpr(&ast.Path{Idents: item.Path})
+			if err != nil {
+				return "", nil, wrapExprError(err, item.Expr, "Updates")
+			}
+			path = ex
+
+			// generate full path name
+			paths := make([]string, len(item.Path))
+			for i := range item.Path {
+				paths[i] = item.Path[i].Name
+			}
+			fullPathName = strings.Join(paths, ".")
+
+			// if the first path is same to table alias name, normalize the full path name
+			if paths[0] == tableAliiasName {
+				normalizedFullPathName = strings.Join(paths[1:], ".")
+			} else {
+				normalizedFullPathName = fullPathName
+			}
+		}
+
+		// check duplicate path in set clause
+		if _, ok := usedPaths[normalizedFullPathName]; ok {
+			return "", nil, status.Errorf(codes.InvalidArgument, "Update item %s assigned more than once", fullPathName)
+		}
+		usedPaths[normalizedFullPathName] = struct{}{}
+
+		value, err := b.buildExpr(item.Expr)
+		if err != nil {
+			return "", nil, wrapExprError(err, item.Expr, "Updates")
+		}
+		b.args = append(b.args, value.Args...)
+
+		setClause = append(setClause, fmt.Sprintf("%s = %s", path.Raw, value.Raw))
+	}
+
+	// build WHERE
+	whereClause, data, err := b.buildQueryWhereClause(up.Where)
+	if err != nil {
+		return "", nil, err
+	}
+	b.args = append(b.args, data...)
+
+	query := fmt.Sprintf(`UPDATE %s SET %s WHERE %s`, fromClause, strings.Join(setClause, ", "), whereClause)
+
+	return query, b.args, nil
+}
+
+func (b *QueryBuilder) buildInsert(up *ast.Insert) (string, []interface{}, error) {
+	t, err := b.db.useTableExclusive(up.TableName.Name, b.tx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return "", nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		return "", nil, err
+	}
+	view := t.TableView()
+	b.rootView = view
+	tableName := t.Name
+
+	var columns []string
+	for _, c := range up.Columns {
+		columns = append(columns, c.Name)
+	}
+
+	// Check columns exist in the table
+	for _, c := range columns {
+		if _, err := t.getColumn(c); err != nil {
+			return "", nil, status.Errorf(codes.InvalidArgument, "Column %s is not present in table %s", c, tableName)
+		}
+	}
+
+	// Ensure multiple values are not specified
+	usedColumns := make(map[string]struct{}, len(columns))
+	for _, name := range columns {
+		if _, ok := usedColumns[name]; ok {
+			return "", nil, status.Errorf(codes.InvalidArgument, "INSERT has columns with duplicate name: %s", name)
+		}
+		usedColumns[name] = struct{}{}
+	}
+
+	// Check not nullable columns
+	if exist, nonNullables := t.NonNullableColumnsExist(columns); exist {
+		columns := strings.Join(nonNullables, ", ")
+		return "", nil, status.Errorf(codes.FailedPrecondition,
+			"A new row in table %s does not specify a non-null value for these NOT NULL columns: %s",
+			tableName, columns,
+		)
+	}
+
+	var values string
+	switch input := up.Input.(type) {
+	case *ast.ValuesInput:
+		var rows []string
+		for _, row := range input.Rows {
+			if len(row.Exprs) != len(columns) {
+				return "", nil, status.Errorf(codes.InvalidArgument,
+					"Inserted row has wrong column count; Has %d, expected %d",
+					len(row.Exprs), len(columns),
+				)
+			}
+
+			var values []string
+			for _, e := range row.Exprs {
+				if e.Default {
+					values = append(values, "NULL")
+					continue
+				}
+
+				ex, err := b.buildExpr(e.Expr)
+				if err != nil {
+					return "", nil, wrapExprError(err, e.Expr, "INSERT")
+				}
+				b.args = append(b.args, ex.Args...)
+				values = append(values, ex.Raw)
+			}
+
+			rows = append(rows, fmt.Sprintf("(%s)", strings.Join(values, ", ")))
+		}
+
+		values = fmt.Sprintf("VALUES %s", strings.Join(rows, ", "))
+	case *ast.SubQueryInput:
+		query, data, items, err := BuildQuery(b.db, b.tx, input.Query, b.params, false)
+		if err != nil {
+			return "", nil, fmt.Errorf("Subquery error: %v", err)
+		}
+		b.args = append(b.args, data...)
+
+		if len(items) != len(columns) {
+			return "", nil, status.Errorf(codes.InvalidArgument,
+				"Inserted row has wrong column count; Has %d, expected %d",
+				len(items), len(columns),
+			)
+		}
+
+		values = query
+	}
+
+	query := fmt.Sprintf(`INSERT INTO %s (%s) %s`, QuoteString(tableName), strings.Join(QuoteStringSlice(columns), ", "), values)
+
+	return query, b.args, nil
+}
+
+func (b *QueryBuilder) buildDelete(up *ast.Delete) (string, []interface{}, error) {
+	t, err := b.db.useTableExclusive(up.TableName.Name, b.tx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return "", nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		return "", nil, err
+	}
+	view := t.TableView()
+	b.rootView = view
+
+	// build FROM
+	var fromClause string
+	if up.As == nil {
+		fromClause = QuoteString(t.Name)
+		if err := b.registerTableAlias(view, t.Name); err != nil {
+			return "", nil, err
+		}
+	} else {
+		fromClause = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(up.As.Alias.Name))
+		if err := b.registerTableAlias(view, up.As.Alias.Name); err != nil {
+			return "", nil, err
+		}
+	}
+
+	// build WHERE
+	whereClause, data, err := b.buildQueryWhereClause(up.Where)
+	if err != nil {
+		return "", nil, err
+	}
+	b.args = append(b.args, data...)
+
+	query := fmt.Sprintf(`DELETE FROM %s WHERE %s`, fromClause, whereClause)
+
+	return query, b.args, nil
+}
+
 func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, []interface{}, error) {
 	switch src := exp.(type) {
 	case *ast.TableName:
-		t, free, err := b.db.readTable(src.Table.Name)
+		t, err := b.db.useTable(src.Table.Name, b.tx)
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
 				return nil, "", nil, status.Error(codes.InvalidArgument, err.Error())
 			}
 			return nil, "", nil, err
 		}
-		b.frees = append(b.frees, free)
-		view := t.TableView()
 
-		var query string
-		if src.As == nil {
-			query = t.Name
-			if err := b.registerTableAlias(view, t.Name); err != nil {
-				return nil, "", nil, err
-			}
-		} else {
-			query = fmt.Sprintf("%s AS %s", t.Name, src.As.Alias.Name)
-			if err := b.registerTableAlias(view, src.As.Alias.Name); err != nil {
-				return nil, "", nil, err
-			}
+		query := QuoteString(t.Name)
+		alias := t.Name
+		if src.As != nil {
+			alias = src.As.Alias.Name
+			query = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(alias))
+		} else if schema, ok := metaTablesReverseMap[t.Name]; ok {
+			alias = schema[1]
+			query = fmt.Sprintf("%s AS %s", QuoteString(t.Name), QuoteString(alias))
+		}
+
+		view := t.TableViewWithAlias(alias)
+
+		if err := b.registerTableAlias(view, alias); err != nil {
+			return nil, "", nil, err
 		}
 
 		return view, query, nil, nil
 	case *ast.Join:
-		var data []interface{}
-		view1, q1, d1, err := b.buildQueryTable(src.Left)
-		if err != nil {
-			return nil, "", nil, fmt.Errorf("left table error %v", err)
-		}
-		if view1 == nil {
-			return nil, "", nil, fmt.Errorf("left table view is nil")
-		}
-
-		view2, q2, d2, err := b.buildQueryTable(src.Right)
-		if err != nil {
-			return nil, "", nil, fmt.Errorf("right table error %v", err)
-		}
-		if view2 == nil {
-			return nil, "", nil, fmt.Errorf("right table view is nil")
-		}
-
-		data = append(data, d1...)
-		data = append(data, d2...)
-
-		var condition string
-		switch cond := src.Cond.(type) {
-		case *ast.On:
-			switch expr := cond.Expr.(type) {
-			case *ast.BinaryExpr:
-				ex, err := b.buildExpr(expr)
-				if err != nil {
-					return nil, "", nil, wrapExprError(err, expr, "ON")
-				}
-				condition = fmt.Sprintf("ON %s", ex.Raw)
-				data = append(data, ex.Args...)
-
-			default:
-				return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for JOIN condition", expr)
-			}
-
-		case *ast.Using:
-			names := make([]string, len(cond.Idents))
-			for i := range cond.Idents {
-				name := cond.Idents[i].Name
-				if _, ok := view1.ResultItemsMap[name]; !ok {
-					return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on left side of join", name)
-				}
-				if _, ok := view2.ResultItemsMap[name]; !ok {
-					return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on right side of join", name)
-				}
-				names[i] = name
-			}
-			condition = fmt.Sprintf("USING (%s)", strings.Join(names, ", "))
-		}
-
-		newView := createTableViewFromItems(view1.AllItems(), view2.AllItems())
-		return newView, fmt.Sprintf("%s %s %s %s", q1, src.Op, q2, condition), data, nil
+		return b.buildJoinedView(src)
 
 	case *ast.Unnest:
+		// TODO: fix this hack
+		// memefish handles  _SCHEMA_._TABLE_ table name as unnest.
+		// So if the unnest path is the same to _SCHEMA_._TABLE_ it is handled as table name.
+		if path, ok := src.Expr.(*ast.Path); src.Implicit && ok {
+			names := make([]string, len(path.Idents))
+			for i := range path.Idents {
+				names[i] = path.Idents[i].Name
+			}
+			tableName := strings.ToUpper(strings.Join(names, "."))
+			if specialTableName, ok := metaTablesMap[tableName]; ok {
+				return b.buildQueryTable(&ast.TableName{
+					Table: &ast.Ident{Name: specialTableName},
+					As:    src.As,
+				})
+			}
+		}
 		return b.buildUnnestView(src)
 
 	case *ast.SubQueryTableExpr:
-		query, data, items, err := BuildQuery(b.db, src.Query, b.params, false)
+		query, data, items, err := BuildQuery(b.db, b.tx, src.Query, b.params, false)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("Subquery error: %v", err)
 		}
@@ -451,6 +659,170 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 	}
 }
 
+func (b *QueryBuilder) buildJoinedView(src *ast.Join) (*TableView, string, []interface{}, error) {
+	leftView, leftQuery, leftData, err := b.buildQueryTable(src.Left)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("left table error %v", err)
+	}
+	if leftView == nil {
+		return nil, "", nil, fmt.Errorf("left table view is nil")
+	}
+
+	rightView, rightQuery, rightData, err := b.buildQueryTable(src.Right)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("right table error %v", err)
+	}
+	if rightView == nil {
+		return nil, "", nil, fmt.Errorf("right table view is nil")
+	}
+
+	leftItems := leftView.AllItems()
+	rightItems := rightView.AllItems()
+
+	var condData []interface{}
+	var condition string
+	var usingColumns []string
+	switch cond := src.Cond.(type) {
+	case *ast.On:
+		switch expr := cond.Expr.(type) {
+		case *ast.BinaryExpr:
+			ex, err := b.buildExpr(expr)
+			if err != nil {
+				return nil, "", nil, wrapExprError(err, expr, "ON")
+			}
+			condition = fmt.Sprintf("ON %s", ex.Raw)
+			condData = append(condData, ex.Args...)
+
+		default:
+			return nil, "", nil, status.Errorf(codes.Unimplemented, "not supported expression %T for JOIN condition", expr)
+		}
+
+	case *ast.Using:
+		names := make([]string, len(cond.Idents))
+		for i := range cond.Idents {
+			name := cond.Idents[i].Name
+			if _, ok := leftView.ResultItemsMap[name]; !ok {
+				return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on left side of join", name)
+			}
+			if _, ok := rightView.ResultItemsMap[name]; !ok {
+				return nil, "", nil, newExprErrorf(nil, true, "Column %s in USING clause not found on right side of join", name)
+			}
+			names[i] = name
+		}
+
+		usingColumns = names // used for FULL OUTER JOIN
+		condition = fmt.Sprintf("USING (%s)", strings.Join(QuoteStringSlice(names), ", "))
+
+		// filter ResultItems that used in USING columns from right view
+		var newRightItems []ResultItem
+		for i := range rightItems {
+			var found bool
+			for _, name := range names {
+				if rightItems[i].Name == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				newRightItems = append(newRightItems, rightItems[i])
+			}
+		}
+		rightItems = newRightItems
+	}
+
+	switch src.Op {
+	case ast.CommaJoin,
+		ast.CrossJoin,
+		ast.InnerJoin,
+		ast.LeftOuterJoin:
+		newView := createTableViewFromItems(leftItems, rightItems)
+		data := append(append(leftData, rightData...), condData...)
+
+		return newView, fmt.Sprintf("%s %s %s %s", leftQuery, src.Op, rightQuery, condition), data, nil
+
+	case ast.RightOuterJoin:
+		// RIGHT OUTER JOIN is not supported by sqlite
+		// Reverse left and right, then use LEFT OUTER JOIN to simulate RIGHT OUTER JOIN
+		newView := createTableViewFromItems(leftItems, rightItems)
+		data := append(append(rightData, leftData...), condData...)
+
+		return newView, fmt.Sprintf("%s LEFT OUTER JOIN %s %s", rightQuery, leftQuery, condition), data, nil
+
+	case ast.FullOuterJoin:
+		// FULL OUTER JOIN is not supported by sqlite
+		// Use LEFT OUTER JOIN and RIGHT OUTER JOIN, then UNION ALL to simulate FULL OUTER JOIN
+		// Ref. https://www.sqlitetutorial.net/sqlite-full-outer-join/
+
+		if len(usingColumns) == 0 {
+			msg := "hanndy-spanner: Full Outer Join with ON condition is not supported yet."
+			return nil, "", nil, status.Errorf(codes.Unknown, msg)
+		}
+
+		var leftUsingColumns []string
+		var leftRemainingColumns []string
+		for _, item := range leftView.AllItems() {
+			var found bool
+			for _, name := range usingColumns {
+				if item.Name == name {
+					found = true
+					break
+				}
+			}
+			if found {
+				leftUsingColumns = append(leftUsingColumns, item.Expr.Raw)
+			} else {
+				leftRemainingColumns = append(leftRemainingColumns, item.Expr.Raw)
+			}
+		}
+
+		var rightUsingColumns []string
+		var rightRemainingColumns []string
+		for _, item := range rightView.AllItems() {
+			var found bool
+			for _, name := range usingColumns {
+				if item.Name == name {
+					found = true
+					break
+				}
+			}
+			if found {
+				rightUsingColumns = append(rightUsingColumns, item.Expr.Raw)
+			} else {
+				rightRemainingColumns = append(rightRemainingColumns, item.Expr.Raw)
+			}
+		}
+		remainingColumns := append(leftRemainingColumns, rightRemainingColumns...)
+
+		var secondWhere []string
+		for _, c := range leftUsingColumns {
+			secondWhere = append(secondWhere, fmt.Sprintf("%s IS NULL", c))
+		}
+
+		first := fmt.Sprintf(`SELECT %s FROM %s LEFT JOIN %s %s`,
+			strings.Join(append(leftUsingColumns, remainingColumns...), ", "),
+			leftQuery, rightQuery, condition)
+		second := fmt.Sprintf(`SELECT %s FROM %s LEFT JOIN %s %s WHERE %s`,
+			strings.Join(append(rightUsingColumns, remainingColumns...), ", "),
+			rightQuery, leftQuery, condition,
+			strings.Join(secondWhere, " AND "),
+		)
+		query := fmt.Sprintf("(%s UNION ALL %s)", first, second)
+
+		newView := createTableViewFromItems(leftItems, rightItems)
+
+		data1 := append(append(leftData, rightData...), condData...)
+		data2 := append(append(rightData, leftData...), condData...)
+		data := append(data1, data2...)
+
+		// TODO: FullOuterJoin is simulated by using subquery with UNION, so table alias cannot be used
+		// See the test case
+
+		return newView, query, data, nil
+	}
+
+	return nil, "", nil, status.Errorf(codes.Unknown, "unknown Join operation: %v", src.Op)
+}
+
 // buildUnnestView creates a Tableview from an UNNEST() expression.
 //
 // buildUnnestExpr creates a table like `VALUES (a), (b), (c)`, but the columns are unnamed.
@@ -459,6 +831,7 @@ func (b *QueryBuilder) buildQueryTable(exp ast.TableExpr) (*TableView, string, [
 //
 // See the doc comment of buildUnnestExpr about the generated query.
 func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []interface{}, error) {
+	useSqliteJSON()
 	var offset bool
 	var offsetAlias string
 	if src.WithOffset != nil {
@@ -505,7 +878,73 @@ func (b *QueryBuilder) buildUnnestView(src *ast.Unnest) (*TableView, string, []i
 	}
 
 	view := createTableViewFromItems(items, nil)
-	return view, fmt.Sprintf("(%s) AS %s", s.Raw, viewName), s.Args, nil
+	raw := fmt.Sprintf("(%s) AS %s", s.Raw, viewName)
+
+	// if the element type is struct, it needs to be expanded
+	// otherwise return as is
+	if s.ValueType.ArrayType.Code != TCStruct {
+		return view, raw, s.Args, nil
+	}
+
+	viewItems := view.AllItems()
+	st := viewItems[0]
+
+	strItems := st.ValueType.StructType.AllItems()
+	var newItems []ResultItem
+	for i := range strItems {
+		newItems = append(newItems, ResultItem{
+			Name:      strItems[i].Name,
+			ValueType: strItems[i].ValueType,
+			Expr: Expr{
+				Raw:       strItems[i].Expr.Raw,
+				ValueType: strItems[i].Expr.ValueType,
+				Args:      strItems[i].Expr.Args,
+			},
+		})
+	}
+
+	var exprs []string
+	for i, item := range newItems {
+		if item.Name == "" {
+			exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", "value", i))
+		} else {
+			exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]') AS %s", "value", i, item.Name))
+		}
+	}
+
+	if src.As != nil {
+		viewName := src.As.Alias.Name
+		view2 := createTableViewFromItems(newItems, nil)
+		if err := b.registerTableAlias(view2, viewName); err != nil {
+			return nil, "", nil, err
+		}
+	}
+
+	var offsetItem []ResultItem
+	if offset {
+		offsetItem = []ResultItem{
+			{
+				Name:      viewItems[1].Name,
+				ValueType: viewItems[1].ValueType,
+				Expr: Expr{
+					Raw:       viewItems[1].Name,
+					ValueType: viewItems[1].Expr.ValueType,
+					Args:      viewItems[1].Expr.Args,
+				},
+			},
+		}
+		if viewItems[1].Name == "" {
+			exprs = append(exprs, viewItems[1].Expr.Raw)
+		} else {
+			exprs = append(exprs, fmt.Sprintf("%s AS %s", viewItems[1].Expr.Raw, viewItems[1].Name))
+		}
+	}
+
+	view3 := createTableViewFromItems(newItems, offsetItem)
+
+	selectQuery := strings.Join(exprs, ", ")
+
+	return view3, fmt.Sprintf("(SELECT %s FROM %s)", selectQuery, raw), s.Args, nil
 }
 
 func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultItem, string, error) {
@@ -541,6 +980,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 			if st.IsTable {
 				exprs = append(exprs, fmt.Sprintf("%s.*", ex.Raw))
 			} else {
+				useSqliteJSON()
 				n := len(st.FieldTypes)
 				for i := 0; i < n; i++ {
 					exprs = append(exprs, fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", ex.Raw, i))
@@ -567,7 +1007,7 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 				Expr: Expr{
 					// This is a trick. This Expr is referred as subquery.
 					// At the reference, it should be just referred as alias name instead of s.Raw.
-					Raw:       alias,
+					Raw:       QuoteString(alias),
 					ValueType: ex.ValueType,
 				},
 			})
@@ -587,11 +1027,11 @@ func (b *QueryBuilder) buildResultSet(selectItems []ast.SelectItem) ([]ResultIte
 				Expr: Expr{
 					// This is a trick. This Expr is referred as subquery.
 					// At the reference, it should be just referred as alias name instead of s.Raw.
-					Raw:       alias,
+					Raw:       QuoteString(alias),
 					ValueType: ex.ValueType,
 				},
 			})
-			exprs = append(exprs, fmt.Sprintf("%s AS %s", ex.Raw, alias))
+			exprs = append(exprs, fmt.Sprintf("%s AS %s", ex.Raw, QuoteString(alias)))
 
 		default:
 			return nil, "", status.Errorf(codes.Unimplemented, "not supported %T in result set", item)
@@ -716,6 +1156,12 @@ func (b *QueryBuilder) buildQueryOrderByClause(orderby *ast.OrderBy, view *Table
 				return "", nil, newExprErrorf(nil, true, "Column name %s is ambiguous", e.Name)
 			}
 			expr = i.Expr
+		case *ast.Path:
+			ex, err := b.buildExpr(item.Expr)
+			if err != nil {
+				return "", nil, wrapExprError(err, item.Expr, "OrderBy")
+			}
+			expr = ex
 		}
 
 		collate := ""
@@ -799,7 +1245,10 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, error) {
 			if err != nil {
 				return NullExpr, wrapExprError(err, e, "IN condition")
 			}
-			ss = append(ss, ex.Raw)
+
+			raw := b.unkeysStruct(ex.Raw, ex.ValueType)
+
+			ss = append(ss, raw)
 			args = append(args, ex.Args...)
 		}
 		return Expr{
@@ -809,13 +1258,16 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, error) {
 		}, nil
 
 	case *ast.SubQueryInCondition:
-		query, data, items, err := BuildQuery(b.db, c.Query, b.params, false)
+		query, data, items, err := BuildQuery(b.db, b.tx, c.Query, b.params, false)
 		if err != nil {
 			return NullExpr, newExprErrorf(nil, false, "BuildQuery error for SubqueryInCondition: %v", err)
 		}
 		if len(items) != 1 {
 			return NullExpr, newExprErrorf(nil, true, "Subquery of type IN must have only one output column")
 		}
+
+		// TODO: if subquery uses SELECT AS STRUCT, it needs to expand struct
+
 		return Expr{
 			ValueType: items[0].ValueType, // inherit ValueType from result item
 			Raw:       fmt.Sprintf("(%s)", query),
@@ -852,6 +1304,7 @@ func (b *QueryBuilder) buildInCondition(cond ast.InCondition) (Expr, error) {
 // If offset for unnest is needed `UNNEST([a, b, c])` generates:
 // `SELECT value, key as offset JSON_EACH(JSON_ARRAY(a, b, c))`
 func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool, asview bool) (Expr, error) {
+	useSqliteJSON()
 	ex, err := b.buildExpr(expr)
 	if err != nil {
 		return NullExpr, wrapExprError(err, expr, "UNNEST")
@@ -868,10 +1321,15 @@ func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool, asview bool) 
 	}
 
 	var raw string
-	if offset {
-		raw = fmt.Sprintf("SELECT value, key as offset FROM JSON_EACH(%s)", ex.Raw)
+	if asview {
+		if offset {
+			raw = fmt.Sprintf("SELECT value, key as offset FROM JSON_EACH(%s)", ex.Raw)
+		} else {
+			raw = fmt.Sprintf("SELECT value FROM JSON_EACH(%s)", ex.Raw)
+		}
 	} else {
-		raw = fmt.Sprintf("SELECT value FROM JSON_EACH(%s)", ex.Raw)
+		value := b.unkeysStruct("value", *ex.ValueType.ArrayType)
+		raw = fmt.Sprintf("SELECT %s FROM JSON_EACH(%s)", value, ex.Raw)
 	}
 
 	return Expr{
@@ -879,6 +1337,16 @@ func (b *QueryBuilder) buildUnnestExpr(expr ast.Expr, offset bool, asview bool) 
 		Raw:       raw,
 		Args:      ex.Args,
 	}, nil
+}
+
+// unkeysStruct removes "keys" from object for struct type.
+// This is required to compare struct values.
+func (b *QueryBuilder) unkeysStruct(raw string, vt ValueType) string {
+	if vt.Code != TCStruct {
+		return raw
+	}
+
+	return fmt.Sprintf("JSON_REMOVE(%s, '$.keys')", raw)
 }
 
 func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, error) {
@@ -890,6 +1358,7 @@ func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, error) {
 			Args:      []interface{}{v.Data},
 		}, nil
 	case []bool, []int64, []float64, []string, [][]byte:
+		useSqliteJSON()
 		vv := reflect.ValueOf(v.Data)
 		n := vv.Len()
 
@@ -910,6 +1379,7 @@ func (b *QueryBuilder) expandParamByPlaceholders(v Value) (Expr, error) {
 		}, nil
 
 	case ArrayValue:
+		useSqliteJSON()
 		rv := reflect.ValueOf(v.Data.(ArrayValue).Elements())
 		n := rv.Len()
 
@@ -958,8 +1428,15 @@ func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
 	}
 	if idx == -1 {
 		if st.IsTable {
+			// TODO: stop adhoc fix for unescape
+			// This unescapes the expression if it is quoted
+			exp := expr.Raw
+			if exp[0] == '`' && exp[len(exp)-1] == '`' {
+				exp = exp[1 : len(exp)-1]
+			}
+
 			msg := "Name %s not found inside %s"
-			return NullExpr, newExprErrorf(nil, true, msg, name, expr.Raw)
+			return NullExpr, newExprErrorf(nil, true, msg, name, exp)
 		} else {
 			msg := "Field name %s does not exist in %s"
 			return NullExpr, newExprErrorf(nil, true, msg, name, expr.ValueType)
@@ -968,8 +1445,9 @@ func (b *QueryBuilder) accessField(expr Expr, name string) (Expr, error) {
 
 	var raw string
 	if st.IsTable {
-		raw = fmt.Sprintf("%s.%s", expr.Raw, name)
+		raw = fmt.Sprintf("%s.%s", expr.Raw, QuoteString(name))
 	} else {
+		useSqliteJSON()
 		raw = fmt.Sprintf("JSON_EXTRACT(%s, '$.values[%d]')", expr.Raw, idx)
 	}
 
@@ -1009,9 +1487,41 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		args = append(args, left.Args...)
 		args = append(args, right.Args...)
 
+		opName := map[ast.BinaryOp]string{
+			ast.OpLess:         "Less than",
+			ast.OpGreater:      "Greater than",
+			ast.OpLessEqual:    "Less than",
+			ast.OpGreaterEqual: "Greater than",
+		}
+
 		var vt ValueType
 		switch e.Op {
-		case ast.OpOr, ast.OpAnd, ast.OpEqual, ast.OpNotEqual, ast.OpLess, ast.OpGreater, ast.OpLessEqual, ast.OpGreaterEqual, ast.OpLike, ast.OpNotLike:
+		case ast.OpEqual, ast.OpNotEqual:
+			if !isComparable(left.ValueType, right.ValueType) {
+				return NullExpr, newExprErrorf(expr, true, "No matching signature for operator %s for argument types: %s, %s.", e.Op, left.ValueType, right.ValueType)
+			}
+			vt = ValueType{
+				Code: TCBool,
+			}
+
+		case ast.OpLess, ast.OpGreater, ast.OpLessEqual, ast.OpGreaterEqual:
+			if !isComparable(left.ValueType, right.ValueType) {
+				return NullExpr, newExprErrorf(expr, true, "No matching signature for operator %s for argument types: %s, %s.", e.Op, left.ValueType, right.ValueType)
+			}
+
+			if left.ValueType.Code == TCStruct {
+				msg := "%s is not defined for arguments of type %s"
+				return NullExpr, newExprErrorf(expr, true, msg, opName[e.Op], left.ValueType)
+			}
+
+			vt = ValueType{
+				Code: TCBool,
+			}
+		case ast.OpOr, ast.OpAnd:
+			vt = ValueType{
+				Code: TCBool,
+			}
+		case ast.OpLike, ast.OpNotLike:
 			vt = ValueType{
 				Code: TCBool,
 			}
@@ -1039,6 +1549,12 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		raw := fmt.Sprintf("%s %s %s", left.Raw, e.Op, right.Raw)
 		if e.Op == ast.OpBitXor {
 			raw = fmt.Sprintf("(%s | %s) - (%s & %s)", left.Raw, right.Raw, left.Raw, right.Raw)
+			// TODO: args
+		}
+		if e.Op == ast.OpEqual || e.Op == ast.OpNotEqual {
+			leftRaw := b.unkeysStruct(left.Raw, left.ValueType)
+			rightRaw := b.unkeysStruct(right.Raw, right.ValueType)
+			raw = fmt.Sprintf("%s %s %s", leftRaw, e.Op, rightRaw)
 		}
 
 		return Expr{
@@ -1066,9 +1582,11 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 			op = "NOT IN"
 		}
 
+		leftRaw := b.unkeysStruct(left.Raw, left.ValueType)
+
 		return Expr{
 			ValueType: ValueType{Code: TCBool},
-			Raw:       fmt.Sprintf("%s %s %s", left.Raw, op, right.Raw),
+			Raw:       fmt.Sprintf("%s %s %s", leftRaw, op, right.Raw),
 			Args:      args,
 		}, nil
 
@@ -1120,6 +1638,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.IndexExpr:
+		useSqliteJSON()
 		ex1, err := b.buildExpr(e.Expr)
 		if err != nil {
 			return NullExpr, wrapExprError(err, expr, "Expr")
@@ -1251,125 +1770,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 
 		target := astTypeToValueType(e.Type)
 
-		if target.Code == TCStruct {
-			return NullExpr, newExprErrorf(expr, false, "Struct type is not supported in Cast")
-		}
-
-		raw := ex.Raw
-		switch ex.ValueType.Code {
-		case TCInt64:
-			switch target.Code {
-			case TCBool:
-				raw = fmt.Sprintf("___CAST_INT64_TO_BOOL(%s)", raw)
-			case TCString:
-				raw = fmt.Sprintf("___CAST_INT64_TO_STRING(%s)", raw)
-			case TCInt64:
-				// do nothing
-			case TCFloat64:
-				raw = fmt.Sprintf("___CAST_INT64_TO_FLOAT64(%s)", raw)
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
-			}
-		case TCFloat64:
-			switch target.Code {
-			case TCString:
-				raw = fmt.Sprintf("___CAST_FLOAT64_TO_STRING(%s)", raw)
-			case TCInt64:
-				raw = fmt.Sprintf("___CAST_FLOAT64_TO_INT64(%s)", raw)
-			case TCFloat64:
-				// do nothing
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
-			}
-
-		case TCBool:
-			switch target.Code {
-			case TCString:
-				raw = fmt.Sprintf("___CAST_BOOL_TO_STRING(%s)", raw)
-			case TCBool:
-				// do nothing
-			case TCInt64:
-				raw = fmt.Sprintf("___CAST_BOOL_TO_INT64(%s)", raw)
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCString:
-			switch target.Code {
-			case TCString:
-				// do nothing
-			case TCBool:
-				raw = fmt.Sprintf("___CAST_STRING_TO_BOOL(%s)", raw)
-			case TCInt64:
-				raw = fmt.Sprintf("___CAST_STRING_TO_INT64(%s)", raw)
-			case TCFloat64:
-				raw = fmt.Sprintf("___CAST_STRING_TO_FLOAT64(%s)", raw)
-			case TCDate:
-				raw = fmt.Sprintf("___CAST_STRING_TO_DATE(%s)", raw)
-			case TCTimestamp:
-				raw = fmt.Sprintf("___CAST_STRING_TO_TIMESTAMP(%s)", raw)
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCBytes:
-			switch target.Code {
-			case TCBytes:
-				// do nothing
-			case TCString:
-				// do nothing?
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCDate:
-			switch target.Code {
-			case TCString:
-				raw = fmt.Sprintf("___CAST_DATE_TO_STRING(%s)", raw)
-			case TCDate:
-				// do nothing
-			case TCTimestamp:
-				raw = fmt.Sprintf("___CAST_DATE_TO_TIMESTAMP(%s)", raw)
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCTimestamp:
-			switch target.Code {
-			case TCString:
-				raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_STRING(%s)", raw)
-			case TCDate:
-				raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_DATE(%s)", raw)
-			case TCTimestamp:
-				// do nothing
-			default:
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-
-		case TCArray:
-			if !compareValueType(ex.ValueType, target) {
-				if ex.ValueType.Code == TCArray && target.Code == TCArray {
-					msg := "Casting between arrays with incompatible element types is not supported: Invalid cast from %s to %s"
-					return NullExpr, newExprErrorf(expr, true, msg, ex.ValueType, target)
-				}
-
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-		case TCStruct:
-			if !compareValueType(ex.ValueType, target) {
-				return NullExpr, newExprErrorf(expr, true, "Invalid cast from %s to %s", ex.ValueType, target)
-			}
-			return NullExpr, newExprErrorf(expr, false, "struct is not supported")
-		}
-
-		return Expr{
-			ValueType: target,
-			Raw:       raw,
-			Args:      ex.Args,
-		}, nil
-
-		return NullExpr, newExprErrorf(expr, false, "Cast not supported yet")
-
+		return castTo(ex, target)
 	case *ast.ExtractExpr:
 		ex, err := b.buildExpr(e.Expr)
 		if err != nil {
@@ -1479,7 +1880,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.ScalarSubQuery:
-		query, args, items, err := BuildQuery(b.db, e.Query, b.params, false)
+		query, args, items, err := BuildQuery(b.db, b.tx, e.Query, b.params, false)
 		if err != nil {
 			return NullExpr, wrapExprError(err, expr, "Scalar")
 		}
@@ -1493,7 +1894,8 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.ArraySubQuery:
-		query, args, items, err := BuildQuery(b.db, e.Query, b.params, true)
+		useSqliteJSON()
+		query, args, items, err := BuildQuery(b.db, b.tx, e.Query, b.params, true)
 		if err != nil {
 			return NullExpr, wrapExprError(err, expr, "Array")
 		}
@@ -1515,7 +1917,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.ExistsSubQuery:
-		query, args, _, err := BuildQuery(b.db, e.Query, b.params, false)
+		query, args, _, err := BuildQuery(b.db, b.tx, e.Query, b.params, false)
 		if err != nil {
 			return NullExpr, newExprErrorf(expr, false, "BuildQuery error for %T: %v", err, e)
 		}
@@ -1528,10 +1930,25 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.ArrayLiteral:
+		useSqliteJSON()
 		var args []interface{}
 		var ss []string
 		var vts []ValueType
+
+		var nestedStrType *ast.StructType
+		if e.Type != nil {
+			if st, ok := e.Type.(*ast.StructType); ok {
+				nestedStrType = st
+			}
+		}
+
 		for i := range e.Values {
+			// If the element is struct, need to populate the struct type.
+			// Because only top node knows the details of the type if it's a compound type.
+			if str, ok := e.Values[i].(*ast.StructLiteral); ok && nestedStrType != nil {
+				str.Fields = nestedStrType.Fields
+			}
+
 			ex, err := b.buildExpr(e.Values[i])
 			if err != nil {
 				return NullExpr, wrapExprError(err, expr, "ArrayLiteral")
@@ -1564,6 +1981,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.StructLiteral:
+		useSqliteJSON()
 		var names []string
 		var vt ValueType
 		var typedef bool
@@ -1711,7 +2129,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 					Code:       TCStruct,
 					StructType: tbl.ToStruct(),
 				},
-				Raw: e.Name,
+				Raw: QuoteString(e.Name),
 			}, nil
 		} else {
 			if b.rootView == nil {
@@ -1740,7 +2158,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 					Code:       TCStruct,
 					StructType: tbl.ToStruct(),
 				},
-				Raw: firstName,
+				Raw: QuoteString(firstName),
 			}
 		} else {
 			// If not found in tables, look the results items of root
@@ -1907,4 +2325,204 @@ func parseTimestampLiteral(s string) (time.Time, bool) {
 	}
 
 	return time.Time{}, false
+}
+
+func castTo(ex Expr, target ValueType) (Expr, error) {
+	if target.Code == TCStruct {
+		return NullExpr, newExprErrorf(nil, false, "Struct type is not supported in Cast")
+	}
+
+	raw := ex.Raw
+	switch ex.ValueType.Code {
+	case TCInt64:
+		switch target.Code {
+		case TCBool:
+			raw = fmt.Sprintf("___CAST_INT64_TO_BOOL(%s)", raw)
+		case TCString:
+			raw = fmt.Sprintf("___CAST_INT64_TO_STRING(%s)", raw)
+		case TCInt64:
+			// do nothing
+		case TCFloat64:
+			raw = fmt.Sprintf("___CAST_INT64_TO_FLOAT64(%s)", raw)
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
+		}
+	case TCFloat64:
+		switch target.Code {
+		case TCString:
+			raw = fmt.Sprintf("___CAST_FLOAT64_TO_STRING(%s)", raw)
+		case TCInt64:
+			raw = fmt.Sprintf("___CAST_FLOAT64_TO_INT64(%s)", raw)
+		case TCFloat64:
+			// do nothing
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType.Code, target.Code)
+		}
+
+	case TCBool:
+		switch target.Code {
+		case TCString:
+			raw = fmt.Sprintf("___CAST_BOOL_TO_STRING(%s)", raw)
+		case TCBool:
+			// do nothing
+		case TCInt64:
+			raw = fmt.Sprintf("___CAST_BOOL_TO_INT64(%s)", raw)
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCString:
+		switch target.Code {
+		case TCString:
+			// do nothing
+		case TCBool:
+			raw = fmt.Sprintf("___CAST_STRING_TO_BOOL(%s)", raw)
+		case TCInt64:
+			raw = fmt.Sprintf("___CAST_STRING_TO_INT64(%s)", raw)
+		case TCFloat64:
+			raw = fmt.Sprintf("___CAST_STRING_TO_FLOAT64(%s)", raw)
+		case TCDate:
+			raw = fmt.Sprintf("___CAST_STRING_TO_DATE(%s)", raw)
+		case TCTimestamp:
+			raw = fmt.Sprintf("___CAST_STRING_TO_TIMESTAMP(%s)", raw)
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCBytes:
+		switch target.Code {
+		case TCBytes:
+			// do nothing
+		case TCString:
+			// do nothing?
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCDate:
+		switch target.Code {
+		case TCString:
+			raw = fmt.Sprintf("___CAST_DATE_TO_STRING(%s)", raw)
+		case TCDate:
+			// do nothing
+		case TCTimestamp:
+			raw = fmt.Sprintf("___CAST_DATE_TO_TIMESTAMP(%s)", raw)
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCTimestamp:
+		switch target.Code {
+		case TCString:
+			raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_STRING(%s)", raw)
+		case TCDate:
+			raw = fmt.Sprintf("___CAST_TIMESTAMP_TO_DATE(%s)", raw)
+		case TCTimestamp:
+			// do nothing
+		default:
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+
+	case TCArray:
+		if !compareValueType(ex.ValueType, target) {
+			if ex.ValueType.Code == TCArray && target.Code == TCArray {
+				msg := "Casting between arrays with incompatible element types is not supported: Invalid cast from %s to %s"
+				return NullExpr, newExprErrorf(nil, true, msg, ex.ValueType, target)
+			}
+
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+	case TCStruct:
+		if !compareValueType(ex.ValueType, target) {
+			return NullExpr, newExprErrorf(nil, true, "Invalid cast from %s to %s", ex.ValueType, target)
+		}
+		return NullExpr, newExprErrorf(nil, false, "struct is not supported")
+	}
+
+	return Expr{
+		ValueType: target,
+		Raw:       raw,
+		Args:      ex.Args,
+	}, nil
+}
+
+func isComparable(a, b ValueType) bool {
+	t1 := a.Code
+	t2 := b.Code
+	switch t1 {
+	case TCInt64:
+		if t2 == TCInt64 || t2 == TCFloat64 {
+			return true
+		}
+		return false
+	case TCFloat64:
+		if t2 == TCInt64 || t2 == TCFloat64 {
+			return true
+		}
+		return false
+	case TCString:
+		if t2 == TCString {
+			return true
+		}
+		if t2 == TCDate || t2 == TCTimestamp {
+			return true
+		}
+		return false
+	case TCDate:
+		if t2 == TCDate {
+			return true
+		}
+		if t2 == TCString || t2 == TCTimestamp {
+			return true
+		}
+		return false
+	case TCTimestamp:
+		if t2 == TCTimestamp {
+			return true
+		}
+		if t2 == TCDate || t2 == TCTimestamp {
+			return true
+		}
+		return false
+	}
+
+	// TODO: false by default
+	return true
+}
+
+func isCoerceableTo(a, b ValueType) bool {
+	t1 := a.Code
+	t2 := b.Code
+	switch t1 {
+	case TCInt64:
+		return t2 == TCFloat64
+	case TCString:
+		return t2 == TCDate || t2 == TCTimestamp
+	}
+
+	return false
+}
+
+func isCastableTo(a, b ValueType) bool {
+	t1 := a.Code
+	t2 := b.Code
+	// See: https://cloud.google.com/spanner/docs/functions-and-operators#casting
+	switch t1 {
+	case TCInt64:
+		return t2 == TCString || t2 == TCFloat64 || t2 == TCBool
+	case TCFloat64:
+		return t2 == TCString || t2 == TCInt64
+	case TCBool:
+		return t2 == TCString || t2 == TCInt64
+	case TCString:
+		return true
+	case TCBytes:
+		return t2 == TCString
+	case TCDate:
+		return t2 == TCString || t2 == TCTimestamp
+	case TCTimestamp:
+		return t2 == TCString || t2 == TCDate
+	}
+
+	return false
 }

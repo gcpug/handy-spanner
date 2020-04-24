@@ -53,7 +53,38 @@ func (t *Table) TableIndex(idx string) (*TableIndex, bool) {
 }
 
 func (t *Table) TableView() *TableView {
-	return createTableViewFromTable(t)
+	return createTableViewFromTable(t, "")
+}
+
+func (t *Table) TableViewWithAlias(alias string) *TableView {
+	return createTableViewFromTable(t, alias)
+}
+
+// NonNullableColumnsExist checks non nullable columns exist in the spciefied columns.
+// It returns true and the columns if non nullable columns exist.
+func (t *Table) NonNullableColumnsExist(columns []string) (bool, []string) {
+	usedColumns := make(map[string]struct{}, len(columns))
+	for _, name := range columns {
+		usedColumns[name] = struct{}{}
+	}
+
+	var noExsitNonNullableColumns []string
+	for _, c := range t.columns {
+		if c.nullable {
+			continue
+		}
+
+		n := c.Name()
+		if _, ok := usedColumns[n]; !ok {
+			noExsitNonNullableColumns = append(noExsitNonNullableColumns, n)
+		}
+	}
+
+	if len(noExsitNonNullableColumns) > 0 {
+		return true, noExsitNonNullableColumns
+	}
+
+	return false, nil
 }
 
 func createTableFromAST(stmt *ast.CreateTable) (*Table, error) {
@@ -106,6 +137,14 @@ func (t *Table) createIndex(stmt *ast.CreateIndex) (*TableIndex, error) {
 	}
 	t.index = append(t.index, idx)
 	return idx, nil
+}
+
+func (t *Table) getColumn(name string) (*Column, error) {
+	c, ok := t.columnsMap[name]
+	if !ok {
+		return nil, fmt.Errorf("Column not found: %s", name)
+	}
+	return c, nil
 }
 
 func (t *Table) getColumnsByName(names []string) ([]*Column, error) {
@@ -287,7 +326,28 @@ func toValueType(t ast.SchemaType) ValueType {
 	default:
 		panic(fmt.Sprintf("unknow type %v", t))
 	}
+}
 
+func schemaTypetoTypString(t ast.SchemaType) string {
+	switch v := t.(type) {
+	case *ast.ScalarSchemaType:
+		return astTypeToTypeCode(v.Name).String()
+
+	case *ast.SizedSchemaType:
+		typ := astTypeToTypeCode(v.Name).String()
+		size := "MAX"
+		if !v.Max {
+			intLit := v.Size.(*ast.IntLiteral)
+			size = intLit.Value // TODO: respect base?
+		}
+		return fmt.Sprintf("%s(%s)", typ, size)
+
+	case *ast.ArraySchemaType:
+		arrType := schemaTypetoTypString(v.Item)
+		return fmt.Sprintf("ARRAY<%s>", arrType)
+	default:
+		panic(fmt.Sprintf("unknow type %v", t))
+	}
 }
 
 func toColumnType(t ast.SchemaType) columnType {
@@ -509,11 +569,15 @@ func createTableViewFromItems(items1 []ResultItem, items2 []ResultItem) *TableVi
 	}
 }
 
-func createTableViewFromTable(table *Table) *TableView {
+func createTableViewFromTable(table *Table, alias string) *TableView {
 	items := make([]ResultItem, 0, len(table.columns))
 	itemsMap := make(map[string]ResultItem, len(table.columns))
 	for _, column := range table.columns {
 		item := createResultItemFromColumn(column)
+		// if alias specified, add the alias to Expr
+		if alias != "" {
+			item.Expr.Raw = fmt.Sprintf("%s.%s", QuoteString(alias), item.Expr.Raw)
+		}
 		items = append(items, item)
 		itemsMap[column.Name()] = item
 	}
@@ -535,7 +599,7 @@ func createResultItemFromColumn(column *Column) ResultItem {
 		Name:      column.Name(),
 		ValueType: column.valueType,
 		Expr: Expr{
-			Raw:       column.Name(),
+			Raw:       QuoteString(column.Name()),
 			ValueType: column.valueType,
 		},
 	}

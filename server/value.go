@@ -70,7 +70,7 @@ func (t ValueType) String() string {
 	case TCBool, TCInt64, TCFloat64, TCTimestamp, TCDate, TCString, TCBytes:
 		return t.Code.String()
 	case TCArray:
-		return fmt.Sprintf("ARRAY<%s>", t.ArrayType.Code.String())
+		return fmt.Sprintf("ARRAY<%s>", t.ArrayType.String())
 	case TCStruct:
 		n := len(t.StructType.FieldTypes)
 		ss := make([]string, n)
@@ -90,7 +90,32 @@ func (t ValueType) String() string {
 }
 
 func compareValueType(a, b ValueType) bool {
-	return a == b
+	if a.Code != b.Code {
+		return false
+	}
+
+	if a.Code == TCStruct && b.Code == TCStruct {
+		aStr := a.StructType
+		bStr := b.StructType
+
+		if len(aStr.FieldTypes) != len(bStr.FieldTypes) {
+			return false
+		}
+		for i := 0; i < len(aStr.FieldTypes); i++ {
+			b := compareValueType(*aStr.FieldTypes[i], *bStr.FieldTypes[i])
+			if !b {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	if a.Code == TCArray && b.Code == TCArray {
+		return compareValueType(*a.ArrayType, *b.ArrayType)
+	}
+
+	return true
 }
 
 func compatibleValueType(a, b ValueType) (ValueType, bool) {
@@ -415,6 +440,7 @@ type StructValue struct {
 type rows struct {
 	rows        *sql.Rows
 	resultItems []ResultItem
+	transaction *transaction
 
 	lastErr error
 }
@@ -425,11 +451,13 @@ func (r *rows) ResultSet() []ResultItem {
 
 func (it *rows) Do(fn func([]interface{}) error) error {
 	var lastErr error
+	var rows []interface{}
 	for {
 		row, ok := it.next()
 		if !ok {
 			break
 		}
+		rows = append(rows, row)
 		if err := fn(row); err != nil {
 			lastErr = err
 			break
@@ -463,6 +491,13 @@ func (it *rows) Do(fn func([]interface{}) error) error {
 			msg = strings.TrimPrefix(msg, SqliteOutOfRangeRuntimeErrorPrefix)
 			return status.Errorf(codes.OutOfRange, "%s", msg)
 		}
+	}
+
+	// database/sql has a possible bug that cannot read any data without error.
+	// It may happen context is canceled in bad timing.
+	// Here checks the transaction is available or not and if it's not available return aborted error.
+	if !it.transaction.Available() {
+		lastErr = status.Errorf(codes.Aborted, "transaction aborted")
 	}
 
 	return lastErr
@@ -555,14 +590,14 @@ func (it *rows) next() ([]interface{}, bool) {
 }
 
 func convertToDatabaseValues(lv *structpb.ListValue, columns []*Column) ([]interface{}, error) {
-	values := make([]interface{}, len(columns))
+	values := make([]interface{}, 0, len(columns))
 	for i, v := range lv.Values {
 		column := columns[i]
 		vv, err := spannerValue2DatabaseValue(v, *column)
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 		}
-		values[i] = vv
+		values = append(values, vv)
 	}
 	return values, nil
 }

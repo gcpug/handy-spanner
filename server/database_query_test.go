@@ -76,6 +76,16 @@ func TestQuery(t *testing.T) {
            json_array(0.1, 0.2),
            json_array("2012-03-04", "2012-03-05")
         )`,
+
+		`INSERT INTO JoinA VALUES(100, "xxx")`,
+		`INSERT INTO JoinA VALUES(200, "yyy")`,
+		`INSERT INTO JoinA VALUES(300, "zzz")`,
+
+		`INSERT INTO JoinB VALUES(100, "aaa")`,
+		`INSERT INTO JoinB VALUES(200, "bbb")`,
+		`INSERT INTO JoinB VALUES(400, "ddd")`,
+
+		"INSERT INTO `From` VALUES(1, 1, 1)",
 	} {
 		if _, err := db.db.ExecContext(ctx, query); err != nil {
 			t.Fatalf("Insert failed: %v", err)
@@ -186,7 +196,7 @@ func TestQuery(t *testing.T) {
 				name: "Identifer_NotFound3",
 				sql:  "SELECT a.foo FROM Simple a",
 				code: codes.InvalidArgument,
-				msg:  regexp.MustCompile(`Name foo not found inside a`),
+				msg:  regexp.MustCompile("Name foo not found inside a"),
 			},
 			{
 				name: "Identifer_NotFound_WithoutFromClause",
@@ -267,6 +277,36 @@ func TestQuery(t *testing.T) {
 						makeTestArray(TCString, "2012-03-04", "2012-03-05"),
 					},
 				},
+			},
+			{
+				name:     "EscapeKeyword_Table",
+				sql:      "SELECT * FROM `From`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
+			},
+			{
+				name:     "EscapeKeyword_TableAlias",
+				sql:      "SELECT * FROM `From` AS `ALL`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
+			},
+			{
+				name:     "EscapeKeyword_Columns",
+				sql:      "SELECT `ALL`, `CAST`, `JOIN` FROM `From`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
+			},
+			{
+				name:     "EscapeKeyword_ColumnsWithAlias",
+				sql:      "SELECT `ALL`.`ALL`, `ALL`.`CAST`, `ALL`.`JOIN` FROM `From` AS `ALL`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
+			},
+			{
+				name:     "EscapeKeyword_ColumnAlias",
+				sql:      "SELECT `ALL` AS `AND`, `CAST` `OR`, `JOIN` AS `IF` FROM `From`",
+				names:    []string{"AND", "OR", "IF"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
 			},
 		},
 		"SimpleWhere": {
@@ -551,6 +591,12 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(100), "xxx"},
 				},
 			},
+			{
+				name:     "EscapeKeyword",
+				sql:      "SELECT * FROM `From` ORDER BY `ALL`",
+				names:    []string{"ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1)}},
+			},
 		},
 
 		"Array": {
@@ -673,6 +719,12 @@ func TestQuery(t *testing.T) {
 				expected: [][]interface{}{
 					[]interface{}{makeTestArray(TCInt64, int64(100), int64(200), int64(300))},
 				},
+			},
+			{
+				name: "ArraySubquery_Simple_MultiColumns",
+				sql:  `SELECT ARRAY(SELECT Id, Id FROM Simple)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^ARRAY subquery cannot have more than one column unless using SELECT AS STRUCT to build STRUCT values`),
 			},
 			{
 				name: "ArraySubquery_Star",
@@ -902,6 +954,22 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(100)},
 				},
 			},
+			{
+				name: "ArrayStructLiteral_Named",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(100, "xxx"), (200, "yyy")])`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+				},
+			},
+			{
+				name: "ArrayStructLiteral_Unnamed",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN UNNEST(ARRAY<STRUCT<INT64, STRING>>[(100, "xxx"), (200, "yyy")])`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+				},
+			},
 		},
 		"FromUnnest": {
 			{
@@ -952,6 +1020,7 @@ func TestQuery(t *testing.T) {
 				params: map[string]Value{
 					"foo": makeTestValue([]int64{3, 4}),
 				},
+				names: []string{"", ""},
 				expected: [][]interface{}{
 					[]interface{}{int64(3), int64(0)},
 					[]interface{}{int64(4), int64(1)},
@@ -963,6 +1032,7 @@ func TestQuery(t *testing.T) {
 				params: map[string]Value{
 					"foo": makeTestValue([]int64{3, 4}),
 				},
+				names: []string{"x"},
 				expected: [][]interface{}{
 					[]interface{}{int64(3)},
 					[]interface{}{int64(4)},
@@ -974,14 +1044,16 @@ func TestQuery(t *testing.T) {
 				params: map[string]Value{
 					"foo": makeTestValue([]int64{3, 4}),
 				},
+				names: []string{"x", "y"},
 				expected: [][]interface{}{
 					[]interface{}{int64(3), int64(0)},
 					[]interface{}{int64(4), int64(1)},
 				},
 			},
 			{
-				name: "Literal_Alias_Star",
-				sql:  `SELECT * FROM UNNEST ([1,2,3]) AS xxx`,
+				name:  "Literal_Alias_Star",
+				sql:   `SELECT * FROM UNNEST ([1,2,3]) AS xxx`,
+				names: []string{"xxx"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1)},
 					[]interface{}{int64(2)},
@@ -989,8 +1061,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "Literal_Alias_Star_WithOffset",
-				sql:  `SELECT * FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+				name:  "Literal_Alias_Star_WithOffset",
+				sql:   `SELECT * FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+				names: []string{"xxx", "yyy"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1), int64(0)},
 					[]interface{}{int64(2), int64(1)},
@@ -998,8 +1071,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "Literal_Alias_Ident",
-				sql:  `SELECT xxx FROM UNNEST ([1,2,3]) AS xxx`,
+				name:  "Literal_Alias_Ident",
+				sql:   `SELECT xxx FROM UNNEST ([1,2,3]) AS xxx`,
+				names: []string{"xxx"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1)},
 					[]interface{}{int64(2)},
@@ -1007,8 +1081,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "Literal_Alias_WithOffset_Ident",
-				sql:  `SELECT xxx, yyy FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+				name:  "Literal_Alias_WithOffset_Ident",
+				sql:   `SELECT xxx, yyy FROM UNNEST ([1,2,3]) AS xxx WITH OFFSET AS yyy`,
+				names: []string{"xxx", "yyy"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1), int64(0)},
 					[]interface{}{int64(2), int64(1)},
@@ -1041,8 +1116,9 @@ func TestQuery(t *testing.T) {
 			// 	},
 			// },
 			{
-				name: "SubQuery_Array",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id FROM Simple))`,
+				name:  "SubQuery_Array",
+				sql:   `SELECT * FROM UNNEST(ARRAY(SELECT Id FROM Simple))`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{int64(100)},
 					[]interface{}{int64(200)},
@@ -1050,8 +1126,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SubQuery_Array_WithoutColumnAlias",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id+1 FROM Simple))`,
+				name:  "SubQuery_Array_WithoutColumnAlias",
+				sql:   `SELECT * FROM UNNEST(ARRAY(SELECT Id+1 FROM Simple))`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{int64(101)},
 					[]interface{}{int64(201)},
@@ -1059,14 +1136,88 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SubQuery_Array_WithColumnAlias",
-				sql:  `SELECT * FROM UNNEST(ARRAY(SELECT Id As x FROM Simple))`,
+				name:  "SubQuery_Array_WithColumnAlias",
+				sql:   `SELECT * FROM UNNEST(ARRAY(SELECT Id As x FROM Simple))`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{int64(100)},
 					[]interface{}{int64(200)},
 					[]interface{}{int64(300)},
 				},
 			},
+			{
+				name:  "SubQuery_Array_AsStruct",
+				sql:   `SELECT * FROM UNNEST(ARRAY(SELECT AS STRUCT Id, Value FROM Simple))`,
+				names: []string{"Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+					[]interface{}{int64(300), "zzz"},
+				},
+			},
+			{
+				name:  "Literal_Struct_Star",
+				sql:   `SELECT * FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')])`,
+				names: []string{"x", "y"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo"},
+					[]interface{}{int64(3), "bar"},
+				},
+			},
+			{
+				name:  "Literal_Struct_WithOffset_Star",
+				sql:   `SELECT * FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) WITH OFFSET`,
+				names: []string{"x", "y", ""},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo", int64(0)},
+					[]interface{}{int64(3), "bar", int64(1)},
+				},
+			},
+			{
+				name:  "Literal_Struct_WithOffsetAlias_Star",
+				sql:   `SELECT * FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) WITH OFFSET AS offset`,
+				names: []string{"x", "y", "offset"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo", int64(0)},
+					[]interface{}{int64(3), "bar", int64(1)},
+				},
+			},
+			{
+				name:  "Literal_Struct_WithOffsetAlias_Identifer",
+				sql:   `SELECT x, y, offset FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) WITH OFFSET AS offset`,
+				names: []string{"x", "y", "offset"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo", int64(0)},
+					[]interface{}{int64(3), "bar", int64(1)},
+				},
+			},
+			{
+				name:  "Literal_Struct_Alias_Star",
+				sql:   `SELECT * FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) AS foo WITH OFFSET`,
+				names: []string{"x", "y", ""},
+				expected: [][]interface{}{
+					[]interface{}{int64(1), "foo", int64(0)},
+					[]interface{}{int64(3), "bar", int64(1)},
+				},
+			},
+			// {
+			// 	name:  "Literal_Struct_Alias_DotStar",
+			// 	sql:   `SELECT foo.* FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) AS foo WITH OFFSET`,
+			// 	names: []string{"x", "y"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(1), "foo"},
+			// 		[]interface{}{int64(3), "bar"},
+			// 	},
+			// },
+			// {
+			// 	name:  "Literal_Struct_Alias_Identifer",
+			// 	sql:   `SELECT foo.x, foo.y, offset FROM UNNEST(ARRAY<STRUCT<x INT64, y STRING>>[(1, 'foo'), (3, 'bar')]) WITH OFFSET AS offset`,
+			// 	names: []string{"x", "y", "offset"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(1), "foo", int64(0)},
+			// 		[]interface{}{int64(3), "bar", int64(1)},
+			// 	},
+			// },
 		},
 
 		"Struct": {
@@ -1192,22 +1343,25 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "DotStar_Ident_StructField",
-				sql:  `SELECT x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x)`,
+				name:  "DotStar_Ident_StructField",
+				sql:   `SELECT x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x)`,
+				names: []string{"Id", "Value"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1), string("xx")},
 				},
 			},
 			{
-				name: "DotStar_Path_StructField",
-				sql:  `SELECT y.x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x) y`,
+				name:  "DotStar_Path_StructField",
+				sql:   `SELECT y.x.* FROM (SELECT STRUCT<Id int64, Value string>(1, "xx") x) y`,
+				names: []string{"Id", "Value"},
 				expected: [][]interface{}{
 					[]interface{}{int64(1), string("xx")},
 				},
 			},
 			{
-				name: "SelectAsStruct",
-				sql:  `SELECT ARRAY(SELECT AS STRUCT Id, Value FROM Simple)`,
+				name:  "SelectAsStruct",
+				sql:   `SELECT ARRAY(SELECT AS STRUCT Id, Value FROM Simple)`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{
 						[]*StructValue{
@@ -1228,8 +1382,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SelectAsStruct_Star",
-				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM Simple)`,
+				name:  "SelectAsStruct_Star",
+				sql:   `SELECT ARRAY(SELECT AS STRUCT * FROM Simple)`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{
 						[]*StructValue{
@@ -1250,8 +1405,9 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "SelectAsStruct_Star_SubQuery",
-				sql:  `SELECT ARRAY(SELECT AS STRUCT * FROM (SELECT Id+1, CONCAT(Value, "a") FROM Simple))`,
+				name:  "SelectAsStruct_Star_SubQuery",
+				sql:   `SELECT ARRAY(SELECT AS STRUCT * FROM (SELECT Id+1, CONCAT(Value, "a") FROM Simple))`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{
 						[]*StructValue{
@@ -1453,111 +1609,297 @@ func TestQuery(t *testing.T) {
 				code: codes.Unimplemented,
 				msg:  regexp.MustCompile(`^Unsupported query shape: A struct value cannot be returned as a column value. Rewrite the query to flatten the struct fields in the result.`),
 			},
-		},
-
-		"FromJoin": {
 			{
-				name: "From_Join_CommaJoin",
-				sql:  `SELECT * FROM Simple a, Simple b`,
-				expected: [][]interface{}{
-					[]interface{}{int64(100), "xxx", int64(100), "xxx"},
-					[]interface{}{int64(100), "xxx", int64(200), "yyy"},
-					[]interface{}{int64(100), "xxx", int64(300), "zzz"},
-					[]interface{}{int64(200), "yyy", int64(100), "xxx"},
-					[]interface{}{int64(200), "yyy", int64(200), "yyy"},
-					[]interface{}{int64(200), "yyy", int64(300), "zzz"},
-					[]interface{}{int64(300), "zzz", int64(100), "xxx"},
-					[]interface{}{int64(300), "zzz", int64(200), "yyy"},
-					[]interface{}{int64(300), "zzz", int64(300), "zzz"},
-				},
-			},
-			{
-				name: "From_Join_ON",
-				sql:  `SELECT a.* FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE b.Value = "xxx"`,
+				name: "Where_Compare_Untyped",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) = (100, "xxx")`,
 				expected: [][]interface{}{
 					[]interface{}{int64(100), "xxx"},
 				},
 			},
 			{
-				name: "From_Join_ON1",
-				sql:  `SELECT a.Id, a.Value FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE b.Value = "xxx"`,
+				name: "Where_Compare_TypedWithName",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) = STRUCT<x INT64, y STRING>(100, "xxx")`,
 				expected: [][]interface{}{
 					[]interface{}{int64(100), "xxx"},
 				},
 			},
 			{
-				name: "From_Join_ON2",
-				sql:  `SELECT a.* FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE a.Id = @id`,
-				params: map[string]Value{
-					"id": makeTestValue(200),
-				},
+				name: "Where_Compare_TypedWithName2",
+				sql:  `SELECT Id, Value FROM Simple WHERE STRUCT<x INT64, y STRING>(Id, Value) = STRUCT<x INT64, y STRING>(100, "xxx")`,
 				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			{
+				name: "Where_Compare_TypedWithoutName",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) = STRUCT<INT64, STRING>(100, "xxx")`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			{
+				name: "Where_In_Untyped",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN ((100, "xxx"), (200, "yyy"))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
 					[]interface{}{int64(200), "yyy"},
 				},
 			},
 			{
-				name: "From_Join_ON3",
-				sql:  `SELECT * FROM Simple AS a JOIN Simple AS b ON a.Id = b.Id WHERE a.Id = @id`,
-				params: map[string]Value{
-					"id": makeTestValue(200),
-				},
+				name: "Where_In_TypedWithName",
+				sql:  `SELECT Id, Value FROM Simple WHERE STRUCT<x INT64, y STRING>(Id, Value) IN ((100, "xxx"), (200, "yyy"))`,
 				expected: [][]interface{}{
-					[]interface{}{int64(200), "yyy", int64(200), "yyy"},
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
 				},
 			},
 			{
-				name: "From_Join_USING",
-				sql:  `SELECT a.* FROM Simple AS a JOIN Simple AS b USING (Id) WHERE b.Value = "xxx"`,
+				name: "Where_In_TypedWithName2",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) IN (STRUCT<x INT64, y STRING>(100, "xxx"), STRUCT<x INT64, y STRING>(200, "yyy"))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+				},
+			},
+			{
+				name: "Where_NotIn",
+				sql:  `SELECT Id, Value FROM Simple WHERE (Id, Value) NOT IN ((100, "xxx"), (200, "yyy"))`,
+				expected: [][]interface{}{
+					[]interface{}{int64(300), "zzz"},
+				},
+			},
+		},
+
+		"FromJoin": {
+			{
+				name:  "InnerJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a INNER JOIN JoinB b USING (Id)`,
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+				},
+			},
+			{
+				name:  "CrossJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a CROSS JOIN JoinB b`,
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(100), "xxx", int64(200), "bbb"},
+					[]interface{}{int64(100), "xxx", int64(400), "ddd"},
+					[]interface{}{int64(200), "yyy", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+					[]interface{}{int64(200), "yyy", int64(400), "ddd"},
+					[]interface{}{int64(300), "zzz", int64(100), "aaa"},
+					[]interface{}{int64(300), "zzz", int64(200), "bbb"},
+					[]interface{}{int64(300), "zzz", int64(400), "ddd"},
+				},
+			},
+			{
+				name:  "CommaJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a, JoinB b`,
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(100), "xxx", int64(200), "bbb"},
+					[]interface{}{int64(100), "xxx", int64(400), "ddd"},
+					[]interface{}{int64(200), "yyy", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+					[]interface{}{int64(200), "yyy", int64(400), "ddd"},
+					[]interface{}{int64(300), "zzz", int64(100), "aaa"},
+					[]interface{}{int64(300), "zzz", int64(200), "bbb"},
+					[]interface{}{int64(300), "zzz", int64(400), "ddd"},
+				},
+			},
+			{
+				name:  "LeftOuterJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a LEFT OUTER JOIN JoinB b USING (Id)`,
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+					[]interface{}{int64(300), "zzz", nil, nil},
+				},
+			},
+			{
+				name:  "RightOuterJoin",
+				sql:   `SELECT a.*, b.* FROM JoinA a Right OUTER JOIN JoinB b USING (Id)`,
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+					[]interface{}{nil, nil, int64(400), "ddd"},
+				},
+			},
+			{
+				name:  "FullOuterJoin",
+				sql:   `SELECT * FROM JoinA a FULL OUTER JOIN JoinB b USING (Id)`,
+				names: []string{"Id", "Value", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", "aaa"},
+					[]interface{}{int64(200), "yyy", "bbb"},
+					[]interface{}{int64(300), "zzz", nil},
+					[]interface{}{int64(400), nil, "ddd"},
+				},
+			},
+			{
+				name:  "FullOuterJoin_UsingMultiIdentifer",
+				sql:   `SELECT * FROM JoinA a FULL OUTER JOIN JoinB b USING (Id, Value)`,
+				names: []string{"Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+					[]interface{}{int64(300), "zzz"},
+					[]interface{}{int64(100), "aaa"},
+					[]interface{}{int64(200), "bbb"},
+					[]interface{}{int64(400), "ddd"},
+				},
+			},
+			// TODO: FullOuterJoin is simulated only for USING
+			// {
+			// 	name:  "FullOuterJoin_On",
+			// 	sql:   `SELECT * FROM JoinA a FULL OUTER JOIN JoinB b ON a.Id = b.Id`,
+			// 	names: []string{"Id", "Value", "Id", "Value"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+			// 		[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+			// 		[]interface{}{int64(300), "zzz", nil, nil},
+			// 		[]interface{}{nil, nil, int64(400), "ddd"},
+			// 	},
+			// },
+			// TODO: FullOuterJoin is simulated by using subquery with UNION, so table alias cannot be used
+			// {
+			// 	name:  "FullOuterJoin_WithColumnNames",
+			// 	sql:   `SELECT a.Id, a.Value, b.Value FROM JoinA a FULL OUTER JOIN JoinB b USING (Id)`,
+			// 	names: []string{"Id", "Value", "Value"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(100), "xxx", "aaa"},
+			// 		[]interface{}{int64(200), "yyy", "bbb"},
+			// 		[]interface{}{int64(300), "zzz", nil},
+			// 		[]interface{}{int64(400), nil, "ddd"},
+			// 	},
+			// },
+			// {
+			// 	name:  "FullOuterJoin_WithTableAlias",
+			// 	sql:   `SELECT a.*, b.* FROM JoinA a FULL OUTER JOIN JoinB b USING (Id)`,
+			// 	names: []string{"Id", "Value"},
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(100), "xxx", int64(100), "aaa"},
+			// 		[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+			// 		[]interface{}{int64(300), "zzz", nil, nil},
+			// 		[]interface{}{nil, nil, int64(400), "ddd"},
+			// 	},
+			// },
+			{
+				name:  "Cond_ON",
+				sql:   `SELECT a.* FROM JoinA AS a JOIN JoinB AS b ON a.Id = b.Id WHERE b.Value = "aaa"`,
+				names: []string{"Id", "Value"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100), "xxx"},
 				},
 			},
 			{
-				name: "From_Join_Using_ColumnNotExist",
-				sql:  `SELECT 1 FROM Simple a JOIN Simple b USING (foo)`,
+				name:  "Cond_ON1",
+				sql:   `SELECT a.Id, a.Value FROM JoinA AS a JOIN JoinB AS b ON a.Id = b.Id WHERE b.Value = "aaa"`,
+				names: []string{"Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			{
+				name: "Cond_ON2",
+				sql:  `SELECT * FROM JoinA AS a JOIN JoinB AS b ON a.Id = b.Id WHERE a.Id = @id`,
+				params: map[string]Value{
+					"id": makeTestValue(200),
+				},
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+				},
+			},
+			{
+				name: "Cond_ON3",
+				sql:  `SELECT * FROM JoinA AS a JOIN JoinB AS b ON a.Id = b.Id WHERE a.Id = @id`,
+				params: map[string]Value{
+					"id": makeTestValue(200),
+				},
+				names: []string{"Id", "Value", "Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(200), "yyy", int64(200), "bbb"},
+				},
+			},
+			{
+				name:  "Cond_Using_SingleIdentifier",
+				sql:   `SELECT * FROM JoinA AS a JOIN JoinB AS b USING (Id) WHERE b.Value = "aaa"`,
+				names: []string{"Id", "Value", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx", "aaa"},
+				},
+			},
+			{
+				name:  "Cond_Using_MultiIdentifer",
+				sql:   `SELECT * FROM JoinA AS a JOIN Simple AS b USING (Id, Value)`,
+				names: []string{"Id", "Value"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+					[]interface{}{int64(200), "yyy"},
+					[]interface{}{int64(300), "zzz"},
+				},
+			},
+			{
+				name: "Cond_Using_ColumnNotExist",
+				sql:  `SELECT 1 FROM JoinA a JOIN JoinB b USING (foo)`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Column foo in USING clause not found on left side of join`),
 			},
 			{
-				name: "From_Join_Using_ColumnNotExist_RightSide",
-				sql:  `SELECT 1 FROM Simple a JOIN CompositePrimaryKeys b USING (Value)`,
+				name: "Cond_Using_ColumnNotExist_RightSide",
+				sql:  `SELECT 1 FROM JoinA a JOIN CompositePrimaryKeys b USING (Value)`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Column Value in USING clause not found on right side of join`),
 			},
 			{
-				name: "From_Join_Using_ColumnNotExist_Subquery",
-				sql:  `SELECT 1 FROM Simple a JOIN (SELECT Value FROM Simple) b USING (Id)`,
+				name: "Cond_Using_ColumnNotExist_Subquery",
+				sql:  `SELECT 1 FROM JoinA a JOIN (SELECT Value FROM JoinB) b USING (Id)`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Column Id in USING clause not found on right side of join`),
 			},
 			{
-				name: "From_Join_Subquery_USING",
-				sql:  `SELECT a.* FROM Simple AS a JOIN (SELECT Id FROM Simple) AS b USING (Id) WHERE a.Value = "xxx"`,
+				name:     "Cond_USING_EscapeKeyword",
+				sql:      "SELECT `AND`.*, `OR`.* FROM `From` `AND` JOIN `From` `OR` USING (`ALL`)",
+				names:    []string{"ALL", "CAST", "JOIN", "ALL", "CAST", "JOIN"},
+				expected: [][]interface{}{{int64(1), int64(1), int64(1), int64(1), int64(1), int64(1)}},
+			},
+			{
+				name:  "Subquery_USING",
+				sql:   `SELECT a.* FROM JoinA AS a JOIN (SELECT Id FROM JoinB) AS b USING (Id) WHERE a.Value = "xxx"`,
+				names: []string{"Id", "Value"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100), "xxx"},
 				},
 			},
-
 			{
-				name: "From_Join_Paren",
-				sql:  `SELECT a.Id FROM (Simple AS a JOIN Simple AS b USING (Id))`,
+				name:  "From_Join_Paren",
+				sql:   `SELECT a.Id FROM (JoinA AS a JOIN JoinB AS b USING (Id))`,
+				names: []string{"Id"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100)},
 					[]interface{}{int64(200)},
-					[]interface{}{int64(300)},
 				},
 			},
-
 			{
-				name: "From_Subquery_Simple",
-				sql:  `SELECT s.* FROM (SELECT 1) s`,
+				name:  "From_Subquery_Simple",
+				sql:   `SELECT s.* FROM (SELECT 1) s`,
+				names: []string{""},
 				expected: [][]interface{}{
 					[]interface{}{int64(1)},
 				},
 			},
 			{
-				name: "From_Subquery_Table",
-				sql:  `SELECT s.* FROM (SELECT Id FROM Simple WHERE Value = "xxx") s`,
+				name:  "From_Subquery_Table",
+				sql:   `SELECT s.* FROM (SELECT Id FROM Simple WHERE Value = "xxx") s`,
+				names: []string{"Id"},
 				expected: [][]interface{}{
 					[]interface{}{int64(100)},
 				},
@@ -1610,11 +1952,20 @@ func TestQuery(t *testing.T) {
 				},
 			},
 			{
-				name: "Subquery_In_WithMultiColumns",
+				name: "SubQuery_In_WithMultiColumns",
 				sql:  `SELECT 1 WHERE 1 IN (SELECT 1, "abc")`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Subquery of type IN must have only one output column`),
 			},
+			// TODO: need to expand struct like buildUnnestView
+			// {
+			// 	name: "SubQuery_In_AsStruct",
+			// 	sql:  `SELECT Id FROM Simple WHERE (Id) IN (SELECT AS STRUCT Id From Simple WHERE Id > 100)`,
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{int64(200)},
+			// 		[]interface{}{int64(300)},
+			// 	},
+			// },
 			{
 				name: "SubQuery_EXISTS",
 				sql:  `SELECT Id FROM Simple WHERE EXISTS(SELECT 1, "xx")`,
@@ -1871,6 +2222,111 @@ func TestQuery(t *testing.T) {
 				sql:  `SELECT 1, 0.1 EXCEPT DISTINCT SELECT 1, true`,
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^Column 2 in EXCEPT DISTINCT has incompatible types: FLOAT64, BOOL`),
+			},
+		},
+
+		"BinaryOp": {
+			{
+				name: "Equal_IntInt",
+				sql:  `SELECT 1 = 1`,
+				expected: [][]interface{}{
+					[]interface{}{true},
+				},
+			},
+			{
+				name: "Equal_IntFloat1",
+				sql:  `SELECT 1 = 1.0`,
+				expected: [][]interface{}{
+					[]interface{}{true},
+				},
+			},
+			{
+				name: "Equal_IntFloat2",
+				sql:  `SELECT 1 = 1.000000000000000000000000000000000000001`,
+				expected: [][]interface{}{
+					[]interface{}{true},
+				},
+			},
+			{
+				name: "Equal_IntFloat3",
+				sql:  `SELECT 1 = 1.1`,
+				expected: [][]interface{}{
+					[]interface{}{false},
+				},
+			},
+			{
+				name: "Equal_IntString",
+				sql:  `SELECT 1 = "1"`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: INT64, STRING.`),
+			},
+			{
+				name: "Equal_IntBool",
+				sql:  `SELECT 1 = TRUE`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: INT64, BOOL.`),
+			},
+			{
+				name: "Equal_FloatString",
+				sql:  `SELECT 1.0 = "1.0"`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: FLOAT64, STRING.`),
+			},
+			{
+				name: "Equal_StringFloat",
+				sql:  `SELECT "1.0" = 1.0`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: STRING, FLOAT64.`),
+			},
+			{
+				name: "Equal_StringFloat",
+				sql:  `SELECT "1.0" = 1.0`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: STRING, FLOAT64.`),
+			},
+			{
+				name: "Equal_StringBool",
+				sql:  `SELECT "TRUE" = TRUE`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: STRING, BOOL.`),
+			},
+			{
+				name: "Equal_StringBytes",
+				sql:  `SELECT "xxx" = B'xxx'`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^No matching signature for operator = for argument types: STRING, BYTES.`),
+			},
+
+			// {
+			// 	name: "Less_StructStruct_Coerce",
+			// 	sql:  `SELECT (100) < (101)`,
+			// 	expected: [][]interface{}{
+			// 		[]interface{}{false},
+			// 	},
+			// },
+			{
+				name: "Less_StructStruct",
+				sql:  `SELECT (100, 100) < (100, 100)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Less than is not defined for arguments of type STRUCT<INT64, INT64>`),
+			},
+			{
+				name: "LessEqual_StructStruct",
+				sql:  `SELECT (100, 100) <= (100, 100)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Less than is not defined for arguments of type STRUCT<INT64, INT64>`),
+			},
+			{
+				name: "Greater_StructStruct",
+				sql:  `SELECT (100, 100) > (100, 100)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Greater than is not defined for arguments of type STRUCT<INT64, INT64>`),
+			},
+			{
+				name: "GreaterEqual_StructStruct",
+				sql:  `SELECT (100, 100) >= (100, 100)`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^Greater than is not defined for arguments of type STRUCT<INT64, INT64>`),
 			},
 		},
 
@@ -2885,62 +3341,65 @@ func TestQuery(t *testing.T) {
 			for _, tc := range tcs {
 				t.Run(tc.name, func(t *testing.T) {
 					tc := tc
-					stmt, err := (&parser.Parser{
-						Lexer: &parser.Lexer{
-							File: &token.File{FilePath: "", Buffer: tc.sql},
-						},
-					}).ParseQuery()
-					if err != nil {
-						t.Fatalf("failed to parse sql: %q %v", tc.sql, err)
-					}
-
-					// The test case expects OK, it checks respons values.
-					// otherwise it checks the error code and the error message.
-					if tc.code == codes.OK {
-						it, err := db.Query(ctx, stmt, tc.params)
+					ses := newSession(db, "foo")
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						stmt, err := (&parser.Parser{
+							Lexer: &parser.Lexer{
+								File: &token.File{FilePath: "", Buffer: tc.sql},
+							},
+						}).ParseQuery()
 						if err != nil {
-							t.Fatalf("Query failed: %v", err)
+							t.Fatalf("failed to parse sql: %q %v", tc.sql, err)
 						}
 
-						var rows [][]interface{}
-						err = it.Do(func(row []interface{}) error {
-							rows = append(rows, row)
-							return nil
-						})
-						if err != nil {
-							t.Fatalf("unexpected error in iteration: %v", err)
-						}
-
-						if diff := cmp.Diff(tc.expected, rows); diff != "" {
-							t.Errorf("(-got, +want)\n%s", diff)
-						}
-
-						// TODO: add names to all test cases. now this is optional check
-						if tc.names != nil {
-							var gotnames []string
-							for _, item := range it.ResultSet() {
-								gotnames = append(gotnames, item.Name)
+						// The test case expects OK, it checks respons values.
+						// otherwise it checks the error code and the error message.
+						if tc.code == codes.OK {
+							it, err := db.Query(ctx, tx, stmt, tc.params)
+							if err != nil {
+								t.Fatalf("Query failed: %v", err)
 							}
 
-							if diff := cmp.Diff(tc.names, gotnames); diff != "" {
-								t.Errorf("(-got, +want)\n%s", diff)
-							}
-						}
-					} else {
-						it, err := db.Query(ctx, stmt, tc.params)
-						if err == nil {
-							err = it.Do(func([]interface{}) error {
+							var rows [][]interface{}
+							err = it.Do(func(row []interface{}) error {
+								rows = append(rows, row)
 								return nil
 							})
+							if err != nil {
+								t.Fatalf("unexpected error in iteration: %v", err)
+							}
+
+							if diff := cmp.Diff(tc.expected, rows); diff != "" {
+								t.Errorf("(-got, +want)\n%s", diff)
+							}
+
+							// TODO: add names to all test cases. now this is optional check
+							if tc.names != nil {
+								var gotnames []string
+								for _, item := range it.ResultSet() {
+									gotnames = append(gotnames, item.Name)
+								}
+
+								if diff := cmp.Diff(tc.names, gotnames); diff != "" {
+									t.Errorf("(-got, +want)\n%s", diff)
+								}
+							}
+						} else {
+							it, err := db.Query(ctx, tx, stmt, tc.params)
+							if err == nil {
+								err = it.Do(func([]interface{}) error {
+									return nil
+								})
+							}
+							st := status.Convert(err)
+							if st.Code() != tc.code {
+								t.Errorf("expect code to be %v but got %v", tc.code, st.Code())
+							}
+							if !tc.msg.MatchString(st.Message()) {
+								t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tc.msg)
+							}
 						}
-						st := status.Convert(err)
-						if st.Code() != tc.code {
-							t.Errorf("expect code to be %v but got %v", tc.code, st.Code())
-						}
-						if !tc.msg.MatchString(st.Message()) {
-							t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tc.msg)
-						}
-					}
+					})
 				})
 			}
 		})

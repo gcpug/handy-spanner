@@ -33,11 +33,48 @@ import (
 )
 
 var (
-	allSchema    = []string{schemaSimple, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes}
+	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable}
 	schemaSimple = `CREATE TABLE Simple (
   Id INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
 ) PRIMARY KEY(Id);
+`
+	schemaInterleaved = `CREATE TABLE ParentTable (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+
+CREATE TABLE Interleaved (
+  InterleavedId INT64 NOT NULL,
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id, InterleavedId),
+INTERLEAVE IN PARENT ParentTable;
+CREATE INDEX InterleavedKey ON Interleaved(Id, Value), INTERLEAVE IN ParentTable 
+`
+	schemaInterleavedCascade = `CREATE TABLE ParentTableCascade (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+
+CREATE TABLE InterleavedCascade (
+  InterleavedId INT64 NOT NULL,
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id, InterleavedId),
+INTERLEAVE IN PARENT ParentTableCascade ON DELETE CASCADE;
+`
+	schemaInterleavedNoAction = `CREATE TABLE ParentTableNoAction (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+
+CREATE TABLE InterleavedNoAction (
+  InterleavedId INT64 NOT NULL,
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id, InterleavedId),
+INTERLEAVE IN PARENT ParentTableNoAction ON DELETE NO ACTION;
 `
 	schemaCompositePrimaryKeys = `CREATE TABLE CompositePrimaryKeys (
   Id INT64 NOT NULL,
@@ -84,6 +121,22 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
   ArrayDate ARRAY<DATE>,
 ) PRIMARY KEY(Id);
 `
+	schemaJoinA = `CREATE TABLE JoinA (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+`
+	schemaJoinB = `CREATE TABLE JoinB (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+`
+	schemaFromTable = "CREATE TABLE `From` (" +
+		"`ALL` INT64 NOT NULL," +
+		"`CAST` INT64 NOT NULL, " +
+		"`JOIN` INT64 NOT NULL, " +
+		") PRIMARY KEY(`ALL`); \n" +
+		"CREATE INDEX `ALL` ON `From`(`ALL`);"
 	compositePrimaryKeysKeys = []string{
 		"Id", "PKey1", "PKey2", "Error", "X", "Y", "Z",
 	}
@@ -114,6 +167,7 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
 		"ArrayFloat",
 		"ArrayDate",
 	}
+	fromTableKeys = []string{"ALL", "CAST", "JOIN"}
 )
 
 var initialData = []struct {
@@ -229,20 +283,48 @@ var initialData = []struct {
 			},
 		},
 	},
+	{
+		table: "From",
+		cols:  fromTableKeys,
+		values: [][]*structpb.Value{
+			{
+				makeStringValue("1"),
+				makeStringValue("1"),
+				makeStringValue("1"),
+			},
+		},
+	},
 }
 
-func createInitialData(t *testing.T, ctx context.Context, db Database) {
+func testRunInTransaction(t *testing.T, ses *session, fn func(*transaction)) {
+	t.Helper()
+
+	tx, err := ses.createTransaction(txReadWrite, false)
+	if err != nil {
+		t.Fatalf("createTransaction failed: %v", err)
+	}
+	defer tx.Done(TransactionCommited)
+
+	fn(tx)
+
+	if err := ses.database.Commit(tx); err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+}
+
+func createInitialData(t *testing.T, ctx context.Context, db Database, tx *transaction) {
+	t.Helper()
+
 	for _, d := range initialData {
 		for _, values := range d.values {
 			listValues := []*structpb.ListValue{
 				{Values: values},
 			}
-			if err := db.Insert(ctx, d.table, d.cols, listValues); err != nil {
+			if err := db.Insert(ctx, tx, d.table, d.cols, listValues); err != nil {
 				t.Fatalf("Insert failed: %v", err)
 			}
 		}
 	}
-
 }
 
 func makeNullValue() *structpb.Value {
@@ -538,6 +620,8 @@ func TestRead(t *testing.T) {
 		`INSERT INTO CompositePrimaryKeys VALUES(3, "bbb", 3, 0, "x1", "y3", "z")`,
 		`INSERT INTO CompositePrimaryKeys VALUES(4, "ccc", 3, 0, "x2", "y4", "z")`,
 		`INSERT INTO CompositePrimaryKeys VALUES(5, "ccc", 4, 0, "x2", "y5", "z")`,
+
+		"INSERT INTO `From` VALUES(1, 1, 1)",
 	} {
 		if _, err := db.db.ExecContext(ctx, query); err != nil {
 			t.Fatalf("Insert failed: %v", err)
@@ -721,6 +805,24 @@ func TestRead(t *testing.T) {
 				[]interface{}{int64(300), "zzz"},
 			},
 		},
+		"Simple_KeyRange_OpenClose2": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						end:         makeListValue(makeStringValue("ccc"), makeStringValue("3")),
+						startClosed: false,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(4), "ccc", int64(3)},
+			},
+		},
 		"Simple_KeyRange_CloseOpen": {
 			tbl:  "Simple",
 			cols: []string{"Id", "Value"},
@@ -756,6 +858,98 @@ func TestRead(t *testing.T) {
 			limit: 100,
 			expected: [][]interface{}{
 				[]interface{}{int64(200), "yyy"},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKey": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("2")),
+						end:         makeListValue(makeStringValue("bbb")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(3), "bbb", int64(3)},
+				[]interface{}{int64(2), "bbb", int64(2)},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKey2": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb")),
+						end:         makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(3), "bbb", int64(3)},
+				[]interface{}{int64(2), "bbb", int64(2)},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKey3": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb")),
+						end:         makeListValue(makeStringValue("bbb")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			expected: [][]interface{}{
+				[]interface{}{int64(3), "bbb", int64(3)},
+				[]interface{}{int64(2), "bbb", int64(2)},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKeyOpenClosed": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("2")),
+						end:         makeListValue(makeStringValue("bbb")),
+						startClosed: false,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(3), "bbb", int64(3)},
+			},
+		},
+		"Simple_KeyRange_LessPrimaryKeyClosedOpen": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb")),
+						end:         makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						startClosed: true,
+						endClosed:   false,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(2), "bbb", int64(2)},
 			},
 		},
 
@@ -825,27 +1019,87 @@ func TestRead(t *testing.T) {
 				[]interface{}{"ccc", int64(3), "x2", "y4", "z"},
 			},
 		},
+
+		// Escape Keywork
+		"Keyword_All": {
+			tbl:   "From",
+			idx:   "",
+			cols:  fromTableKeys,
+			ks:    &KeySet{All: true},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(1), int64(1)},
+			},
+		},
+		"Keyword_Keys": {
+			tbl:  "From",
+			idx:  "",
+			cols: fromTableKeys,
+			ks: &KeySet{
+				Keys: []*structpb.ListValue{
+					makeListValue(makeStringValue("1")),
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(1), int64(1)},
+			},
+		},
+		"Keyword_Ranges": {
+			tbl:  "From",
+			idx:  "",
+			cols: fromTableKeys,
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("1")),
+						end:         makeListValue(makeStringValue("1")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(1), int64(1)},
+			},
+		},
+		"Keyword_Index": {
+			tbl:   "From",
+			idx:   "ALL",
+			cols:  []string{"ALL"},
+			ks:    &KeySet{All: true},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1)},
+			},
+		},
 	}
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			it, err := db.Read(ctx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
 
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
-
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
 		})
 	}
 }
@@ -937,14 +1191,19 @@ func TestReadError(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			_, err := db.Read(ctx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
-			st := status.Convert(err)
-			if st.Code() != tt.code {
-				t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
-			}
-			if !tt.msg.MatchString(st.Message()) {
-				t.Errorf("unexpected error message: %v", st.Message())
-			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				_, err := db.Read(ctx, tx, tt.tbl, tt.idx, tt.cols, tt.ks, tt.limit)
+				st := status.Convert(err)
+				if st.Code() != tt.code {
+					t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
+				}
+				if !tt.msg.MatchString(st.Message()) {
+					t.Errorf("unexpected error message: %v", st.Message())
+				}
+			})
 		})
 	}
 }
@@ -1043,33 +1302,38 @@ func TestRead_FullType_Range(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ks := &KeySet{
-				Ranges: []*KeyRange{
-					{
-						start:       tt.start,
-						end:         tt.end,
-						startClosed: tt.startClosed,
-						endClosed:   tt.endClosed,
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				ks := &KeySet{
+					Ranges: []*KeyRange{
+						{
+							start:       tt.start,
+							end:         tt.end,
+							startClosed: tt.startClosed,
+							endClosed:   tt.endClosed,
+						},
 					},
-				},
-			}
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, ks, 100)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
+				}
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, ks, 100)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
 
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
-
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
 		})
 	}
 }
@@ -1293,14 +1557,32 @@ func TestInsertAndReplace(t *testing.T) {
 				},
 			},
 		},
+		"Keyword": {
+			tbl:   "From",
+			wcols: fromTableKeys,
+			values: []*structpb.Value{
+				makeStringValue("2"),
+				makeStringValue("2"),
+				makeStringValue("2"),
+			},
+			cols:  fromTableKeys,
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(2), int64(2), int64(2)},
+			},
+		},
 	}
 
 	for _, op := range []string{"INSERT", "REPLACE"} {
 		t.Run(op, func(t *testing.T) {
 			for name, tt := range table {
 				t.Run(name, func(t *testing.T) {
-					ctx := context.Background()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+
 					db := newDatabase()
+					ses := newSession(db, "foo")
+
 					for _, s := range allSchema {
 						ddls := parseDDL(t, s)
 						for _, ddl := range ddls {
@@ -1308,37 +1590,40 @@ func TestInsertAndReplace(t *testing.T) {
 						}
 					}
 
-					listValues := []*structpb.ListValue{
-						{Values: tt.values},
-					}
-
-					if op == "INSERT" {
-						if err := db.Insert(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-							t.Fatalf("Insert failed: %v", err)
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						listValues := []*structpb.ListValue{
+							{Values: tt.values},
 						}
-					} else if op == "REPLACE" {
-						if err := db.Replace(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-							t.Fatalf("Replace failed: %v", err)
+						if op == "INSERT" {
+							if err := db.Insert(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+								t.Fatalf("Insert failed: %v", err)
+							}
+						} else if op == "REPLACE" {
+							if err := db.Replace(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+								t.Fatalf("Replace failed: %v", err)
+							}
 						}
-					}
-
-					it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-					if err != nil {
-						t.Fatalf("Read failed: %v", err)
-					}
-
-					var rows [][]interface{}
-					err = it.Do(func(row []interface{}) error {
-						rows = append(rows, row)
-						return nil
 					})
-					if err != nil {
-						t.Fatalf("unexpected error in iteration: %v", err)
-					}
 
-					if diff := cmp.Diff(tt.expected, rows); diff != "" {
-						t.Errorf("(-got, +want)\n%s", diff)
-					}
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+						if err != nil {
+							t.Fatalf("Read failed: %v", err)
+						}
+
+						var rows [][]interface{}
+						err = it.Do(func(row []interface{}) error {
+							rows = append(rows, row)
+							return nil
+						})
+						if err != nil {
+							t.Fatalf("unexpected error in iteration: %v", err)
+						}
+
+						if diff := cmp.Diff(tt.expected, rows); diff != "" {
+							t.Errorf("(-got, +want)\n%s", diff)
+						}
+					})
 				})
 			}
 		})
@@ -1373,8 +1658,12 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 	limit := int64(100)
 
 	for _, op := range []string{"INSERT", "REPLACE"} {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		db := newDatabase()
+		ses := newSession(db, "foo")
+
 		for _, s := range allSchema {
 			ddls := parseDDL(t, s)
 			for _, ddl := range ddls {
@@ -1382,56 +1671,59 @@ func TestInsertOrRepace_CommitTimestamp(t *testing.T) {
 			}
 		}
 
-		listValues := []*structpb.ListValue{
-			{Values: values},
-		}
-
-		if op == "INSERT" {
-			if err := db.Insert(ctx, tbl, wcols, listValues); err != nil {
-				t.Fatalf("Insert failed: %v", err)
+		testRunInTransaction(t, ses, func(tx *transaction) {
+			listValues := []*structpb.ListValue{
+				{Values: values},
 			}
-		} else if op == "REPLACE" {
-			if err := db.Replace(ctx, tbl, wcols, listValues); err != nil {
-				t.Fatalf("Replace failed: %v", err)
+			if op == "INSERT" {
+				if err := db.Insert(ctx, tx, tbl, wcols, listValues); err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			} else if op == "REPLACE" {
+				if err := db.Replace(ctx, tx, tbl, wcols, listValues); err != nil {
+					t.Fatalf("Replace failed: %v", err)
+				}
 			}
-		}
-
-		it, err := db.Read(ctx, tbl, "", cols, &KeySet{All: true}, limit)
-		if err != nil {
-			t.Fatalf("Read failed: %v", err)
-		}
-
-		var rows [][]interface{}
-		err = it.Do(func(row []interface{}) error {
-			rows = append(rows, row)
-			return nil
 		})
-		if err != nil {
-			t.Fatalf("unexpected error in iteration: %v", err)
-		}
 
-		if len(rows) != 1 {
-			t.Fatalf("unexpected numbers of rows: %v", len(rows))
+		testRunInTransaction(t, ses, func(tx *transaction) {
+			it, err := db.Read(ctx, tx, tbl, "", cols, &KeySet{All: true}, limit)
+			if err != nil {
+				t.Fatalf("Read failed: %v", err)
+			}
 
-		}
-		row := rows[0]
+			var rows [][]interface{}
+			err = it.Do(func(row []interface{}) error {
+				rows = append(rows, row)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error in iteration: %v", err)
+			}
 
-		var a, b string
-		a = row[0].(string)
-		b = row[1].(string)
-		if got := "2012-03-04T12:34:56.123456789Z"; a != got {
-			t.Errorf("expect %v, but got %v", got, a)
-		}
+			if len(rows) != 1 {
+				t.Fatalf("unexpected numbers of rows: %v", len(rows))
 
-		timestamp, err := time.Parse(time.RFC3339Nano, b)
-		if err != nil {
-			t.Fatalf("unexpected format timestamp: %v", err)
-		}
+			}
+			row := rows[0]
 
-		d := time.Since(timestamp)
-		if d >= 3*time.Millisecond {
-			t.Fatalf("unexpected time: %v", d)
-		}
+			var a, b string
+			a = row[0].(string)
+			b = row[1].(string)
+			if got := "2012-03-04T12:34:56.123456789Z"; a != got {
+				t.Errorf("expect %v, but got %v", got, a)
+			}
+
+			timestamp, err := time.Parse(time.RFC3339Nano, b)
+			if err != nil {
+				t.Fatalf("unexpected format timestamp: %v", err)
+			}
+
+			d := time.Since(timestamp)
+			if d >= 100*time.Millisecond {
+				t.Fatalf("unexpected time: %v", d)
+			}
+		})
 	}
 }
 
@@ -1563,12 +1855,30 @@ func TestReplace(t *testing.T) {
 				},
 			},
 		},
+		"Keyword": {
+			tbl:   "From",
+			wcols: fromTableKeys,
+			values: []*structpb.Value{
+				makeStringValue("1"),
+				makeStringValue("2"),
+				makeStringValue("3"),
+			},
+			cols:  fromTableKeys,
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(2), int64(3)},
+			},
+		},
 	}
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, "foo")
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -1576,32 +1886,38 @@ func TestReplace(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
-
-			listValues := []*structpb.ListValue{
-				{Values: tt.values},
-			}
-			if err := db.Replace(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-				t.Fatalf("Replace failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				listValues := []*structpb.ListValue{
+					{Values: tt.values},
+				}
+				if err := db.Replace(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+					t.Fatalf("Replace failed: %v", err)
+				}
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -1755,12 +2071,30 @@ func TestUpdate(t *testing.T) {
 				},
 			},
 		},
+		"Keyword": {
+			tbl:   "From",
+			wcols: fromTableKeys,
+			values: []*structpb.Value{
+				makeStringValue("1"),
+				makeStringValue("2"),
+				makeStringValue("3"),
+			},
+			cols:  fromTableKeys,
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(2), int64(3)},
+			},
+		},
 	}
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, "foo")
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -1768,32 +2102,38 @@ func TestUpdate(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
-
-			listValues := []*structpb.ListValue{
-				{Values: tt.values},
-			}
-			if err := db.Update(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-				t.Fatalf("Update failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				listValues := []*structpb.ListValue{
+					{Values: tt.values},
+				}
+				if err := db.Update(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+					t.Fatalf("Update failed: %v", err)
+				}
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -1930,8 +2270,12 @@ func TestInsertOrUpdate(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, name)
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -1939,32 +2283,38 @@ func TestInsertOrUpdate(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
-
-			listValues := []*structpb.ListValue{
-				{Values: tt.values},
-			}
-			if err := db.InsertOrUpdate(ctx, tt.tbl, tt.wcols, listValues); err != nil {
-				t.Fatalf("InsertOrUpdate failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				listValues := []*structpb.ListValue{
+					{Values: tt.values},
+				}
+				if err := db.InsertOrUpdate(ctx, tx, tt.tbl, tt.wcols, listValues); err != nil {
+					t.Fatalf("InsertOrUpdate failed: %v", err)
+				}
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, tt.limit)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -2075,12 +2425,49 @@ func TestDelete(t *testing.T) {
 				[]interface{}{"ccc", int64(3)},
 			},
 		},
+
+		// Escape keywords
+		"Keyword_All": {
+			tbl:      "From",
+			ks:       &KeySet{All: true},
+			cols:     []string{"ALL"},
+			expected: nil,
+		},
+		"Keyword_Keys": {
+			tbl: "From",
+			ks: &KeySet{
+				Keys: []*structpb.ListValue{
+					makeListValue(makeStringValue("1")),
+				},
+			},
+			cols:     []string{"ALL"},
+			expected: nil,
+		},
+		"Keyword_Ranges": {
+			tbl: "From",
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("1")),
+						end:         makeListValue(makeStringValue("1")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			cols:     []string{"ALL"},
+			expected: nil,
+		},
 	}
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, name)
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -2100,33 +2487,39 @@ func TestDelete(t *testing.T) {
 				`INSERT INTO CompositePrimaryKeys VALUES(3, "bbb", 3, 0, "x1", "y3", "z")`,
 				`INSERT INTO CompositePrimaryKeys VALUES(4, "ccc", 3, 0, "x2", "y4", "z")`,
 				`INSERT INTO CompositePrimaryKeys VALUES(5, "ccc", 4, 0, "x2", "y5", "z")`,
+
+				"INSERT INTO `From` VALUES(1, 1, 1)",
 			} {
 				if _, err := db.db.ExecContext(ctx, query); err != nil {
 					t.Fatalf("Insert failed: %v", err)
 				}
 			}
 
-			if err := db.Delete(ctx, tt.tbl, tt.ks); err != nil {
-				t.Fatalf("Update failed: %v", err)
-			}
-
-			it, err := db.Read(ctx, tt.tbl, "", tt.cols, &KeySet{All: true}, 100)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
-
-			var rows [][]interface{}
-			err = it.Do(func(row []interface{}) error {
-				rows = append(rows, row)
-				return nil
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Delete(ctx, tx, tt.tbl, tt.ks); err != nil {
+					t.Fatalf("Delete failed: %v", err)
+				}
 			})
-			if err != nil {
-				t.Fatalf("unexpected error in iteration: %v", err)
-			}
 
-			if diff := cmp.Diff(tt.expected, rows); diff != "" {
-				t.Errorf("(-got, +want)\n%s", diff)
-			}
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.tbl, "", tt.cols, &KeySet{All: true}, 100)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -2343,8 +2736,12 @@ func TestMutationError(t *testing.T) {
 
 	for name, tt := range table {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
 			db := newDatabase()
+			ses := newSession(db, "foo")
+
 			for _, s := range allSchema {
 				ddls := parseDDL(t, s)
 				for _, ddl := range ddls {
@@ -2352,7 +2749,9 @@ func TestMutationError(t *testing.T) {
 				}
 			}
 
-			createInitialData(t, ctx, db)
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
+			})
 
 			for _, op := range tt.op {
 				t.Run(op, func(t *testing.T) {
@@ -2360,28 +2759,1262 @@ func TestMutationError(t *testing.T) {
 						{Values: tt.values},
 					}
 
-					var err error
-					switch op {
-					case "INSERT":
-						err = db.Insert(ctx, tt.tbl, tt.wcols, listValues)
-					case "UPDATE":
-						err = db.Update(ctx, tt.tbl, tt.wcols, listValues)
-					case "UPSERT":
-						err = db.InsertOrUpdate(ctx, tt.tbl, tt.wcols, listValues)
-					case "REPLACE":
-						err = db.Replace(ctx, tt.tbl, tt.wcols, listValues)
-					default:
-						t.Fatalf("unexpected op: %v", op)
+					testRunInTransaction(t, ses, func(tx *transaction) {
+						var err error
+						switch op {
+						case "INSERT":
+							err = db.Insert(ctx, tx, tt.tbl, tt.wcols, listValues)
+						case "UPDATE":
+							err = db.Update(ctx, tx, tt.tbl, tt.wcols, listValues)
+						case "UPSERT":
+							err = db.InsertOrUpdate(ctx, tx, tt.tbl, tt.wcols, listValues)
+						case "REPLACE":
+							err = db.Replace(ctx, tx, tt.tbl, tt.wcols, listValues)
+						default:
+							t.Fatalf("unexpected op: %v", op)
+						}
+						st := status.Convert(err)
+						if st.Code() != tt.code {
+							t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
+						}
+						if !tt.msg.MatchString(st.Message()) {
+							t.Errorf("unexpected error message: %v", st.Message())
+						}
+					})
+				})
+			}
+		})
+	}
+}
+
+func TestExecute(t *testing.T) {
+	table := map[string]struct {
+		sql    string
+		params map[string]Value
+
+		code          codes.Code
+		msg           *regexp.Regexp
+		expectedCount int64
+		table         string
+		cols          []string
+		expected      [][]interface{}
+	}{
+		"Simple_Update": {
+			sql:           `UPDATE Simple SET Value = "zzz" WHERE Id = 100`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "zzz"},
+			},
+		},
+		// TODO
+		// "Simple_Update_Alias": {
+		// 	sql:           `UPDATE Simple AS s SET s.Value = "zzz" WHERE s.Id = 100`,
+		// 	expectedCount: 1,
+		// 	table:         "Simple",
+		// 	cols:          []string{"Id", "Value"},
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(100), "zzz"},
+		// 	},
+		// },
+		"Simple_Update_ParamInWhere": {
+			sql: `UPDATE Simple SET Value = "zzz" WHERE Id = @id`,
+			params: map[string]Value{
+				"id": makeTestValue(100),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "zzz"},
+			},
+		},
+		"Simple_Update_ParamInValue": {
+			sql: `UPDATE Simple SET Value = @value WHERE Id = 100`,
+			params: map[string]Value{
+				"value": makeTestValue("zzz"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "zzz"},
+			},
+		},
+		"Simple_Update_MultipleItems": {
+			sql:  `UPDATE Simple SET Value = "zzz", Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems2": {
+			sql:  `UPDATE Simple AS s SET s.Value = "zzz", Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems3": {
+			sql:  `UPDATE Simple AS s SET Value = "zzz", s.Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item s.Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems4": {
+			sql:  `UPDATE Simple AS s SET s.Value = "zzz", s.Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item s.Value assigned more than once`),
+		},
+		"Simple_Update_MultipleItems5": {
+			sql:  `UPDATE Simple SET Simple.Value = "zzz", Value = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Update item Value assigned more than once`),
+		},
+		"Simple_Update_ColumnNotFound": {
+			sql:  `UPDATE Simple SET Valu = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Unrecognized name: Valu`),
+		},
+		"Simple_Update_PathNotFound": {
+			sql:  `UPDATE Simple AS s SET s.Valu = "zzz" WHERE Id = 100`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Name Valu not found inside s`),
+		},
+		"EscapeKeyword_Update": {
+			sql:           "UPDATE `From` SET `CAST` = 2 WHERE `ALL` = 1",
+			expectedCount: 1,
+			table:         "From",
+			cols:          fromTableKeys,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(2), int64(1)},
+			},
+		},
+		// TODO
+		// "EscapeKeyword_Update_Alias": {
+		// 	sql:           "UPDATE `From` AS `AND` SET `AND`.`CAST` = 2 WHERE `ALL` = 1",
+		// 	expectedCount: 1,
+		// 	table:         "From",
+		// 	cols:          fromTableKeys,
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(1), int64(2), int64(1)},
+		// 	},
+		// },
+		"Simple_Insert": {
+			sql:           `INSERT INTO Simple (Id, Value) VALUES(101, "yyy")`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(101), "yyy"},
+			},
+		},
+		"Simple_Insert_Param": {
+			sql: `INSERT INTO Simple (Id, Value) VALUES(@a, @b)`,
+			params: map[string]Value{
+				"a": makeTestValue("1000"),
+				"b": makeTestValue("bbbb"),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(1000), "bbbb"},
+			},
+		},
+		"Simple_InsertMulti": {
+			sql:           `INSERT INTO Simple (Id, Value) VALUES(101, "yyy"), (102, "zzz")`,
+			expectedCount: 2,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(101), "yyy"},
+				[]interface{}{int64(102), "zzz"},
+			},
+		},
+		"Simple_Insert_Query": {
+			sql:           `INSERT INTO Simple (Id, Value) SELECT FTInt+1, PKey FROM FullTypes`,
+			expectedCount: 2,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(101), "xxx"},
+				[]interface{}{int64(102), "yyy"},
+			},
+		},
+		"Simple_Insert_Subquery": {
+			sql:           `INSERT INTO Simple (Id, Value) VALUES(200, (SELECT PKey FROM FullTypes WHERE PKey = "xxx"))`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+				[]interface{}{int64(200), "xxx"},
+			},
+		},
+		// "Simple_Insert_Unnest": {
+		// 	sql: `INSERT INTO Simple (Id, Value) SELECT * FROM UNNEST ([(200, "y"), (300, "z")])`,
+
+		// 	expectedCount: 2,
+		// 	table:         "Simple",
+		// 	cols:          []string{"Id", "Value"},
+		// 	expected: [][]interface{}{
+		// 		[]interface{}{int64(100), "xxx"},
+		// 		[]interface{}{int64(200), "y"},
+		// 		[]interface{}{int64(300), "z"},
+		// 	},
+		// },
+		"Simple_Insert_NonNullValue": {
+			sql:  `INSERT INTO Simple (Id) VALUES(101)`,
+			code: codes.FailedPrecondition,
+			msg:  regexp.MustCompile(`A new row in table Simple does not specify a non-null value for these NOT NULL columns: Value`),
+		},
+		"Simple_Insert_MultipleKeys": {
+			sql:  `INSERT INTO Simple (Id, Id, Value) VALUES(101, 102, "x")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`INSERT has columns with duplicate name: Id`),
+		},
+		"Simple_Insert_WrongColumnCount": {
+			sql:  `INSERT INTO Simple (Id, Value) VALUES(101, 102, "x")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Inserted row has wrong column count; Has 3, expected 2`),
+		},
+		"Simple_Insert_ColumnNotFound": {
+			sql:  `INSERT INTO Simple (Id, Valueee) VALUES(101, "x")`,
+			code: codes.InvalidArgument,
+			msg:  regexp.MustCompile(`Column Valueee is not present in table Simple`),
+		},
+		"EscapeKeyword_Insert": {
+			sql:           "INSERT INTO `From` (`ALL`, `CAST`, `JOIN`) VALUES(2, 2, 2)",
+			expectedCount: 1,
+			table:         "From",
+			cols:          fromTableKeys,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), int64(1), int64(1)},
+				[]interface{}{int64(2), int64(2), int64(2)},
+			},
+		},
+		"Simple_Delete": {
+			sql:           `DELETE FROM Simple WHERE Id = 100`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected:      nil,
+		},
+		"Simple_Delete_SubQuery": {
+			sql:           `DELETE FROM Simple WHERE Id IN (SELECT Id FROM Simple)`,
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected:      nil,
+		},
+		"Simple_Delete_Param": {
+			sql: `DELETE FROM Simple WHERE Id = @id`,
+			params: map[string]Value{
+				"id": makeTestValue(100),
+			},
+			expectedCount: 1,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected:      nil,
+		},
+		"Simple_Delete_NotExist": {
+			sql:           `DELETE FROM Simple WHERE Id = 10000`,
+			expectedCount: 0,
+			table:         "Simple",
+			cols:          []string{"Id", "Value"},
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "xxx"},
+			},
+		},
+		"EscapeKeyword_Delete": {
+			sql:           "DELETE FROM `From` WHERE `ALL` = 1",
+			expectedCount: 1,
+			table:         "From",
+			cols:          fromTableKeys,
+			expected:      nil,
+		},
+	}
+
+	for name, tt := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			stmt, err := (&parser.Parser{
+				Lexer: &parser.Lexer{
+					File: &token.File{FilePath: "", Buffer: tt.sql},
+				},
+			}).ParseDML()
+			if err != nil {
+				t.Fatalf("failed to parse DML: %q %v", tt.sql, err)
+			}
+
+			db := newDatabase()
+			ses := newSession(db, "foo")
+
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				createInitialData(t, ctx, db, tx)
+			})
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				r, err := db.Execute(ctx, tx, stmt, tt.params)
+				if tt.code == codes.OK {
+					if err != nil {
+						t.Fatalf("Execute failed: %v", err)
 					}
+					if r != tt.expectedCount {
+						t.Fatalf("expect count to be %v, but got %v", tt.expectedCount, r)
+					}
+				} else {
 					st := status.Convert(err)
 					if st.Code() != tt.code {
 						t.Errorf("expect code to be %v but got %v", tt.code, st.Code())
 					}
 					if !tt.msg.MatchString(st.Message()) {
-						t.Errorf("unexpected error message: %v", st.Message())
+						t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tt.msg)
 					}
+				}
+			})
+
+			if tt.code != codes.OK {
+				return
+			}
+
+			// check database values
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.table, "", tt.cols, &KeySet{All: true}, 100)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if diff := cmp.Diff(tt.expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			})
+		})
+	}
+}
+
+func TestInterleaveInsert(t *testing.T) {
+	type tableConfig struct {
+		tbl      string
+		wcols    []string
+		values   []*structpb.Value
+		cols     []string
+		limit    int64
+		expected [][]interface{}
+	}
+
+	table := map[string]struct {
+		child        *tableConfig
+		parent       *tableConfig
+		expectsError bool
+	}{
+		"InsertWithoutParent": {
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:     []string{"InterleavedId", "Id", "Value"},
+				limit:    100,
+				expected: nil,
+			},
+			expectsError: true,
+		},
+		"InsertWithParent": {
+			parent: &tableConfig{
+				tbl:   "ParentTable",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"InterleavedId", "Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), int64(100), "xxx"},
+				},
+			},
+			expectsError: false,
+		},
+		"InsertWithoutParent(Cascade)": {
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:     []string{"InterleavedId", "Id", "Value"},
+				limit:    100,
+				expected: nil,
+			},
+			expectsError: true,
+		},
+		"InsertWithParent(Cascade)": {
+			parent: &tableConfig{
+				tbl:   "ParentTable",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"InterleavedId", "Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), int64(100), "xxx"},
+				},
+			},
+			expectsError: false,
+		},
+		"InsertWithoutParent(NoAction)": {
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:     []string{"InterleavedId", "Id", "Value"},
+				limit:    100,
+				expected: nil,
+			},
+			expectsError: true,
+		},
+		"InsertWithParent(NoAction)": {
+			parent: &tableConfig{
+				tbl:   "ParentTable",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), "xxx"},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"InterleavedId", "Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					[]interface{}{int64(100), int64(100), "xxx"},
+				},
+			},
+			expectsError: false,
+		},
+	}
+
+	for name, tt := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			db := newDatabase()
+			ses := newSession(db, "foo")
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			if tt.parent != nil {
+				testRunInTransaction(t, ses, func(tx *transaction) {
+					testInsertInterleaveHelper(t, ctx, db, tx, tt.parent.tbl, tt.parent.cols, tt.parent.wcols, tt.parent.values, tt.parent.limit, tt.parent.expected)
 				})
 			}
+
+			if tt.expectsError {
+				listValues := []*structpb.ListValue{
+					{Values: tt.child.values},
+				}
+				testRunInTransaction(t, ses, func(tx *transaction) {
+					if err := db.Insert(ctx, tx, tt.child.tbl, tt.child.wcols, listValues); err == nil {
+						t.Fatalf("Insert succeeded even though it should fail: %v", err)
+					}
+				})
+				return
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				testInsertInterleaveHelper(t, ctx, db, tx, tt.child.tbl, tt.child.cols, tt.child.wcols, tt.child.values, tt.child.limit, tt.child.expected)
+			})
+		})
+	}
+}
+
+func testInsertInterleaveHelper(
+	t *testing.T,
+	ctx context.Context,
+	db *database,
+	tx *transaction,
+	tbl string,
+	cols []string,
+	wcols []string,
+	values []*structpb.Value,
+	limit int64,
+	expected [][]interface{},
+) {
+	listValues := []*structpb.ListValue{
+		{Values: values},
+	}
+
+	if err := db.Insert(ctx, tx, tbl, wcols, listValues); err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	it, err := db.Read(ctx, tx, tbl, "", cols, &KeySet{All: true}, limit)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	var rows [][]interface{}
+	err = it.Do(func(row []interface{}) error {
+		rows = append(rows, row)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error in iteration: %v", err)
+	}
+
+	if diff := cmp.Diff(expected, rows); diff != "" {
+		t.Errorf("(-got, +want)\n%s", diff)
+	}
+}
+
+func TestInterleaveDeleteParent(t *testing.T) {
+	type tableConfig struct {
+		tbl    string
+		wcols  []string
+		values []*structpb.Value
+		cols   []string
+		ks     *KeySet
+	}
+
+	table := map[string]struct {
+		child              *tableConfig
+		parent             *tableConfig
+		expectsDeleteError bool
+	}{
+		"DeleteDefault": {
+			parent: &tableConfig{
+				tbl:   "ParentTable",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(makeStringValue("100")),
+					},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "Interleaved",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"InterleavedId", "Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(
+							makeStringValue("100"),
+							makeStringValue("100"),
+						),
+					},
+				},
+			},
+			expectsDeleteError: true,
+		},
+		"DeleteCascade": {
+			parent: &tableConfig{
+				tbl:   "ParentTableCascade",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(makeStringValue("100")),
+					},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "InterleavedCascade",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"InterleavedId", "Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(
+							makeStringValue("100"),
+							makeStringValue("100"),
+						),
+					},
+				},
+			},
+			expectsDeleteError: false,
+		},
+		"DeleteNoAction": {
+			parent: &tableConfig{
+				tbl:   "ParentTableNoAction",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(makeStringValue("100")),
+					},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "InterleavedNoAction",
+				wcols: []string{"InterleavedId", "Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("100"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"InterleavedId", "Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(
+							makeStringValue("100"),
+							makeStringValue("100"),
+						),
+					},
+				},
+			},
+			expectsDeleteError: true,
+		},
+	}
+
+	for name, tt := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			db := newDatabase()
+			ses := newSession(db, "foo")
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			// Insert data
+
+			parentListValues := []*structpb.ListValue{
+				{Values: tt.parent.values},
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Insert(ctx, tx, tt.parent.tbl, tt.parent.wcols, parentListValues); err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			})
+
+			listValues := []*structpb.ListValue{
+				{Values: tt.child.values},
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Insert(ctx, tx, tt.child.tbl, tt.child.wcols, listValues); err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			})
+
+			// Delete parent entry
+
+			if tt.expectsDeleteError {
+				testRunInTransaction(t, ses, func(tx *transaction) {
+					if err := db.Delete(ctx, tx, tt.parent.tbl, tt.parent.ks); err == nil {
+						t.Fatalf("Delete parent succeeded even though it should fail: %v", err)
+					}
+				})
+				return
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Delete(ctx, tx, tt.parent.tbl, tt.parent.ks); err != nil {
+					t.Fatalf("Delete parent failed: %v", err)
+				}
+			})
+
+			// Try to read child entry
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.child.tbl, "", tt.child.cols, tt.child.ks, 1)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if rows != nil {
+					t.Fatalf("Child did not get deleted with parent")
+				}
+			})
+		})
+	}
+}
+
+func TestInformationSchema(t *testing.T) {
+	ctx := context.Background()
+	db := newDatabase()
+	for _, s := range allSchema {
+		ddls := parseDDL(t, s)
+		for _, ddl := range ddls {
+			db.ApplyDDL(ctx, ddl)
+		}
+	}
+
+	table := []struct {
+		name     string
+		sql      string
+		params   map[string]Value
+		expected [][]interface{}
+		names    []string
+		code     codes.Code
+		msg      *regexp.Regexp
+	}{
+		{
+			name:  "Schemata1",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.SCHEMATA WHERE EFFECTIVE_TIMESTAMP IS NULL`,
+			names: []string{"CATALOG_NAME", "SCHEMA_NAME", "EFFECTIVE_TIMESTAMP"},
+			expected: [][]interface{}{
+				[]interface{}{"", "INFORMATION_SCHEMA", nil},
+				[]interface{}{"", "SPANNER_SYS", nil},
+			},
+		},
+		{
+			name:  "Schemata2",
+			sql:   `SELECT CATALOG_NAME, SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE EFFECTIVE_TIMESTAMP IS NOT NULL`,
+			names: []string{"CATALOG_NAME", "SCHEMA_NAME"},
+			expected: [][]interface{}{
+				[]interface{}{"", ""},
+			},
+		},
+		{
+			name:  "Tables_Reserved",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA != "" ORDER BY TABLE_SCHEMA, TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "PARENT_TABLE_NAME", "ON_DELETE_ACTION", "SPANNER_STATE"},
+			expected: [][]interface{}{
+				[]interface{}{"", "INFORMATION_SCHEMA", "COLUMNS", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "INDEXES", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "SCHEMATA", nil, nil, nil},
+				// []interface{}{"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "TABLES", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOP_10MINUTE", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOP_HOUR", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOP_MINUTE", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOTAL_10MINUTE", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOTAL_HOUR", nil, nil, nil},
+				// []interface{}{"", "SPANNER_SYS", "QUERY_STATS_TOTAL_MINUTE", nil, nil, nil},
+			},
+		},
+		{
+			name:  "Tables_NonReserved",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = "" ORDER BY TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "PARENT_TABLE_NAME", "ON_DELETE_ACTION", "SPANNER_STATE"},
+			expected: [][]interface{}{
+				[]interface{}{"", "", "ArrayTypes", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "CompositePrimaryKeys", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "From", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "FullTypes", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "Interleaved", "ParentTable", nil, "COMMITTED"},
+				[]interface{}{"", "", "InterleavedCascade", "ParentTableCascade", "CASCADE", "COMMITTED"},
+				[]interface{}{"", "", "InterleavedNoAction", "ParentTableNoAction", "NO ACTION", "COMMITTED"},
+				[]interface{}{"", "", "JoinA", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "JoinB", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ParentTable", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ParentTableCascade", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ParentTableNoAction", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "Simple", nil, nil, "COMMITTED"},
+			},
+		},
+		{
+			name:  "Columns_Reserved",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA != "" ORDER BY TABLE_NAME, ORDINAL_POSITION`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "COLUMN_NAME", "ORDINAL_POSITION", "COLUMN_DEFAULT", "DATA_TYPE", "IS_NULLABLE", "SPANNER_TYPE"},
+			expected: [][]interface{}{
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "COLUMN_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "ORDINAL_POSITION", int64(5), nil, nil, "NO", "INT64"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "COLUMN_DEFAULT", int64(6), nil, nil, "YES", "BYTES(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "DATA_TYPE", int64(7), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "IS_NULLABLE", int64(8), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "SPANNER_TYPE", int64(9), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "COLUMN_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "OPTION_NAME", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "OPTION_TYPE", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "OPTION_VALUE", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "COLUMN_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_CATALOG", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_SCHEMA", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_NAME", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "CONSTRAINT_CATALOG", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "CONSTRAINT_SCHEMA", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "CONSTRAINT_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "INDEX_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "INDEX_TYPE", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PARENT_TABLE_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "IS_UNIQUE", int64(7), nil, nil, "NO", "BOOL"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "IS_NULL_FILTERED", int64(8), nil, nil, "NO", "BOOL"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "INDEX_STATE", int64(9), nil, nil, "YES", "STRING(100)"}, // TODO
+				{"", "INFORMATION_SCHEMA", "INDEXES", "SPANNER_IS_MANAGED", int64(10), nil, nil, "NO", "BOOL"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "INDEX_NAME", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "INDEX_TYPE", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "COLUMN_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "ORDINAL_POSITION", int64(7), nil, nil, "YES", "INT64"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "COLUMN_ORDERING", int64(8), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "IS_NULLABLE", int64(9), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "SPANNER_TYPE", int64(10), nil, nil, "YES", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "CONSTRAINT_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "CONSTRAINT_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "CONSTRAINT_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "TABLE_CATALOG", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "TABLE_SCHEMA", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "TABLE_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "COLUMN_NAME", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "ORDINAL_POSITION", int64(8), nil, nil, "NO", "INT64"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "POSITION_IN_UNIQUE_CONSTRAINT", int64(9), nil, nil, "YES", "INT64"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_CATALOG", int64(4), nil, nil, "YES", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_SCHEMA", int64(5), nil, nil, "YES", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_NAME", int64(6), nil, nil, "YES", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "MATCH_OPTION", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UPDATE_RULE", int64(8), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "DELETE_RULE", int64(9), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "SPANNER_STATE", int64(10), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "CATALOG_NAME", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "SCHEMA_NAME", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "EFFECTIVE_TIMESTAMP", int64(3), nil, nil, "YES", "INT64"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_CATALOG", int64(4), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_SCHEMA", int64(5), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_NAME", int64(6), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_TYPE", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "IS_DEFERRABLE", int64(8), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "INITIALLY_DEFERRED", int64(9), nil, nil, "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "ENFORCED", int64(10), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "TABLE_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "TABLE_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "TABLE_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PARENT_TABLE_NAME", int64(4), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "ON_DELETE_ACTION", int64(5), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "SPANNER_STATE", int64(6), nil, nil, "YES", "STRING(MAX)"},
+			},
+		},
+		{
+			name:  "Columns_NonReserved",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "" ORDER BY TABLE_NAME, ORDINAL_POSITION`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "COLUMN_NAME", "ORDINAL_POSITION", "COLUMN_DEFAULT", "DATA_TYPE", "IS_NULLABLE", "SPANNER_TYPE"},
+			expected: [][]interface{}{
+				{"", "", "ArrayTypes", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ArrayTypes", "ArrayString", int64(2), nil, nil, "YES", "ARRAY<STRING(32)>"},
+				{"", "", "ArrayTypes", "ArrayBool", int64(3), nil, nil, "YES", "ARRAY<BOOL>"},
+				{"", "", "ArrayTypes", "ArrayBytes", int64(4), nil, nil, "YES", "ARRAY<BYTES(32)>"},
+				{"", "", "ArrayTypes", "ArrayTimestamp", int64(5), nil, nil, "YES", "ARRAY<TIMESTAMP>"},
+				{"", "", "ArrayTypes", "ArrayInt", int64(6), nil, nil, "YES", "ARRAY<INT64>"},
+				{"", "", "ArrayTypes", "ArrayFloat", int64(7), nil, nil, "YES", "ARRAY<FLOAT64>"},
+				{"", "", "ArrayTypes", "ArrayDate", int64(8), nil, nil, "YES", "ARRAY<DATE>"},
+				{"", "", "CompositePrimaryKeys", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "CompositePrimaryKeys", "PKey1", int64(2), nil, nil, "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "PKey2", int64(3), nil, nil, "NO", "INT64"},
+				{"", "", "CompositePrimaryKeys", "Error", int64(4), nil, nil, "NO", "INT64"},
+				{"", "", "CompositePrimaryKeys", "X", int64(5), nil, nil, "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "Y", int64(6), nil, nil, "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "Z", int64(7), nil, nil, "NO", "STRING(32)"},
+				{"", "", "From", "ALL", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "From", "CAST", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "From", "JOIN", int64(3), nil, nil, "NO", "INT64"},
+				{"", "", "FullTypes", "PKey", int64(1), nil, nil, "NO", "STRING(32)"},
+				{"", "", "FullTypes", "FTString", int64(2), nil, nil, "NO", "STRING(32)"},
+				{"", "", "FullTypes", "FTStringNull", int64(3), nil, nil, "YES", "STRING(32)"},
+				{"", "", "FullTypes", "FTBool", int64(4), nil, nil, "NO", "BOOL"},
+				{"", "", "FullTypes", "FTBoolNull", int64(5), nil, nil, "YES", "BOOL"},
+				{"", "", "FullTypes", "FTBytes", int64(6), nil, nil, "NO", "BYTES(32)"},
+				{"", "", "FullTypes", "FTBytesNull", int64(7), nil, nil, "YES", "BYTES(32)"},
+				{"", "", "FullTypes", "FTTimestamp", int64(8), nil, nil, "NO", "TIMESTAMP"},
+				{"", "", "FullTypes", "FTTimestampNull", int64(9), nil, nil, "YES", "TIMESTAMP"},
+				{"", "", "FullTypes", "FTInt", int64(10), nil, nil, "NO", "INT64"},
+				{"", "", "FullTypes", "FTIntNull", int64(11), nil, nil, "YES", "INT64"},
+				{"", "", "FullTypes", "FTFloat", int64(12), nil, nil, "NO", "FLOAT64"},
+				{"", "", "FullTypes", "FTFloatNull", int64(13), nil, nil, "YES", "FLOAT64"},
+				{"", "", "FullTypes", "FTDate", int64(14), nil, nil, "NO", "DATE"},
+				{"", "", "FullTypes", "FTDateNull", int64(15), nil, nil, "YES", "DATE"},
+				{"", "", "Interleaved", "InterleavedId", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "Interleaved", "Id", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "Interleaved", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "InterleavedCascade", "InterleavedId", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "InterleavedCascade", "Id", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "InterleavedCascade", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "InterleavedNoAction", "InterleavedId", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "InterleavedNoAction", "Id", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "InterleavedNoAction", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "JoinA", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "JoinA", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "JoinB", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "JoinB", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ParentTable", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ParentTable", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ParentTableCascade", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ParentTableCascade", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ParentTableNoAction", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ParentTableNoAction", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "Simple", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "Simple", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+			},
+		},
+		{
+			name:  "ColumnOptions",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.COLUMN_OPTIONS ORDER BY TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "COLUMN_NAME", "OPTION_NAME", "OPTION_TYPE", "OPTION_VALUE"},
+			expected: [][]interface{}{
+				{"", "", "FullTypes", "FTTimestampNull", "allow_commit_timestamp", "BOOL", "TRUE"},
+			},
+		},
+		{
+			name:  "Indexes_ReservedTables",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA != "" ORDER BY TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "PARENT_TABLE_NAME", "IS_UNIQUE", "IS_NULL_FILTERED", "INDEX_STATE", "SPANNER_IS_MANAGED"},
+			expected: [][]interface{}{
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+			},
+		},
+		{
+			name:  "Indexes_NonReservedTables_PrimaryKey",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = "" AND INDEX_TYPE = "PRIMARY_KEY" ORDER BY TABLE_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "PARENT_TABLE_NAME", "IS_UNIQUE", "IS_NULL_FILTERED", "INDEX_STATE", "SPANNER_IS_MANAGED"},
+			expected: [][]interface{}{
+				{"", "", "ArrayTypes", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "From", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "InterleavedCascade", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "InterleavedNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "JoinA", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "JoinB", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ParentTable", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ParentTableCascade", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ParentTableNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "Simple", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+			},
+		},
+		{
+			name:  "Indexes_NonReservedTables_Others",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = "" AND INDEX_TYPE != "PRIMARY_KEY" ORDER BY TABLE_NAME, INDEX_NAME`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "PARENT_TABLE_NAME", "IS_UNIQUE", "IS_NULL_FILTERED", "INDEX_STATE", "SPANNER_IS_MANAGED"},
+			expected: [][]interface{}{
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByError", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByXY", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "From", "ALL", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "FullTypes", "FullTypesByFTString", "INDEX", "", true, false, "READ_WRITE", false},
+				{"", "", "FullTypes", "FullTypesByIntDate", "INDEX", "", true, false, "READ_WRITE", false},
+				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "FullTypes", "FullTypesByTimestamp", "INDEX", "", false, false, "READ_WRITE", false},
+				{"", "", "Interleaved", "InterleavedKey", "INDEX", "ParentTable", false, false, "READ_WRITE", false},
+			},
+		},
+		{
+			name:  "IndexColumns_ReservedTables",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEX_COLUMNS WHERE TABLE_SCHEMA != "" ORDER BY TABLE_NAME, INDEX_NAME, ORDINAL_POSITION`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "COLUMN_NAME", "ORDINAL_POSITION", "COLUMN_ORDERING", "IS_NULLABLE", "SPANNER_TYPE"},
+			expected: [][]interface{}{
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "OPTION_NAME", int64(5), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(4), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(5), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(6), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "INDEX_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "INDEX_TYPE", int64(5), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "INDEX_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "INDEX_TYPE", int64(5), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(6), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "CATALOG_NAME", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "SCHEMA_NAME", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+			},
+		},
+		{
+			name:  "IndexColumns_NonReservedTables",
+			sql:   `SELECT * FROM INFORMATION_SCHEMA.INDEX_COLUMNS WHERE TABLE_SCHEMA = "" ORDER BY TABLE_NAME, INDEX_NAME, ORDINAL_POSITION`,
+			names: []string{"TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "INDEX_NAME", "INDEX_TYPE", "COLUMN_NAME", "ORDINAL_POSITION", "COLUMN_ORDERING", "IS_NULLABLE", "SPANNER_TYPE"},
+			expected: [][]interface{}{
+				{"", "", "ArrayTypes", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByError", "INDEX", "Error", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByXY", "INDEX", "Z", nil, nil, "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByXY", "INDEX", "X", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByXY", "INDEX", "Y", int64(2), "DESC", "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "PKey1", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "PKey2", int64(2), "DESC", "NO", "INT64"},
+				{"", "", "From", "ALL", "INDEX", "ALL", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "From", "PRIMARY_KEY", "PRIMARY_KEY", "ALL", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "FullTypes", "FullTypesByFTString", "INDEX", "FTString", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "FullTypes", "FullTypesByIntDate", "INDEX", "FTInt", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "FullTypes", "FullTypesByIntDate", "INDEX", "FTDate", int64(2), "ASC", "NO", "DATE"},
+				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "FTInt", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "FTTimestamp", int64(2), "ASC", "NO", "TIMESTAMP"},
+				{"", "", "FullTypes", "FullTypesByTimestamp", "INDEX", "FTTimestamp", int64(1), "ASC", "NO", "TIMESTAMP"},
+				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "PKey", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "Interleaved", "InterleavedKey", "INDEX", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "Interleaved", "InterleavedKey", "INDEX", "Value", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "InterleavedId", int64(2), "ASC", "NO", "INT64"},
+				{"", "", "InterleavedCascade", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "InterleavedCascade", "PRIMARY_KEY", "PRIMARY_KEY", "InterleavedId", int64(2), "ASC", "NO", "INT64"},
+				{"", "", "InterleavedNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "InterleavedNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "InterleavedId", int64(2), "ASC", "NO", "INT64"},
+				{"", "", "JoinA", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "JoinB", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ParentTable", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ParentTableCascade", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ParentTableNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "Simple", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+			},
+		},
+		{
+			name: "IndexColumns_WithAlias",
+			sql:  `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS a WHERE a.TABLE_NAME = "Simple"`,
+			expected: [][]interface{}{
+				[]interface{}{"Id"},
+			},
+		},
+		{
+			name: "IndexColumns_WithOmittedSchema",
+			sql:  `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS WHERE INDEX_COLUMNS.TABLE_NAME = "Simple"`,
+			expected: [][]interface{}{
+				[]interface{}{"Id"},
+			},
+		},
+		{
+			name: "IndexColumns_WithJoin",
+			sql:  `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS LEFT JOIN INFORMATION_SCHEMA.INDEXES ON INDEX_COLUMNS.TABLE_NAME = INDEXES.TABLE_NAME WHERE INDEX_COLUMNS.TABLE_NAME = "Simple"`,
+			expected: [][]interface{}{
+				[]interface{}{"Id"},
+			},
+		},
+		{
+			name: "IndexColumns_WithUsingJoin",
+			sql:  `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS LEFT JOIN INFORMATION_SCHEMA.INDEXES USING(TABLE_NAME) WHERE INDEX_COLUMNS.TABLE_NAME = "Simple"`,
+			expected: [][]interface{}{
+				[]interface{}{"Id"},
+			},
+		},
+	}
+
+	for _, tc := range table {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				stmt, err := (&parser.Parser{
+					Lexer: &parser.Lexer{
+						File: &token.File{FilePath: "", Buffer: tc.sql},
+					},
+				}).ParseQuery()
+				if err != nil {
+					t.Fatalf("failed to parse sql: %q %v", tc.sql, err)
+				}
+
+				// The test case expects OK, it checks respons values.
+				// otherwise it checks the error code and the error message.
+				if tc.code == codes.OK {
+					it, err := db.Query(ctx, tx, stmt, tc.params)
+					if err != nil {
+						t.Fatalf("Query failed: %v", err)
+					}
+
+					var rows [][]interface{}
+					err = it.Do(func(row []interface{}) error {
+						rows = append(rows, row)
+						return nil
+					})
+					if err != nil {
+						t.Fatalf("unexpected error in iteration: %v", err)
+					}
+
+					if diff := cmp.Diff(tc.expected, rows); diff != "" {
+						t.Errorf("(-got, +want)\n%s", diff)
+					}
+
+					// TODO: add names to all test cases. now this is optional check
+					if tc.names != nil {
+						var gotnames []string
+						for _, item := range it.ResultSet() {
+							gotnames = append(gotnames, item.Name)
+						}
+
+						if diff := cmp.Diff(tc.names, gotnames); diff != "" {
+							t.Errorf("(-got, +want)\n%s", diff)
+						}
+					}
+				} else {
+					it, err := db.Query(ctx, tx, stmt, tc.params)
+					if err == nil {
+						err = it.Do(func([]interface{}) error {
+							return nil
+						})
+					}
+					st := status.Convert(err)
+					if st.Code() != tc.code {
+						t.Errorf("expect code to be %v but got %v", tc.code, st.Code())
+					}
+					if !tc.msg.MatchString(st.Message()) {
+						t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tc.msg)
+					}
+				}
+			})
 		})
 	}
 }
