@@ -525,7 +525,16 @@ func (db *database) CreateIndex(ctx context.Context, stmt *ast.CreateIndex) erro
 	if index.unique {
 		idxType = "UNIQUE INDEX"
 	}
-	columnsName := strings.Join(index.IndexColumnNames(), ", ")
+	var columns []string
+	names := index.IndexColumnNames()
+	dirs := index.IndexColumnDirections()
+	if len(names) != len(dirs) {
+		return fmt.Errorf("number of column names and direction is not same, names=%d, dirs=%d", len(names), len(dirs))
+	}
+	for n := range names {
+		columns = append(columns, names[n]+" "+dirs[n])
+	}
+	columnsName := strings.Join(columns, ", ")
 
 	query := fmt.Sprintf("CREATE %s `%s` ON %s (%s)", idxType, index.Name(), table.Name, columnsName)
 	if _, err := db.db.ExecContext(ctx, query); err != nil {
