@@ -55,9 +55,101 @@ type FullType struct {
 	FTDateNull      spanner.NullDate    `spanner:"FTDateNull" json:"FTDateNull"`           // FTDateNull
 }
 
+var fullTypesKeys = []string{
+	"PKey", "FTString", "FTStringNull",
+	"FTBool", "FTBoolNull",
+	"FTBytes", "FTBytesNull",
+	"FTTimestamp", "FTTimestampNull",
+	"FTInt", "FTIntNull",
+	"FTFloat", "FTFloatNull",
+	"FTDate", "FTDateNull",
+}
+
 type Simple struct {
 	ID    int64  `spanner:"Id"`
 	Value string `spanner:"Value"`
+}
+
+func prepareSimpleData(t *testing.T, ctx context.Context, client *spanner.Client) {
+	_, err := client.Apply(ctx, []*spanner.Mutation{
+		spanner.Insert("Simple", []string{"Id", "Value"},
+			[]interface{}{100, "xxx0"},
+		),
+		spanner.Insert("Simple", []string{"Id", "Value"},
+			[]interface{}{101, "xxx1"},
+		),
+		spanner.Insert("Simple", []string{"Id", "Value"},
+			[]interface{}{102, "xxx2"},
+		),
+		spanner.Insert("Simple", []string{"Id", "Value"},
+			[]interface{}{200, "yyy"},
+		),
+		spanner.Insert("Simple", []string{"Id", "Value"},
+			[]interface{}{300, "zzz"},
+		),
+		spanner.Insert("Simple", []string{"Id", "Value"},
+			[]interface{}{400, "zzz"},
+		),
+	})
+	if err != nil {
+		t.Fatalf("Applying mutations: %v", err)
+	}
+}
+
+func prepareFullTypeData(t *testing.T, ctx context.Context, client *spanner.Client, now time.Time) {
+	_, err := client.Apply(ctx, []*spanner.Mutation{
+		spanner.Insert("FullTypes", fullTypesKeys,
+			[]interface{}{
+				"pkey0",
+				"xxx0", spanner.NullString{},
+				true, spanner.NullBool{},
+				[]byte("xxx0"), []byte("xxx0"),
+				now, spanner.NullTime{},
+				100, spanner.NullInt64{},
+				0.123, spanner.NullFloat64{},
+				civil.DateOf(now), spanner.NullDate{},
+			},
+		),
+		spanner.Insert("FullTypes", fullTypesKeys,
+			[]interface{}{
+				"pkey1",
+				"xxx1", spanner.NullString{},
+				true, spanner.NullBool{},
+				[]byte("xxx1"), []byte("xxx1"),
+				now.Add(time.Second), spanner.NullTime{},
+				100, spanner.NullInt64{},
+				0.123, spanner.NullFloat64{},
+				civil.DateOf(now), spanner.NullDate{},
+			},
+		),
+		spanner.Insert("FullTypes", fullTypesKeys,
+			[]interface{}{
+				"pkey2",
+				"xxx2", spanner.NullString{},
+				true, spanner.NullBool{},
+				[]byte("xxx2"), []byte("xxx2"),
+				now.Add(2 * time.Second), spanner.NullTime{},
+				100, spanner.NullInt64{},
+				0.123, spanner.NullFloat64{},
+				civil.DateOf(now), spanner.NullDate{},
+			},
+		),
+		spanner.Insert("FullTypes", fullTypesKeys,
+			[]interface{}{
+				"pkey3",
+				"yyy3", spanner.NullString{},
+				true, spanner.NullBool{},
+				[]byte("yyy3"), []byte("yyy3"),
+				now.Add(3 * time.Second), spanner.NullTime{},
+				200, spanner.NullInt64{},
+				0.123, spanner.NullFloat64{},
+				civil.DateOf(now), spanner.NullDate{},
+			},
+		),
+	})
+	if err != nil {
+		t.Fatalf("Applying mutations: %v", err)
+	}
 }
 
 func TestIntegration_ReadWrite(t *testing.T) {
@@ -86,16 +178,6 @@ func TestIntegration_ReadWrite(t *testing.T) {
 
 	now := time.Now()
 	date := civil.DateOf(now)
-
-	fullTypesKeys := []string{
-		"PKey", "FTString", "FTStringNull",
-		"FTBool", "FTBoolNull",
-		"FTBytes", "FTBytesNull",
-		"FTTimestamp", "FTTimestampNull",
-		"FTInt", "FTIntNull",
-		"FTFloat", "FTFloatNull",
-		"FTDate", "FTDateNull",
-	}
 
 	table := []struct {
 		expected FullType
@@ -345,26 +427,7 @@ func TestIntegration_Read_KeySet(t *testing.T) {
 		t.Fatalf("Connecting to in-memory fake: %v", err)
 	}
 
-	_, err = client.Apply(ctx, []*spanner.Mutation{
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{100, "xxx0"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{101, "xxx1"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{102, "xxx2"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{200, "yyy"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{300, "zzz"},
-		),
-	})
-	if err != nil {
-		t.Fatalf("Applying mutations: %v", err)
-	}
+	prepareSimpleData(t, ctx, client)
 
 	table := map[string]struct {
 		keyset   spanner.KeySet
@@ -465,6 +528,144 @@ func TestIntegration_Read_KeySet(t *testing.T) {
 					return err
 				}
 				results = append(results, &s)
+
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("Iterating over all row read: %v", err)
+			}
+
+			if diff := cmp.Diff(tc.expected, results); diff != "" {
+				t.Errorf("(-got, +want)\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestIntegration_Read_KeySet2(t *testing.T) {
+	ctx := context.Background()
+	dbName := "projects/fake/instances/fake/databases/fake"
+
+	f, err := os.Open("./testdata/schema.sql")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+
+	srv, conn, err := Run()
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	defer srv.Stop()
+
+	if err := srv.ParseAndApplyDDL(ctx, dbName, f); err != nil {
+		t.Fatal(err)
+	}
+
+	client, err := spanner.NewClient(ctx, dbName, option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatalf("Connecting to in-memory fake: %v", err)
+	}
+
+	now := time.Now().UTC()
+	prepareFullTypeData(t, ctx, client, now)
+
+	table := map[string]struct {
+		index    string
+		keyset   spanner.KeySet
+		expected []*FullType
+	}{
+		"TimestampAsc_AsPrefix": {
+			index:  "FullTypesByIntTimestamp",
+			keyset: spanner.Key{100}.AsPrefix(),
+			expected: []*FullType{
+				{PKey: "pkey0", FTInt: 100, FTTimestamp: now},
+				{PKey: "pkey1", FTInt: 100, FTTimestamp: now.Add(time.Second)},
+				{PKey: "pkey2", FTInt: 100, FTTimestamp: now.Add(2 * time.Second)},
+			},
+		},
+		"TimestamAsc_Range": {
+			index: "FullTypesByIntTimestamp",
+			keyset: &spanner.KeyRange{
+				Start: spanner.Key{100, now},
+				End:   spanner.Key{100},
+				Kind:  spanner.ClosedOpen,
+			},
+			expected: []*FullType{
+				{PKey: "pkey0", FTInt: 100, FTTimestamp: now},
+				{PKey: "pkey1", FTInt: 100, FTTimestamp: now.Add(time.Second)},
+				{PKey: "pkey2", FTInt: 100, FTTimestamp: now.Add(2 * time.Second)},
+			},
+		},
+		"TimestamAsc_Range2": {
+			index: "FullTypesByIntTimestamp",
+			keyset: &spanner.KeyRange{
+				Start: spanner.Key{100, time.Time{}},
+				End:   spanner.Key{100, now.Add(2 * time.Second)},
+				Kind:  spanner.ClosedOpen,
+			},
+			expected: []*FullType{
+				{PKey: "pkey0", FTInt: 100, FTTimestamp: now},
+				{PKey: "pkey1", FTInt: 100, FTTimestamp: now.Add(time.Second)},
+			},
+		},
+		"TimestampDesc_AsPrefix": {
+			index:  "FullTypesByIntTimestampReverse",
+			keyset: spanner.Key{100}.AsPrefix(),
+			expected: []*FullType{
+				{PKey: "pkey2", FTInt: 100, FTTimestamp: now.Add(2 * time.Second)},
+				{PKey: "pkey1", FTInt: 100, FTTimestamp: now.Add(time.Second)},
+				{PKey: "pkey0", FTInt: 100, FTTimestamp: now},
+			},
+		},
+		"TimestampDesc_Range1": {
+			index: "FullTypesByIntTimestampReverse",
+			keyset: &spanner.KeyRange{
+				Start: spanner.Key{100, now.Add(time.Second)},
+				End:   spanner.Key{100},
+				Kind:  spanner.ClosedOpen,
+			},
+			expected: []*FullType{
+				{PKey: "pkey1", FTInt: 100, FTTimestamp: now.Add(time.Second)},
+				{PKey: "pkey0", FTInt: 100, FTTimestamp: now},
+			},
+		},
+		"TimestampDesc_Range2": {
+			index: "FullTypesByIntTimestampReverse",
+			keyset: &spanner.KeyRange{
+				Start: spanner.Key{100, now.Add(time.Second)},
+				End:   spanner.Key{100, time.Time{}},
+				Kind:  spanner.ClosedOpen,
+			},
+			expected: []*FullType{
+				{PKey: "pkey1", FTInt: 100, FTTimestamp: now.Add(time.Second)},
+				{PKey: "pkey0", FTInt: 100, FTTimestamp: now},
+			},
+		},
+		"TimestampDesc_Range3": {
+			index: "FullTypesByIntTimestampReverse",
+			keyset: &spanner.KeyRange{
+				Start: spanner.Key{100, now.Add(time.Second)},
+				End:   spanner.Key{100, time.Unix(1, 0)},
+				Kind:  spanner.ClosedOpen,
+			},
+			expected: []*FullType{
+				{PKey: "pkey1", FTInt: 100, FTTimestamp: now.Add(time.Second)},
+				{PKey: "pkey0", FTInt: 100, FTTimestamp: now},
+			},
+		},
+	}
+
+	for name, tc := range table {
+		t.Run(name, func(t *testing.T) {
+			var results []*FullType
+			rows := client.Single().ReadUsingIndex(ctx, "FullTypes", tc.index, tc.keyset, []string{"PKey", "FTInt", "FTTimestamp"})
+			err = rows.Do(func(row *spanner.Row) error {
+				var ft FullType
+
+				if err := row.ToStruct(&ft); err != nil {
+					return err
+				}
+				results = append(results, &ft)
 
 				return nil
 			})
@@ -727,29 +928,7 @@ func TestIntegration_Query(t *testing.T) {
 		t.Fatalf("Connecting to in-memory fake: %v", err)
 	}
 
-	_, err = client.Apply(ctx, []*spanner.Mutation{
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{100, "xxx0"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{101, "xxx1"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{102, "xxx2"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{200, "yyy"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{300, "zzz"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{400, "zzz"},
-		),
-	})
-	if err != nil {
-		t.Fatalf("Applying mutations: %v", err)
-	}
+	prepareSimpleData(t, ctx, client)
 
 	table := []struct {
 		sql      string
@@ -858,6 +1037,88 @@ func TestIntegration_Query(t *testing.T) {
 	}
 }
 
+func TestIntegration_Query2(t *testing.T) {
+	ctx := context.Background()
+	dbName := "projects/fake/instances/fake/databases/fake"
+
+	f, err := os.Open("./testdata/schema.sql")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+
+	srv, conn, err := Run()
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	defer srv.Stop()
+
+	if err := srv.ParseAndApplyDDL(ctx, dbName, f); err != nil {
+		t.Fatal(err)
+	}
+
+	client, err := spanner.NewClient(ctx, dbName, option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatalf("Connecting to in-memory fake: %v", err)
+	}
+
+	now := time.Now()
+	prepareFullTypeData(t, ctx, client, now)
+
+	table := []struct {
+		sql      string
+		params   map[string]interface{}
+		expected []*FullType
+	}{
+		{
+			sql: `SELECT PKey, FTInt, FTTimestamp FROM FullTypes WHERE FTInt = 100`,
+			expected: []*FullType{
+				{PKey: "pkey0", FTInt: 100, FTTimestamp: now},
+				{PKey: "pkey1", FTInt: 100, FTTimestamp: now.Add(time.Second)},
+				{PKey: "pkey2", FTInt: 100, FTTimestamp: now.Add(2 * time.Second)},
+			},
+		},
+		{
+			sql: `SELECT PKey, FTInt, FTTimestamp FROM FullTypes WHERE FTTimestamp BETWEEN @t1 AND @t2`,
+			params: map[string]interface{}{
+				"t1": now,
+				"t2": now.Add(2 * time.Second),
+			},
+			expected: []*FullType{
+				{PKey: "pkey0", FTInt: 100, FTTimestamp: now},
+				{PKey: "pkey1", FTInt: 100, FTTimestamp: now.Add(time.Second)},
+				{PKey: "pkey2", FTInt: 100, FTTimestamp: now.Add(2 * time.Second)},
+			},
+		},
+	}
+
+	for _, tc := range table {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+
+		stmt := spanner.NewStatement(tc.sql)
+		stmt.Params = tc.params
+		var results []*FullType
+		rows := client.Single().Query(ctx, stmt)
+		err = rows.Do(func(row *spanner.Row) error {
+			var ft FullType
+
+			if err := row.ToStruct(&ft); err != nil {
+				return err
+			}
+			results = append(results, &ft)
+
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("Iterating over all row read: %v", err)
+		}
+
+		if diff := cmp.Diff(tc.expected, results); diff != "" {
+			t.Errorf("(-got, +want)\n%s", diff)
+		}
+	}
+}
+
 func TestIntegration_Query_Detail(t *testing.T) {
 	ctx := context.Background()
 	dbName := "projects/fake/instances/fake/databases/fake"
@@ -882,26 +1143,7 @@ func TestIntegration_Query_Detail(t *testing.T) {
 		t.Fatalf("Connecting to in-memory fake: %v", err)
 	}
 
-	_, err = client.Apply(ctx, []*spanner.Mutation{
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{100, "xxx0"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{101, "xxx1"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{102, "xxx2"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{200, "yyy"},
-		),
-		spanner.Insert("Simple", []string{"Id", "Value"},
-			[]interface{}{300, "zzz"},
-		),
-	})
-	if err != nil {
-		t.Fatalf("Applying mutations: %v", err)
-	}
+	prepareSimpleData(t, ctx, client)
 
 	table := []struct {
 		sql      string
@@ -920,6 +1162,7 @@ func TestIntegration_Query_Detail(t *testing.T) {
 				{int64(102), string("xxx2")},
 				{int64(200), string("yyy")},
 				{int64(300), string("zzz")},
+				{int64(400), string("zzz")},
 			},
 		},
 		{
@@ -927,7 +1170,7 @@ func TestIntegration_Query_Detail(t *testing.T) {
 			names:   []string{""}, // TODO
 			columns: []interface{}{int64(0)},
 			expected: [][]interface{}{
-				{int64(5)},
+				{int64(6)},
 			},
 		},
 		{
@@ -935,7 +1178,7 @@ func TestIntegration_Query_Detail(t *testing.T) {
 			names:   []string{"count"},
 			columns: []interface{}{int64(0)},
 			expected: [][]interface{}{
-				{int64(5)},
+				{int64(6)},
 			},
 		},
 		{

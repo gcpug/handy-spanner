@@ -875,7 +875,6 @@ func TestRead(t *testing.T) {
 			},
 			limit: 100,
 			expected: [][]interface{}{
-				[]interface{}{int64(3), "bbb", int64(3)},
 				[]interface{}{int64(2), "bbb", int64(2)},
 			},
 		},
@@ -895,7 +894,6 @@ func TestRead(t *testing.T) {
 			limit: 100,
 			expected: [][]interface{}{
 				[]interface{}{int64(3), "bbb", int64(3)},
-				[]interface{}{int64(2), "bbb", int64(2)},
 			},
 		},
 		"Simple_KeyRange_LessPrimaryKey3": {
@@ -929,10 +927,8 @@ func TestRead(t *testing.T) {
 					},
 				},
 			},
-			limit: 100,
-			expected: [][]interface{}{
-				[]interface{}{int64(3), "bbb", int64(3)},
-			},
+			limit:    100,
+			expected: nil,
 		},
 		"Simple_KeyRange_LessPrimaryKeyClosedOpen": {
 			tbl:  "CompositePrimaryKeys",
@@ -947,10 +943,8 @@ func TestRead(t *testing.T) {
 					},
 				},
 			},
-			limit: 100,
-			expected: [][]interface{}{
-				[]interface{}{int64(2), "bbb", int64(2)},
-			},
+			limit:    100,
+			expected: nil,
 		},
 
 		// Composite Keys
@@ -1009,14 +1003,14 @@ func TestRead(t *testing.T) {
 			ks: &KeySet{
 				Ranges: []*KeyRange{
 					{
-						start:       makeListValue(makeStringValue("bbb"), makeStringValue("2")),
-						end:         makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						end:         makeListValue(makeStringValue("bbb"), makeStringValue("2")),
 						startClosed: true,
 						endClosed:   true,
 					},
 					{
-						start:       makeListValue(makeStringValue("ccc"), makeStringValue("3")),
-						end:         makeListValue(makeStringValue("ccc"), makeStringValue("4")),
+						start:       makeListValue(makeStringValue("ccc"), makeStringValue("4")),
+						end:         makeListValue(makeStringValue("ccc"), makeStringValue("3")),
 						startClosed: true,
 						endClosed:   true,
 					},
@@ -1041,8 +1035,8 @@ func TestRead(t *testing.T) {
 				},
 				Ranges: []*KeyRange{
 					{
-						start:       makeListValue(makeStringValue("bbb"), makeStringValue("2")),
-						end:         makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						end:         makeListValue(makeStringValue("bbb"), makeStringValue("2")),
 						startClosed: true,
 						endClosed:   true,
 					},
@@ -2463,8 +2457,8 @@ func TestDelete(t *testing.T) {
 			ks: &KeySet{
 				Ranges: []*KeyRange{
 					{
-						start:       makeListValue(makeStringValue("bbb"), makeStringValue("1")),
-						end:         makeListValue(makeStringValue("bbb"), makeStringValue("4")),
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("4")),
+						end:         makeListValue(makeStringValue("bbb"), makeStringValue("1")),
 						startClosed: true,
 						endClosed:   true,
 					},
