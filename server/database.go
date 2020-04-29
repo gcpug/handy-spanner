@@ -822,6 +822,8 @@ func (d *database) write(ctx context.Context, tx *transaction, tbl string, cols 
 							"Unique index violation at index key [%v]. It conflicts with row %v in table %s",
 							msg, data, tbl,
 						)
+					case sqlite.ErrConstraintCheck:
+						return status.Errorf(codes.FailedPrecondition, "%s", sqliteErr.Error())
 					}
 
 					// This error should not be happend.
@@ -1145,6 +1147,9 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 			if !col.isArray {
 				s += " NOT NULL"
 			}
+		}
+		if col.valueType.Code == TCString && col.isSized && !col.isMax {
+			s += fmt.Sprintf(" CHECK(LENGTH(%s) <= %d)", QuoteString(col.Name()), col.size)
 		}
 		columnDefs = append(columnDefs, s)
 	}
