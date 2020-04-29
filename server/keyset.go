@@ -73,7 +73,7 @@ func buildWhereClauseFromKeySet(keyset *KeySet, indexColumnsName string, indexCo
 		return "", nil, nil
 	}
 
-	var whereClauses []string
+	var conditions []string
 	var subargs [][]interface{}
 
 	if len(keyset.Keys) != 0 {
@@ -81,7 +81,7 @@ func buildWhereClauseFromKeySet(keyset *KeySet, indexColumnsName string, indexCo
 		if err != nil {
 			return "", nil, err
 		}
-		whereClauses = append(whereClauses, q)
+		conditions = append(conditions, q)
 		subargs = append(subargs, a)
 	}
 
@@ -92,19 +92,18 @@ func buildWhereClauseFromKeySet(keyset *KeySet, indexColumnsName string, indexCo
 				return "", nil, err
 			}
 
-			whereClauses = append(whereClauses, q)
+			conditions = append(conditions, q)
 			subargs = append(subargs, a)
 		}
 	}
 
-	if len(whereClauses) > 1 {
-		return "", nil, status.Errorf(codes.Unimplemented, "union not supported")
+	cond := strings.Join(conditions, " OR ")
+	var args []interface{}
+	for i := range subargs {
+		args = append(args, subargs[i]...)
 	}
 
-	whereClause := whereClauses[0]
-	args := subargs[0]
-
-	return whereClause, args, nil
+	return fmt.Sprintf("WHERE %s", cond), args, nil
 }
 
 func buildKeySetQuery(pkeysName string, pkeyColumns []*Column, keys []*structpb.ListValue) (string, []interface{}, error) {
@@ -131,9 +130,9 @@ func buildKeySetQuery(pkeysName string, pkeyColumns []*Column, keys []*structpb.
 	valuesExpr := valuesPlaceholder + strings.Repeat(", "+valuesPlaceholder, len(keys)-1)
 
 	// e.g. WHERE (key1, key2, key3) IN ( VALUES (?, ?, ?), (?, ?, ?) )
-	whereClause := fmt.Sprintf("WHERE (%s) IN ( VALUES %s )", pkeysName, valuesExpr)
+	whereCondition := fmt.Sprintf("(%s) IN ( VALUES %s )", pkeysName, valuesExpr)
 
-	return whereClause, args, nil
+	return whereCondition, args, nil
 }
 
 func buildKeyRangeQuery(pkeysName string, pkeyColumns []*Column, keyrange *KeyRange) (string, []interface{}, error) {
@@ -188,5 +187,5 @@ func buildKeyRangeQuery(pkeysName string, pkeyColumns []*Column, keyrange *KeyRa
 		}
 	}
 
-	return fmt.Sprintf("WHERE %s", strings.Join(whereClause, " AND ")), args, nil
+	return fmt.Sprintf("(%s)", strings.Join(whereClause, " AND ")), args, nil
 }
