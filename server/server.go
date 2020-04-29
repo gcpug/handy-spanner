@@ -867,7 +867,7 @@ func sendResult(stream spannerpb.Spanner_StreamingReadServer, tx *transaction, i
 			// // But set the first response for now.
 			// stats = nil
 
-			values = values[:]
+			values = values[:0]
 		}
 		return nil
 	})

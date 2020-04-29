@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -897,6 +898,66 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 			},
 			expected: [][]*structpb.Value{
 				{makeStringValue("3"), makeStringValue("bbb"), makeStringValue("3")},
+			},
+		},
+		"CompositePrimaryKeys_Condition2": {
+			sql: fmt.Sprintf(`SELECT %s FROM CompositePrimaryKeys`,
+				strings.Join(strings.Split(strings.Repeat("XYZ", 10), ""), ", ")),
+			expected: [][]*structpb.Value{
+				{
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y2"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x1"), makeStringValue("y3"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y4"), makeStringValue("z"),
+				},
+				{
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+					makeStringValue("x2"), makeStringValue("y5"), makeStringValue("z"),
+				},
 			},
 		},
 		"ArrayOfStruct": {
