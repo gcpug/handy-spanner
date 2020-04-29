@@ -432,6 +432,26 @@ func TestIntegration_Read_KeySet(t *testing.T) {
 				{ID: 101, Value: "xxx1"},
 			},
 		},
+		"SingleMultiRange": {
+			keyset: spanner.KeySets(
+				spanner.KeyRange{
+					Start: spanner.Key([]interface{}{100}),
+					End:   spanner.Key([]interface{}{103}),
+					Kind:  spanner.ClosedClosed,
+				},
+				spanner.KeyRange{
+					Start: spanner.Key([]interface{}{200}),
+					End:   spanner.Key([]interface{}{300}),
+					Kind:  spanner.ClosedOpen,
+				},
+			),
+			expected: []*Simple{
+				{ID: 100, Value: "xxx0"},
+				{ID: 101, Value: "xxx1"},
+				{ID: 102, Value: "xxx2"},
+				{ID: 200, Value: "yyy"},
+			},
+		},
 	}
 
 	for name, tc := range table {

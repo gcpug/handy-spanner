@@ -967,7 +967,7 @@ func TestRead(t *testing.T) {
 				[]interface{}{int64(1), "aaa", int64(1)},
 			},
 		},
-		"CompositePrimaryKeys_Keys_2": {
+		"CompositePrimaryKeys_Keys_Multi": {
 			tbl:  "CompositePrimaryKeys",
 			cols: []string{"Id", "PKey1", "PKey2"},
 			ks: &KeySet{
@@ -983,8 +983,8 @@ func TestRead(t *testing.T) {
 			},
 		},
 
-		// Composite Keys KeyRange
-		"CompositePrimaryKeys_KeySet": {
+		// Composite Ranges
+		"CompositePrimaryKeys_Ranges": {
 			tbl:  "CompositePrimaryKeys",
 			cols: []string{"Id", "PKey1", "PKey2"},
 			ks: &KeySet{
@@ -1001,6 +1001,58 @@ func TestRead(t *testing.T) {
 			expected: [][]interface{}{
 				[]interface{}{int64(3), "bbb", int64(3)},
 				[]interface{}{int64(4), "ccc", int64(3)},
+			},
+		},
+		"CompositePrimaryKeys_Ranges_Multi": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("2")),
+						end:         makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						startClosed: true,
+						endClosed:   true,
+					},
+					{
+						start:       makeListValue(makeStringValue("ccc"), makeStringValue("3")),
+						end:         makeListValue(makeStringValue("ccc"), makeStringValue("4")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(3), "bbb", int64(3)},
+				[]interface{}{int64(2), "bbb", int64(2)},
+				[]interface{}{int64(5), "ccc", int64(4)},
+				[]interface{}{int64(4), "ccc", int64(3)},
+			},
+		},
+
+		// Composite Keys and Ranges
+		"CompositePrimaryKeys_KeysRanges": {
+			tbl:  "CompositePrimaryKeys",
+			cols: []string{"Id", "PKey1", "PKey2"},
+			ks: &KeySet{
+				Keys: []*structpb.ListValue{
+					makeListValue(makeStringValue("aaa"), makeStringValue("1")),
+				},
+				Ranges: []*KeyRange{
+					{
+						start:       makeListValue(makeStringValue("bbb"), makeStringValue("2")),
+						end:         makeListValue(makeStringValue("bbb"), makeStringValue("3")),
+						startClosed: true,
+						endClosed:   true,
+					},
+				},
+			},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), "aaa", int64(1)},
+				[]interface{}{int64(3), "bbb", int64(3)},
+				[]interface{}{int64(2), "bbb", int64(2)},
 			},
 		},
 
