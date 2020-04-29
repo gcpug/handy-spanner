@@ -68,7 +68,7 @@ func makeKeyRange(r *spannerpb.KeyRange) *KeyRange {
 	return &kr
 }
 
-func buildWhereClauseFromKeySet(keyset *KeySet, indexColumnsName string, indexColumns []*Column) (string, []interface{}, error) {
+func buildWhereClauseFromKeySet(keyset *KeySet, indexColumnsName string, indexColumns []*Column, indexColumnDirs []string) (string, []interface{}, error) {
 	if keyset.All {
 		return "", nil, nil
 	}
@@ -87,7 +87,7 @@ func buildWhereClauseFromKeySet(keyset *KeySet, indexColumnsName string, indexCo
 
 	if len(keyset.Ranges) != 0 {
 		for _, keyrange := range keyset.Ranges {
-			q, a, err := buildKeyRangeQuery(indexColumnsName, indexColumns, keyrange)
+			q, a, err := buildKeyRangeQuery(indexColumnsName, indexColumns, indexColumnDirs, keyrange)
 			if err != nil {
 				return "", nil, err
 			}
@@ -135,7 +135,7 @@ func buildKeySetQuery(pkeysName string, pkeyColumns []*Column, keys []*structpb.
 	return whereCondition, args, nil
 }
 
-func buildKeyRangeQuery(pkeysName string, pkeyColumns []*Column, keyrange *KeyRange) (string, []interface{}, error) {
+func buildKeyRangeQuery(pkeysName string, pkeyColumns []*Column, indexColumnDirs []string, keyrange *KeyRange) (string, []interface{}, error) {
 	numPKeys := len(pkeyColumns)
 	if numPKeys < len(keyrange.start.Values) {
 		return "", nil, status.Errorf(codes.InvalidArgument, "TODO: invalid start range key")
@@ -170,18 +170,34 @@ func buildKeyRangeQuery(pkeysName string, pkeyColumns []*Column, keyrange *KeyRa
 			continue
 		}
 		if len(startKeyValues) > i {
-			if keyrange.startClosed {
-				whereClause = append(whereClause, fmt.Sprintf("%s >= ?", pk))
+			if indexColumnDirs[i] == "DESC" {
+				if keyrange.startClosed {
+					whereClause = append(whereClause, fmt.Sprintf("%s <= ?", pk))
+				} else {
+					whereClause = append(whereClause, fmt.Sprintf("%s < ?", pk))
+				}
 			} else {
-				whereClause = append(whereClause, fmt.Sprintf("%s > ?", pk))
+				if keyrange.startClosed {
+					whereClause = append(whereClause, fmt.Sprintf("%s >= ?", pk))
+				} else {
+					whereClause = append(whereClause, fmt.Sprintf("%s > ?", pk))
+				}
 			}
 			args = append(args, startKeyValues[i])
 		}
 		if len(endKeyValues) > i {
-			if keyrange.endClosed {
-				whereClause = append(whereClause, fmt.Sprintf("%s <= ?", pk))
+			if indexColumnDirs[i] == "DESC" {
+				if keyrange.endClosed {
+					whereClause = append(whereClause, fmt.Sprintf("%s >= ?", pk))
+				} else {
+					whereClause = append(whereClause, fmt.Sprintf("%s > ?", pk))
+				}
 			} else {
-				whereClause = append(whereClause, fmt.Sprintf("%s < ?", pk))
+				if keyrange.endClosed {
+					whereClause = append(whereClause, fmt.Sprintf("%s <= ?", pk))
+				} else {
+					whereClause = append(whereClause, fmt.Sprintf("%s < ?", pk))
+				}
 			}
 			args = append(args, endKeyValues[i])
 		}

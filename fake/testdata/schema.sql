@@ -35,8 +35,9 @@ CREATE TABLE FullTypes (
 ) PRIMARY KEY(PKey);
 
 CREATE UNIQUE INDEX FullTypesByFTString ON FullTypes(FTString);
-CREATE UNIQUE INDEX FullTypesByIntDate ON FullTypes(FTInt, FTDate);
+CREATE INDEX FullTypesByIntDate ON FullTypes(FTInt, FTDate);
 CREATE INDEX FullTypesByIntTimestamp ON FullTypes(FTInt, FTTimestamp);
+CREATE INDEX FullTypesByIntTimestampReverse ON FullTypes(FTInt, FTTimestamp DESC);
 CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
 
 CREATE TABLE ArrayTypes (

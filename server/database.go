@@ -595,7 +595,7 @@ func (d *database) Read(ctx context.Context, tx *transaction, tbl, idx string, c
 
 	var args []interface{}
 
-	whereClause, whereArgs, err := buildWhereClauseFromKeySet(keyset, indexColumnsName, indexColumns)
+	whereClause, whereArgs, err := buildWhereClauseFromKeySet(keyset, indexColumnsName, indexColumns, indexColumnDirs)
 	if err != nil {
 		return nil, err
 	}
@@ -1001,8 +1001,9 @@ func (d *database) Delete(ctx context.Context, tx *transaction, tbl string, keys
 
 	indexColumnsName := strings.Join(QuoteStringSlice(index.IndexColumnNames()), ", ")
 	indexColumns := index.IndexColumns()
+	indexColumnDirs := index.IndexColumnDirections()
 
-	whereClause, args, err := buildWhereClauseFromKeySet(keyset, indexColumnsName, indexColumns)
+	whereClause, args, err := buildWhereClauseFromKeySet(keyset, indexColumnsName, indexColumns, indexColumnDirs)
 	if err != nil {
 		return err
 	}
