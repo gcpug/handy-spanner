@@ -540,6 +540,7 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 }
 
 func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream spannerpb.Spanner_ExecuteStreamingSqlServer) error {
+	receivedAt := time.Now().UTC()
 	ctx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
 
@@ -617,7 +618,12 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 		return err
 	}
 
-	if err := sendResult(stream, tx, iter, txCreated); err != nil {
+	stats := queryStats{
+		Mode:       req.QueryMode,
+		ReceivedAt: receivedAt,
+		QueryText:  req.Sql,
+	}
+	if err := sendResult(stream, tx, iter, txCreated, stats); err != nil {
 		if !tx.Available() {
 			return checkAvailability()
 		}
@@ -752,6 +758,7 @@ func (s *server) Read(ctx context.Context, req *spannerpb.ReadRequest) (*spanner
 }
 
 func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Spanner_StreamingReadServer) error {
+	receivedAt := time.Now().UTC()
 	ctx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
 
@@ -797,7 +804,12 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 		return err
 	}
 
-	if err := sendResult(stream, tx, iter, txCreated); err != nil {
+	stats := queryStats{
+		Mode:       spannerpb.ExecuteSqlRequest_NORMAL,
+		ReceivedAt: receivedAt,
+		QueryText:  "",
+	}
+	if err := sendResult(stream, tx, iter, txCreated, stats); err != nil {
 		if !tx.Available() {
 			return checkAvailability()
 		}
@@ -806,7 +818,7 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 	return nil
 }
 
-func sendResult(stream spannerpb.Spanner_StreamingReadServer, tx *transaction, iter RowIterator, returnTx bool) error {
+func sendResult(stream spannerpb.Spanner_StreamingReadServer, tx *transaction, iter RowIterator, returnTx bool, qs queryStats) error {
 	// Create metadata about columns
 	fields := make([]*spannerpb.StructType_Field, len(iter.ResultSet()))
 	for i, item := range iter.ResultSet() {
@@ -826,34 +838,136 @@ func sendResult(stream spannerpb.Spanner_StreamingReadServer, tx *transaction, i
 		Transaction: txProto,
 	}
 
+	var rowCount int64
+	values := make([]*structpb.Value, 0, 100)
 	err := iter.Do(func(row []interface{}) error {
-		values := make([]*structpb.Value, len(row))
-		for i, x := range row {
+		rowCount++
+		for _, x := range row {
 			v, err := spannerValueFromValue(x)
 			if err != nil {
 				return err
 			}
-			values[i] = v
+			values = append(values, v)
 		}
 
-		if err := stream.Send(&spannerpb.PartialResultSet{
-			Metadata: metadata,
-			Values:   values,
-		}); err != nil {
-			return err
-		}
+		if len(values) > 100 {
+			if err := stream.Send(&spannerpb.PartialResultSet{
+				Metadata: metadata,
+				Values:   values,
+			}); err != nil {
+				return err
+			}
 
-		// From documents:
-		// Metadata about the result set, such as row type information.
-		// Only present in the first response.
-		metadata = nil
+			// From documents:
+			// Metadata about the result set, such as row type information.
+			// Only present in the first response.
+			metadata = nil
+
+			// // Stats is only present once in the last response.
+			// // But set the first response for now.
+			// stats = nil
+
+			values = values[:]
+		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
+	qs.RowCount = rowCount
+	stats := &spannerpb.ResultSetStats{
+		QueryStats: createQueryStats(qs),
+	}
+
+	if err := stream.Send(&spannerpb.PartialResultSet{
+		Metadata: metadata,
+		Values:   values,
+		Stats:    stats,
+	}); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+type queryStats struct {
+	Mode       spannerpb.ExecuteSqlRequest_QueryMode
+	ReceivedAt time.Time
+	QueryText  string
+	RowCount   int64
+}
+
+func toMillisecondString(d time.Duration) string {
+	return fmt.Sprintf("%d.%d msecs", d/time.Millisecond, (d%time.Millisecond)/time.Microsecond)
+}
+
+func createQueryStats(stats queryStats) *structpb.Struct {
+	elapsedTime := time.Since(stats.ReceivedAt)
+	return &structpb.Struct{
+		Fields: map[string]*structpb.Value{
+			"cpu_time": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: toMillisecondString(elapsedTime),
+				},
+			},
+			"remote_server_calls": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: "0/0",
+				},
+			},
+			"bytes_returned": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: "8",
+				},
+			},
+			"query_text": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: stats.QueryText,
+				},
+			},
+			"query_plan_creation_time": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: "0 msecs",
+				},
+			},
+			"runtime_creation_time": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: "0 msecs",
+				},
+			},
+			"deleted_rows_scanned": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: "0",
+				},
+			},
+			"optimizer_version": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: "2",
+				},
+			},
+			"elapsed_time": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: toMillisecondString(elapsedTime),
+				},
+			},
+			"rows_returned": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: fmt.Sprintf("%d", stats.RowCount),
+				},
+			},
+			"filesystem_delay_seconds": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: "0 msecs",
+				},
+			},
+			"rows_scanned": &structpb.Value{
+				Kind: &structpb.Value_StringValue{
+					StringValue: "0",
+				},
+			},
+		},
+	}
 }
 
 func (s *server) BeginTransaction(ctx context.Context, req *spannerpb.BeginTransactionRequest) (*spannerpb.Transaction, error) {

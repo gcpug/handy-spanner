@@ -33,6 +33,7 @@ import (
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 var (
@@ -652,9 +653,11 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 			sql:    `SELECT * FROM Simple`,
 			fields: simpleFields,
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("yyy")},
-				{makeStringValue("300"), makeStringValue("zzz")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("yyy"),
+					makeStringValue("300"), makeStringValue("zzz"),
+				},
 			},
 		},
 
@@ -676,8 +679,10 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 			},
 			fields: simpleFields,
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("yyy")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("yyy"),
+				},
 			},
 		},
 
@@ -697,7 +702,9 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 				},
 			},
 			expected: [][]*structpb.Value{
-				{makeStringValue("100")},
+				{
+					makeStringValue("100"),
+				},
 			},
 		},
 
@@ -717,7 +724,9 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 				},
 			},
 			expected: [][]*structpb.Value{
-				{makeStringValue("100")},
+				{
+					makeStringValue("100"),
+				},
 			},
 		},
 
@@ -742,7 +751,9 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 				},
 			},
 			expected: [][]*structpb.Value{
-				{makeStringValue("100")},
+				{
+					makeStringValue("100"),
+				},
 			},
 		},
 
@@ -763,8 +774,10 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 				},
 			},
 			expected: [][]*structpb.Value{
-				{makeStringValue("xxx"), makeStringValue("0")},
-				{makeStringValue("yyy"), makeStringValue("1")},
+				{
+					makeStringValue("xxx"), makeStringValue("0"),
+					makeStringValue("yyy"), makeStringValue("1"),
+				},
 			},
 		},
 		"FromUnnest_Params": {
@@ -797,8 +810,10 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 				},
 			},
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("0")},
-				{makeStringValue("200"), makeStringValue("1")},
+				{
+					makeStringValue("100"), makeStringValue("0"),
+					makeStringValue("200"), makeStringValue("1"),
+				},
 			},
 		},
 
@@ -806,8 +821,10 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 			sql:    `SELECT * FROM Simple WHERE Id IN UNNEST([100, 200])`,
 			fields: simpleFields,
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("yyy")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("yyy"),
+				},
 			},
 		},
 
@@ -828,8 +845,10 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 			},
 			fields: simpleFields,
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("yyy")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("yyy"),
+				},
 			},
 		},
 
@@ -848,8 +867,10 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 					"ids": makeNullValue(),
 				},
 			},
-			fields:   nil,
-			expected: nil,
+			fields: nil,
+			expected: [][]*structpb.Value{
+				{},
+			},
 		},
 
 		"CompositePrimaryKeys_Condition": {
@@ -1032,12 +1053,12 @@ func TestExecuteStreamingSql_Success(t *testing.T) {
 				if len(results) == 0 {
 					t.Fatalf("unexpected number of results")
 				}
-				if diff := cmp.Diff(tc.fields, fake.sets[0].Metadata.RowType.Fields); diff != "" {
+				if diff := cmp.Diff(tc.fields, fake.sets[0].Metadata.RowType.Fields, protocmp.Transform()); diff != "" {
 					t.Errorf("(-got, +want)\n%s", diff)
 				}
 			}
 
-			if diff := cmp.Diff(tc.expected, results); diff != "" {
+			if diff := cmp.Diff(tc.expected, results, protocmp.Transform()); diff != "" {
 				t.Errorf("(-got, +want)\n%s", diff)
 			}
 		})
@@ -1313,11 +1334,11 @@ func TestStreamingRead_ValueType(t *testing.T) {
 				t.Errorf("results should be 1 record but got %v", len(results))
 			}
 
-			if diff := cmp.Diff(tc.fields, fake.sets[0].Metadata.RowType.Fields); diff != "" {
+			if diff := cmp.Diff(tc.fields, fake.sets[0].Metadata.RowType.Fields, protocmp.Transform()); diff != "" {
 				t.Errorf("(-got, +want)\n%s", diff)
 			}
 
-			if diff := cmp.Diff(tc.expected, results[0]); diff != "" {
+			if diff := cmp.Diff(tc.expected, results[0], protocmp.Transform()); diff != "" {
 				t.Errorf("(-got, +want)\n%s", diff)
 			}
 		})
@@ -1585,9 +1606,11 @@ func TestExecuteSql_Success(t *testing.T) {
 			table:   "Simple",
 			columns: []string{"Id", "Value"},
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("xyz")},
-				{makeStringValue("300"), makeStringValue("zzz")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("xyz"),
+					makeStringValue("300"), makeStringValue("zzz"),
+				},
 			},
 		},
 		"Update_ParamInWhere": {
@@ -1607,9 +1630,11 @@ func TestExecuteSql_Success(t *testing.T) {
 			table:   "Simple",
 			columns: []string{"Id", "Value"},
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("xyz")},
-				{makeStringValue("300"), makeStringValue("zzz")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("xyz"),
+					makeStringValue("300"), makeStringValue("zzz"),
+				},
 			},
 		},
 	}
@@ -1663,7 +1688,7 @@ func TestExecuteSql_Success(t *testing.T) {
 			for _, set := range fake.sets {
 				results = append(results, set.Values)
 			}
-			if diff := cmp.Diff(tc.expected, results); diff != "" {
+			if diff := cmp.Diff(tc.expected, results, protocmp.Transform()); diff != "" {
 				t.Errorf("(-got, +want)\n%s", diff)
 			}
 		})
@@ -1895,7 +1920,7 @@ func TestExecuteSql_Transaction(t *testing.T) {
 
 		results, err := readSimple(ctx, session, tx)
 		assertStatusCode(t, err, codes.OK)
-		if diff := cmp.Diff(results, expected); diff != "" {
+		if diff := cmp.Diff(results, expected, protocmp.Transform()); diff != "" {
 			t.Errorf("(-got, +want)\n%s", diff)
 		}
 
@@ -1944,7 +1969,7 @@ func TestExecuteSql_Transaction(t *testing.T) {
 		defer cancel()
 		results, err := readSimple(ctx3, session, tx2)
 		assertStatusCode(t, err, codes.OK)
-		if diff := cmp.Diff(results, expected); diff != "" {
+		if diff := cmp.Diff(results, expected, protocmp.Transform()); diff != "" {
 			t.Errorf("(-got, +want)\n%s", diff)
 		}
 	})
@@ -1964,7 +1989,7 @@ func TestExecuteSql_Transaction(t *testing.T) {
 		// read in transaction2
 		results, err := readSimple(ctx, session, tx2)
 		assertStatusCode(t, err, codes.OK)
-		if diff := cmp.Diff(results, initialValueSet); diff != "" {
+		if diff := cmp.Diff(results, initialValueSet, protocmp.Transform()); diff != "" {
 			t.Errorf("(-got, +want)\n%s", diff)
 		}
 
@@ -1995,7 +2020,7 @@ func TestExecuteSql_Transaction(t *testing.T) {
 		defer commit(session, tx3)
 		results, err = readSimple(ctx, session, tx3)
 		assertStatusCode(t, err, codes.OK)
-		if diff := cmp.Diff(results, expected); diff != "" {
+		if diff := cmp.Diff(results, expected, protocmp.Transform()); diff != "" {
 			t.Errorf("(-got, +want)\n%s", diff)
 		}
 	})
@@ -2052,7 +2077,7 @@ func TestExecuteSql_Transaction(t *testing.T) {
 		defer commit(session, tx3)
 		results, err := readSimple(ctx, session, tx3)
 		assertStatusCode(t, err, codes.OK)
-		if diff := cmp.Diff(results, expected1); diff != "" {
+		if diff := cmp.Diff(results, expected1, protocmp.Transform()); diff != "" {
 			t.Errorf("(-got, +want)\n%s", diff)
 		}
 	})
@@ -2157,9 +2182,11 @@ func TestExecuteBatchDml_Success(t *testing.T) {
 			expectedStatusCode:    0,
 			expectedStatusMessage: regexp.MustCompile(`^$`),
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("xyz")},
-				{makeStringValue("300"), makeStringValue("zzz")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("xyz"),
+					makeStringValue("300"), makeStringValue("zzz"),
+				},
 			},
 		},
 		"UpdateMulti": {
@@ -2175,9 +2202,11 @@ func TestExecuteBatchDml_Success(t *testing.T) {
 			expectedStatusCode:    0,
 			expectedStatusMessage: regexp.MustCompile(`^$`),
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("xyz")},
-				{makeStringValue("300"), makeStringValue("z")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("xyz"),
+					makeStringValue("300"), makeStringValue("z"),
+				},
 			},
 		},
 		"PartialSuccess": {
@@ -2193,9 +2222,11 @@ func TestExecuteBatchDml_Success(t *testing.T) {
 			expectedStatusCode:    int32(codes.InvalidArgument),
 			expectedStatusMessage: regexp.MustCompile(`^Statement 1: .* is not valid DML`),
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("xyz")},
-				{makeStringValue("300"), makeStringValue("zzz")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("xyz"),
+					makeStringValue("300"), makeStringValue("zzz"),
+				},
 			},
 		},
 		"PartialSuccessStopped": {
@@ -2211,9 +2242,11 @@ func TestExecuteBatchDml_Success(t *testing.T) {
 			expectedStatusCode:    int32(codes.InvalidArgument),
 			expectedStatusMessage: regexp.MustCompile(`^Statement 0: .* is not valid DML`),
 			expected: [][]*structpb.Value{
-				{makeStringValue("100"), makeStringValue("xxx")},
-				{makeStringValue("200"), makeStringValue("yyy")},
-				{makeStringValue("300"), makeStringValue("zzz")},
+				{
+					makeStringValue("100"), makeStringValue("xxx"),
+					makeStringValue("200"), makeStringValue("yyy"),
+					makeStringValue("300"), makeStringValue("zzz"),
+				},
 			},
 		},
 	}
@@ -2259,7 +2292,7 @@ func TestExecuteBatchDml_Success(t *testing.T) {
 				t.Fatalf("read error: %v", err)
 			}
 
-			if diff := cmp.Diff(tc.expected, results); diff != "" {
+			if diff := cmp.Diff(tc.expected, results, protocmp.Transform()); diff != "" {
 				t.Errorf("(-got, +want)\n%s", diff)
 			}
 		})
@@ -2818,7 +2851,7 @@ func TestCommitMutations(t *testing.T) {
 		makeStringValue("500"),
 		makeStringValue("eee"),
 	}
-	if diff := cmp.Diff(expected, results); diff != "" {
+	if diff := cmp.Diff(expected, results, protocmp.Transform()); diff != "" {
 		t.Errorf("(-got, +want)\n%s", diff)
 	}
 }
@@ -2949,7 +2982,7 @@ func TestCommitMutations_AtomicOperation(t *testing.T) {
 		assertStatusCode(t, err, codes.AlreadyExists)
 
 		results := readSimple(t)
-		if diff := cmp.Diff(results, expected); diff != "" {
+		if diff := cmp.Diff(results, expected, protocmp.Transform()); diff != "" {
 			t.Errorf("(-got, +want)\n%s", diff)
 		}
 	})
@@ -3476,7 +3509,7 @@ func TestListDatabases(t *testing.T) {
 			State: adminv1pb.Database_READY,
 		},
 	}
-	if diff := cmp.Diff(expected, res.Databases); diff != "" {
+	if diff := cmp.Diff(expected, res.Databases, protocmp.Transform()); diff != "" {
 		t.Errorf("(-got, +want)\n%s", diff)
 	}
 }
