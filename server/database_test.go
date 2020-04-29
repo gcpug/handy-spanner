@@ -2784,6 +2784,31 @@ func TestMutationError(t *testing.T) {
 			code: codes.InvalidArgument, // TODO:  FailedPrecondition
 			msg:  regexp.MustCompile(`Cannot write commit timestamp because the allow_commit_timestamp column option is not set to true for column`),
 		},
+		"FullType_ExceedsMaximumSize": {
+			op:    []string{"INSERT"},
+			tbl:   "FullTypes",
+			wcols: fullTypesKeys,
+			values: []*structpb.Value{
+				makeStringValue(strings.Repeat("z", 1000)),        // PKey STRING(32) NOT NULL,
+				makeStringValue("zzz"),                            // FTString STRING(32) NOT NULL,
+				makeStringValue("zzz"),                            // FTStringNull STRING(32),
+				makeBoolValue(true),                               // FTBool BOOL NOT NULL,
+				makeBoolValue(true),                               // FTBoolNull BOOL,
+				makeStringValue("eHl6"),                           // FTBytes BYTES(32) NOT NULL,
+				makeStringValue("eHl6"),                           // FTBytesNull BYTES(32),
+				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestamp TIMESTAMP NOT NULL,
+				makeStringValue("2012-03-04T12:34:56.123456789Z"), // FTTimestampNull TIMESTAMP,
+				makeStringValue("999"),                            // FTInt INT64 NOT NULL,
+				makeStringValue("100"),                            // FTIntNull INT64,
+				makeNumberValue(0.5),                              // FTFloat FLOAT64 NOT NULL,
+				makeNumberValue(0.5),                              // FTFloatNull FLOAT64,
+				makeStringValue("2012-03-04"),                     // FTDate DATE NOT NULL,
+				makeStringValue("2012-03-04"),                     // FTDateNull DATE,
+			},
+			code: codes.FailedPrecondition,
+			// msg:  regexp.MustCompile(`New value exceeds the maximum size limit for this column in this database: FullTypes.PKey, size: 1000, limit: 32.`),
+			msg: regexp.MustCompile(`CHECK constraint failed: FullTypes`),
+		},
 	}
 
 	for name, tt := range table {
