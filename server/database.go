@@ -1136,8 +1136,14 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "CreateTable failed: %v", err)
 	}
+
+	db.transactionsMu.Lock()
+	defer db.transactionsMu.Unlock()
+
 	db.tables[stmt.Name.Name] = t
+	db.tablesInUseMu.Lock()
 	db.tablesInUse[stmt.Name.Name] = newTableTransaction()
+	db.tablesInUseMu.Unlock()
 
 	var columnDefs []string
 	for _, col := range t.columns {
