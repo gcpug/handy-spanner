@@ -142,7 +142,7 @@ func (t *Table) createIndex(stmt *ast.CreateIndex) (*TableIndex, error) {
 func (t *Table) getColumn(name string) (*Column, error) {
 	c, ok := t.columnsMap[name]
 	if !ok {
-		return nil, fmt.Errorf("Column not found: %s", name)
+		return nil, newSpannerColumnNotFoundError(t.Name, name)
 	}
 	return c, nil
 }
@@ -150,9 +150,9 @@ func (t *Table) getColumn(name string) (*Column, error) {
 func (t *Table) getColumnsByName(names []string) ([]*Column, error) {
 	columns := make([]*Column, len(names))
 	for i, name := range names {
-		c, ok := t.columnsMap[name]
-		if !ok {
-			return nil, fmt.Errorf("Column not found: %s", name)
+		c, err := t.getColumn(name)
+		if err != nil {
+			return nil, err
 		}
 		columns[i] = c
 	}
