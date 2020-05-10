@@ -29,6 +29,7 @@ import (
 	cmp "github.com/google/go-cmp/cmp"
 	uuidpkg "github.com/google/uuid"
 	lropb "google.golang.org/genproto/googleapis/longrunning"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	adminv1pb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	grpc "google.golang.org/grpc"
@@ -240,6 +241,22 @@ func assertStatusCode(t *testing.T, err error, code codes.Code) {
 	}
 }
 
+func assertResourceInfo(t *testing.T, err error, expected *errdetails.ResourceInfo) {
+	t.Helper()
+	st := status.Convert(err)
+	details := st.Details()
+	if len(details) != 1 {
+		t.Fatalf("error should have a detail: %v", len(details))
+	}
+	ri, ok := details[0].(*errdetails.ResourceInfo)
+	if !ok {
+		t.Fatalf("error detail should be ResourceInfo: %T", details[0])
+	}
+	if diff := cmp.Diff(expected, ri, protocmp.Transform()); diff != "" {
+		t.Errorf("(-got, +want)\n%s", diff)
+	}
+}
+
 func testCreateSession(t *testing.T, s *server) (*spannerpb.Session, string) {
 	name := fmt.Sprintf("projects/fake/instances/fakse/databases/%s", uuidpkg.New().String())
 	session, err := s.CreateSession(context.Background(), &spannerpb.CreateSessionRequest{
@@ -398,6 +415,7 @@ func TestGetSession(t *testing.T) {
 			t.Errorf("expect %v but got %v", want, got)
 		}
 	}
+
 	_, err = s.GetSession(ctx, &spannerpb.GetSessionRequest{
 		Name: session.Name + "x",
 	})
@@ -405,6 +423,12 @@ func TestGetSession(t *testing.T) {
 	if want, got := codes.NotFound, st.Code(); want != got {
 		t.Errorf("expect %v but got %v", want, got)
 	}
+	expectedRI := &errdetails.ResourceInfo{
+		ResourceType: "type.googleapis.com/google.spanner.v1.Session",
+		ResourceName: session.Name + "x",
+		Description:  "Session does not exist.",
+	}
+	assertResourceInfo(t, err, expectedRI)
 }
 
 func TestListSessions(t *testing.T) {
@@ -496,6 +520,12 @@ func TestDeleteSession(t *testing.T) {
 	if want, got := codes.NotFound, st.Code(); want != got {
 		t.Errorf("expect %v but got %v", want, got)
 	}
+	expectedRI := &errdetails.ResourceInfo{
+		ResourceType: "type.googleapis.com/google.spanner.v1.Session",
+		ResourceName: session.Name,
+		Description:  "Session does not exist.",
+	}
+	assertResourceInfo(t, err, expectedRI)
 }
 
 func TestBeginTransaction(t *testing.T) {
@@ -3492,9 +3522,16 @@ func TestDropDatabase(t *testing.T) {
 		_, err = s.GetDatabase(ctx, &adminv1pb.GetDatabaseRequest{
 			Name: database,
 		})
-		if status.Code(err) != codes.NotFound {
+		st := status.Convert(err)
+		if st.Code() != codes.NotFound {
 			t.Fatalf("failed to drop database: %s", err)
 		}
+		expectedRI := &errdetails.ResourceInfo{
+			ResourceType: "type.googleapis.com/google.spanner.admin.database.v1.Database",
+			ResourceName: database,
+			Description:  "Database does not exist.",
+		}
+		assertResourceInfo(t, err, expectedRI)
 
 		// DropDatabase returns no error even if the database is not exist
 		if _, err := s.DropDatabase(ctx, &adminv1pb.DropDatabaseRequest{

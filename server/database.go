@@ -466,7 +466,7 @@ func (d *database) useTable(tbl string, tx *transaction) (*Table, error) {
 
 	table, ok := d.tables[tbl]
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "Table not found: %s", tbl)
+		return nil, newSpannerTableNotFoundError(tbl)
 	}
 
 	use, ok := d.tablesInUse[tbl]
@@ -493,7 +493,7 @@ func (d *database) useTable(tbl string, tx *transaction) (*Table, error) {
 func (d *database) useTableExclusive(tbl string, tx *transaction) (*Table, error) {
 	table, ok := d.tables[tbl]
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "Table not found: %s", tbl)
+		return nil, newSpannerTableNotFoundError(tbl)
 	}
 
 	var tt *tableTransaction
@@ -568,12 +568,12 @@ func (d *database) Read(ctx context.Context, tx *transaction, tbl, idx string, c
 
 	index, ok := table.TableIndex(idx)
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "Index not found on table %s: %s", tbl, idx)
+		return nil, newSpannerIndexnNotFoundError(tbl, idx)
 	}
 
 	columns, err := table.getColumnsByName(cols)
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "%v", err)
+		return nil, err // getColumnsByName returns error with status code
 	}
 
 	// Check the index table has the specified columns
@@ -740,7 +740,7 @@ func (d *database) write(ctx context.Context, tx *transaction, tbl string, cols 
 	// Check columns are defined in the table
 	columns, err := table.getColumnsByName(cols)
 	if err != nil {
-		return status.Errorf(codes.NotFound, "%v", err)
+		return err // getColumnsByName returns error with status code
 	}
 
 	// Ensure multiple values are not specified
@@ -848,6 +848,7 @@ func (d *database) write(ctx context.Context, tx *transaction, tbl string, cols 
 					return status.Errorf(codes.Unknown, "failed to get RowsAffected: %v", err)
 				}
 				if n == 0 {
+					// no details in real spanner
 					return status.Errorf(codes.NotFound, "Row %v in table %s is missing. Row cannot be updated.", data, tbl)
 				}
 			}

@@ -28,8 +28,10 @@ import (
 	"github.com/MakeNowJust/memefish/pkg/token"
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	cmp "github.com/google/go-cmp/cmp"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 var (
@@ -1161,40 +1163,44 @@ func TestReadError(t *testing.T) {
 	}
 
 	table := map[string]struct {
-		tbl   string
-		idx   string
-		cols  []string
-		ks    *KeySet
-		limit int64
-		code  codes.Code
-		msg   *regexp.Regexp
+		tbl     string
+		idx     string
+		cols    []string
+		ks      *KeySet
+		limit   int64
+		code    codes.Code
+		msg     *regexp.Regexp
+		details []interface{}
 	}{
 		"EmptyColumns": {
-			tbl:   "Simple",
-			idx:   "",
-			cols:  []string{},
-			ks:    &KeySet{All: true},
-			limit: 100,
-			code:  codes.InvalidArgument,
-			msg:   regexp.MustCompile(`Invalid StreamingRead request`),
+			tbl:     "Simple",
+			idx:     "",
+			cols:    []string{},
+			ks:      &KeySet{All: true},
+			limit:   100,
+			code:    codes.InvalidArgument,
+			msg:     regexp.MustCompile(`Invalid StreamingRead request`),
+			details: []interface{}{},
 		},
 		"EmptyTableName": {
-			tbl:   "",
-			idx:   "",
-			cols:  []string{"Id"},
-			ks:    &KeySet{All: true},
-			limit: 100,
-			code:  codes.InvalidArgument,
-			msg:   regexp.MustCompile(`Invalid StreamingRead request`),
+			tbl:     "",
+			idx:     "",
+			cols:    []string{"Id"},
+			ks:      &KeySet{All: true},
+			limit:   100,
+			code:    codes.InvalidArgument,
+			msg:     regexp.MustCompile(`Invalid StreamingRead request`),
+			details: []interface{}{},
 		},
 		"EmptyKeySet": {
-			tbl:   "Simple",
-			idx:   "",
-			cols:  []string{"Id"},
-			ks:    nil,
-			limit: 100,
-			code:  codes.InvalidArgument,
-			msg:   regexp.MustCompile(`Invalid StreamingRead request`),
+			tbl:     "Simple",
+			idx:     "",
+			cols:    []string{"Id"},
+			ks:      nil,
+			limit:   100,
+			code:    codes.InvalidArgument,
+			msg:     regexp.MustCompile(`Invalid StreamingRead request`),
+			details: []interface{}{},
 		},
 
 		"TableNotFound": {
@@ -1205,6 +1211,13 @@ func TestReadError(t *testing.T) {
 			limit: 100,
 			code:  codes.NotFound,
 			msg:   regexp.MustCompile(`Table not found`),
+			details: []interface{}{
+				&errdetails.ResourceInfo{
+					ResourceType: "spanner.googleapis.com/Table",
+					ResourceName: "NotExistTable",
+					Description:  "Table not found",
+				},
+			},
 		},
 		"IndexNotFound": {
 			tbl:   "Simple",
@@ -1214,6 +1227,13 @@ func TestReadError(t *testing.T) {
 			limit: 100,
 			code:  codes.NotFound,
 			msg:   regexp.MustCompile(`Index not found on table`),
+			details: []interface{}{
+				&errdetails.ResourceInfo{
+					ResourceType: "spanner.googleapis.com/Index",
+					ResourceName: "NotExistIndex",
+					Description:  "Index not found on table Simple",
+				},
+			},
 		},
 		"ColumnNotFound": {
 			tbl:   "Simple",
@@ -1223,15 +1243,22 @@ func TestReadError(t *testing.T) {
 			limit: 100,
 			code:  codes.NotFound,
 			msg:   regexp.MustCompile(`Column not found`),
+			details: []interface{}{
+				&errdetails.ResourceInfo{
+					ResourceType: "spanner.googleapis.com/Column",
+					ResourceName: "Xyz",
+				},
+			},
 		},
 		"ColumnNotFoundOnSecondaryIndex": {
-			tbl:   "CompositePrimaryKeys",
-			idx:   "CompositePrimaryKeysByXY",
-			cols:  []string{"Id", "PKey1", "PKey2", "X", "Y", "Z"},
-			ks:    &KeySet{All: true},
-			limit: 100,
-			code:  codes.Unimplemented, // real spanner returns Unimplemented
-			msg:   regexp.MustCompile(`Reading non-indexed columns using an index is not supported. Consider adding Id to the index using a STORING clause`),
+			tbl:     "CompositePrimaryKeys",
+			idx:     "CompositePrimaryKeysByXY",
+			cols:    []string{"Id", "PKey1", "PKey2", "X", "Y", "Z"},
+			ks:      &KeySet{All: true},
+			limit:   100,
+			code:    codes.Unimplemented, // real spanner returns Unimplemented
+			msg:     regexp.MustCompile(`Reading non-indexed columns using an index is not supported. Consider adding Id to the index using a STORING clause`),
+			details: []interface{}{},
 		},
 	}
 
@@ -1248,6 +1275,9 @@ func TestReadError(t *testing.T) {
 				}
 				if !tt.msg.MatchString(st.Message()) {
 					t.Errorf("unexpected error message: %v", st.Message())
+				}
+				if diff := cmp.Diff(tt.details, st.Details(), protocmp.Transform()); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
 				}
 			})
 		})
@@ -2572,12 +2602,13 @@ func TestDelete(t *testing.T) {
 
 func TestMutationError(t *testing.T) {
 	table := map[string]struct {
-		op     []string
-		tbl    string
-		wcols  []string
-		values []*structpb.Value
-		code   codes.Code
-		msg    *regexp.Regexp
+		op      []string
+		tbl     string
+		wcols   []string
+		values  []*structpb.Value
+		code    codes.Code
+		msg     *regexp.Regexp
+		details []interface{}
 	}{
 		"TableNotfound": {
 			op:     []string{"UPDATE", "INSERT", "UPSERT", "REPLACE"},
@@ -2586,6 +2617,13 @@ func TestMutationError(t *testing.T) {
 			values: []*structpb.Value{},
 			code:   codes.NotFound,
 			msg:    regexp.MustCompile(`Table not found`),
+			details: []interface{}{
+				&errdetails.ResourceInfo{
+					ResourceType: "spanner.googleapis.com/Table",
+					ResourceName: "XXX",
+					Description:  "Table not found",
+				},
+			},
 		},
 		"ColumnNotFound": {
 			op:    []string{"UPDATE", "INSERT", "UPSERT", "REPLACE"},
@@ -2597,7 +2635,13 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("xxx"),
 			},
 			code: codes.NotFound,
-			msg:  regexp.MustCompile(`Column not found`),
+			msg:  regexp.MustCompile(`Column not found in table Simple: XXX`),
+			details: []interface{}{
+				&errdetails.ResourceInfo{
+					ResourceType: "spanner.googleapis.com/Column",
+					ResourceName: "XXX",
+				},
+			},
 		},
 		"MultipleValues": {
 			op:    []string{"UPDATE", "INSERT", "UPSERT", "REPLACE"},
@@ -2608,8 +2652,9 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("yyy"),
 				makeStringValue("yyy"),
 			},
-			code: codes.InvalidArgument,
-			msg:  regexp.MustCompile(`Multiple values for column Value`),
+			code:    codes.InvalidArgument,
+			msg:     regexp.MustCompile(`Multiple values for column Value`),
+			details: []interface{}{},
 		},
 		"NoPrimaryKeys": {
 			op:    []string{"UPDATE", "INSERT", "UPSERT", "REPLACE"},
@@ -2623,8 +2668,9 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("y"),
 				makeStringValue("z"),
 			},
-			code: codes.FailedPrecondition,
-			msg:  regexp.MustCompile(`PKey2 must not be NULL in table CompositePrimaryKeys`),
+			code:    codes.FailedPrecondition,
+			msg:     regexp.MustCompile(`PKey2 must not be NULL in table CompositePrimaryKeys`),
+			details: []interface{}{},
 		},
 		"ValuesMisMatch": {
 			op:    []string{"UPDATE", "INSERT", "UPSERT", "REPLACE"},
@@ -2635,8 +2681,9 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("yyy"),
 				makeStringValue("yyy"),
 			},
-			code: codes.InvalidArgument,
-			msg:  regexp.MustCompile(`Mutation has mismatched number of columns and values.`),
+			code:    codes.InvalidArgument,
+			msg:     regexp.MustCompile(`Mutation has mismatched number of columns and values.`),
+			details: []interface{}{},
 		},
 		"RowNotFound": {
 			op:    []string{"UPDATE"},
@@ -2646,8 +2693,9 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("100000"),
 				makeStringValue("yyy"),
 			},
-			code: codes.NotFound,
-			msg:  regexp.MustCompile(`Row \[.*\] in table Simple is missing. Row cannot be updated.`),
+			code:    codes.NotFound,
+			msg:     regexp.MustCompile(`Row \[.*\] in table Simple is missing. Row cannot be updated.`),
+			details: []interface{}{}, // no details
 		},
 		"ValuesNotSpecifiedForPKey": {
 			op:    []string{"INSERT", "REPLACE"},
@@ -2656,8 +2704,9 @@ func TestMutationError(t *testing.T) {
 			values: []*structpb.Value{
 				makeStringValue("yyy"),
 			},
-			code: codes.FailedPrecondition,
-			msg:  regexp.MustCompile(`Id must not be NULL in table Simple.`),
+			code:    codes.FailedPrecondition,
+			msg:     regexp.MustCompile(`Id must not be NULL in table Simple.`),
+			details: []interface{}{},
 		},
 		"NullSpecifiedForPKey": {
 			op:    []string{"INSERT", "REPLACE"},
@@ -2667,8 +2716,9 @@ func TestMutationError(t *testing.T) {
 				makeNullValue(),
 				makeStringValue("yyy"),
 			},
-			code: codes.FailedPrecondition,
-			msg:  regexp.MustCompile(`Id must not be NULL in table Simple.`),
+			code:    codes.FailedPrecondition,
+			msg:     regexp.MustCompile(`Id must not be NULL in table Simple.`),
+			details: []interface{}{},
 		},
 		"ValuesNotSpecifiedForNonNullable": {
 			op:    []string{"INSERT", "REPLACE"},
@@ -2677,8 +2727,9 @@ func TestMutationError(t *testing.T) {
 			values: []*structpb.Value{
 				makeStringValue("100"),
 			},
-			code: codes.FailedPrecondition,
-			msg:  regexp.MustCompile(`A new row in table Simple does not specify a non-null value for these NOT NULL columns: Value`),
+			code:    codes.FailedPrecondition,
+			msg:     regexp.MustCompile(`A new row in table Simple does not specify a non-null value for these NOT NULL columns: Value`),
+			details: []interface{}{},
 		},
 		"NullSpecifiedForNonNullable": {
 			op:    []string{"INSERT", "REPLACE"},
@@ -2688,8 +2739,9 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("100"),
 				makeNullValue(),
 			},
-			code: codes.FailedPrecondition,
-			msg:  regexp.MustCompile(`Value must not be NULL in table Simple.`),
+			code:    codes.FailedPrecondition,
+			msg:     regexp.MustCompile(`Value must not be NULL in table Simple.`),
+			details: []interface{}{},
 		},
 
 		"PrimaryKeyViolation": {
@@ -2700,8 +2752,9 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("100"),
 				makeStringValue("yyyy"),
 			},
-			code: codes.AlreadyExists,
-			msg:  regexp.MustCompile(`Row \[.*\] in table Simple already exists`),
+			code:    codes.AlreadyExists,
+			msg:     regexp.MustCompile(`Row \[.*\] in table Simple already exists`),
+			details: []interface{}{},
 		},
 
 		"FullType": {
@@ -2725,8 +2778,9 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("2012-03-04"),                     // FTDate DATE NOT NULL,
 				makeStringValue("2012-03-04"),                     // FTDateNull DATE,
 			},
-			code: codes.AlreadyExists,
-			msg:  regexp.MustCompile(`Unique index violation at index key \[.*\]. It conflicts with row \[.*\] in table FullTypes`),
+			code:    codes.AlreadyExists,
+			msg:     regexp.MustCompile(`Unique index violation at index key \[.*\]. It conflicts with row \[.*\] in table FullTypes`),
+			details: []interface{}{},
 		},
 		// A new record coflicts only secondary index but it does not replace
 		// "FullTypeConflictsSecondaryIndex": {
@@ -2775,8 +2829,9 @@ func TestMutationError(t *testing.T) {
 				makeStringValue("2012-03-04"),                     // FTDate DATE NOT NULL,
 				makeStringValue("2012-03-04"),                     // FTDateNull DATE,
 			},
-			code: codes.InvalidArgument, // TODO:  FailedPrecondition
-			msg:  regexp.MustCompile(`Cannot write commit timestamp because the allow_commit_timestamp column option is not set to true for column`),
+			code:    codes.InvalidArgument, // TODO:  FailedPrecondition
+			msg:     regexp.MustCompile(`Cannot write commit timestamp because the allow_commit_timestamp column option is not set to true for column`),
+			details: []interface{}{},
 		},
 		"FullType_ExceedsMaximumSize": {
 			op:    []string{"INSERT"},
@@ -2801,7 +2856,8 @@ func TestMutationError(t *testing.T) {
 			},
 			code: codes.FailedPrecondition,
 			// msg:  regexp.MustCompile(`New value exceeds the maximum size limit for this column in this database: FullTypes.PKey, size: 1000, limit: 32.`),
-			msg: regexp.MustCompile(`CHECK constraint failed: FullTypes`),
+			msg:     regexp.MustCompile(`CHECK constraint failed: FullTypes`),
+			details: []interface{}{},
 		},
 	}
 
@@ -2850,6 +2906,9 @@ func TestMutationError(t *testing.T) {
 						}
 						if !tt.msg.MatchString(st.Message()) {
 							t.Errorf("unexpected error message: %v", st.Message())
+						}
+						if diff := cmp.Diff(tt.details, st.Details(), protocmp.Transform()); diff != "" {
+							t.Errorf("(-got, +want)\n%s", diff)
 						}
 					})
 				})

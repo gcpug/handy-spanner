@@ -284,7 +284,7 @@ func (s *server) getSession(name string) (*session, error) {
 	}
 	session, ok := s.sessions[name]
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "Session not found: %s", name)
+		return nil, newSpannerSessionNotFoundError(name)
 	}
 	return session, nil
 }
@@ -339,7 +339,7 @@ func (s *server) getOrCreateDatabase(name string) (*database, error) {
 	s.dbMu.RUnlock()
 	if !ok {
 		if !s.autoCreateDatabase {
-			return nil, status.Errorf(codes.NotFound, "Database not found: %s", name)
+			return nil, newSpannerDatabaseNotFoundError(name)
 		}
 
 		var err error
@@ -357,7 +357,7 @@ func (s *server) getDatabase(name string) (*database, error) {
 	db, ok := s.db[name]
 	s.dbMu.RUnlock()
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "Database not found: %s", name)
+		return nil, newSpannerDatabaseNotFoundError(name)
 	}
 
 	return db, nil
