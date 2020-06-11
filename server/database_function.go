@@ -414,18 +414,8 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 			return ValueType{Code: TCDate}
 		},
 	},
-	"PENDING_COMMIT_TIMESTAMP": {
-		Func: func() string {
-			return time.Now().UTC().Format(time.RFC3339Nano)
-		},
-		NArgs: 0,
-		ArgTypes: func(vts []ValueType) bool {
-			return true
-		},
-		ReturnType: func(vts []ValueType) ValueType {
-			return ValueType{Code: TCTimestamp}
-		},
-	},
+	"PENDING_COMMIT_TIMESTAMP": getCustomFunctionForCurrentTime(),
+	"CURRENT_TIMESTMAP":        getCustomFunctionForCurrentTime(),
 }
 
 func sqlite3FnSign(x int64) int64 {
@@ -787,4 +777,21 @@ func sqlite3FnCastTimestampToDate(s string) (string, error) {
 	}
 
 	return t.In(parseLocation).Format("2006-01-02"), nil
+}
+
+func sqlite3FnCurrentTimestamp() string {
+	return time.Now().UTC().Format(time.RFC3339Nano)
+}
+
+func getCustomFunctionForCurrentTime() CustomFunction {
+	return CustomFunction{
+		Func:  sqlite3FnCurrentTimestamp,
+		NArgs: 0,
+		ArgTypes: func(vts []ValueType) bool {
+			return true
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCTimestamp}
+		},
+	}
 }
