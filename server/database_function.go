@@ -415,7 +415,7 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 		},
 	},
 	"PENDING_COMMIT_TIMESTAMP": getCustomFunctionForCurrentTime(),
-	"CURRENT_TIMESTMAP":        getCustomFunctionForCurrentTime(),
+	"CURRENT_TIMESTAMP":        getCustomFunctionForCurrentTime(),
 }
 
 func sqlite3FnSign(x int64) int64 {
