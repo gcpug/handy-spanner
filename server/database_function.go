@@ -96,6 +96,12 @@ func (e *sqliteOutOfRangeRuntimeError) Error() string {
 	return SqliteOutOfRangeRuntimeErrorPrefix + e.msg
 }
 
+// customFunctionNamesMap is naming map from Spanner's function to sqlite's custom function.
+// This is used to avoid conflict of reserved name in sqlite.
+var customFunctionNamesMap map[string]string = map[string]string{
+	"CURRENT_TIMESTAMP": "___CURRENT_TIMESTAMP",
+}
+
 // customFunctions is functions for spanner.
 //
 // sqlite cannot register function which returns interface{}.
@@ -415,7 +421,7 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 		},
 	},
 	"PENDING_COMMIT_TIMESTAMP": getCustomFunctionForCurrentTime(),
-	"CURRENT_TIMESTAMP":        getCustomFunctionForCurrentTime(),
+	"___CURRENT_TIMESTAMP":     getCustomFunctionForCurrentTime(),
 }
 
 func sqlite3FnSign(x int64) int64 {

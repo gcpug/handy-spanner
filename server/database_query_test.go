@@ -19,6 +19,7 @@ import (
 	"math"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/MakeNowJust/memefish/pkg/parser"
 	"github.com/MakeNowJust/memefish/pkg/token"
@@ -3402,6 +3403,97 @@ func TestQuery(t *testing.T) {
 					})
 				})
 			}
+		})
+	}
+}
+
+func TestQuery_ArbitraryAssertion(t *testing.T) {
+	ctx := context.Background()
+	db := newDatabase()
+	for _, s := range allSchema {
+		ddls := parseDDL(t, s)
+		for _, ddl := range ddls {
+			db.ApplyDDL(ctx, ddl)
+		}
+	}
+
+	table := []struct {
+		name   string
+		sql    string
+		params map[string]Value
+		assert func(t *testing.T, rows [][]interface{})
+	}{
+		{
+			name: "Sample",
+			sql:  `SELECT 1`,
+			assert: func(t *testing.T, rows [][]interface{}) {
+				expected := [][]interface{}{
+					[]interface{}{int64(1)},
+				}
+
+				if diff := cmp.Diff(expected, rows); diff != "" {
+					t.Errorf("(-got, +want)\n%s", diff)
+				}
+			},
+		},
+		{
+			name: "CURRENT_TIMESTAMP",
+			sql:  `SELECT CURRENT_TIMESTAMP()`,
+			assert: func(t *testing.T, rows [][]interface{}) {
+				if len(rows) != 1 {
+					t.Fatalf("the number of rows should be 1 but got %v", len(rows))
+				}
+				if len(rows[0]) != 1 {
+					t.Fatalf("the number of columns should be 1 but got %v", len(rows[0]))
+				}
+
+				ts, ok := rows[0][0].(string)
+				if !ok {
+					t.Fatalf("the column should be string but %T", rows[0][0])
+				}
+
+				ts2, ok := parseTimestampLiteral(ts)
+				if !ok {
+					t.Fatalf("failed to parse timestamp: %v", ts)
+				}
+
+				if time.Since(ts2) > 3*time.Second {
+					t.Fatalf("unexpected time: %v, %v", ts2, time.Now())
+				}
+			},
+		},
+	}
+
+	for _, tc := range table {
+		t.Run(tc.name, func(t *testing.T) {
+			tc := tc
+			ses := newSession(db, "foo")
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				stmt, err := (&parser.Parser{
+					Lexer: &parser.Lexer{
+						File: &token.File{FilePath: "", Buffer: tc.sql},
+					},
+				}).ParseQuery()
+				if err != nil {
+					t.Fatalf("failed to parse sql: %q %v", tc.sql, err)
+				}
+
+				it, err := db.Query(ctx, tx, stmt, tc.params)
+				if err != nil {
+					t.Fatalf("Query failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				tc.assert(t, rows)
+			})
 		})
 	}
 }
