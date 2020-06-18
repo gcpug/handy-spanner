@@ -1715,6 +1715,10 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 
 	case *ast.CallExpr:
 		name := strings.ToUpper(e.Func.Name)
+		if v, ok := customFunctionNamesMap[name]; ok {
+			name = v
+		}
+
 		fn, ok := customFunctions[name]
 		if !ok {
 			return NullExpr, newExprErrorf(expr, false, "unsupported CALL function: %s", name)
