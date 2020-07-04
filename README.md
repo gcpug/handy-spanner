@@ -6,6 +6,7 @@
 go get github.com/gcpug/handy-spanner/cmd/handy-spanner
 ```
 
+NOTE: If you want to use some features (e.g. array literal `[]` in DML), require "json1" build tag.
 The Spanner emulator uses sqlite3 internally. You may need to build go-sqlite3 explicitly.
 It also requires cgo to use sqlite3.
 
