@@ -3332,6 +3332,93 @@ func TestQuery(t *testing.T) {
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^EXTRACT from DATE does not support AT TIME ZONE`),
 			},
+			{
+				name:  "IFNULL_Null_IntLiteral",
+				sql:   `SELECT IFNULL(NULL, 1) as result`,
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1)},
+				},
+			},
+			{
+				name:  "IFNULL_IntLiteral_Null",
+				sql:   `SELECT IFNULL(2, 0) as result`,
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{int64(2)},
+				},
+			},
+			{
+				name:  "IFNULL_IntLiteral_IntLiteral",
+				sql:   `SELECT IFNULL(1, 2) as result`,
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1)},
+				},
+			},
+			{
+				name:  "IFNULL_Null_Null",
+				sql:   `SELECT IFNULL(NULL, NULL) as result`,
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{nil},
+				},
+			},
+			{
+				name: "IFNULL_Param_Null",
+				sql:  `SELECT IFNULL(@foo, NULL) as result`,
+				params: map[string]Value{
+					"foo": makeTestValue(int64(100)),
+				},
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{int64(100)},
+				},
+			},
+			{
+				name:  "IFNULL_SubQuery_IntLiteral",
+				sql:   `SELECT IFNULL((SELECT NULL), 3) as result`,
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{int64(3)},
+				},
+			},
+			{
+				name: "IFNULL_NotMatchSignature_Int_String",
+				sql:  `SELECT IFNULL(1, "a") as result`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^arguments does not match for IFNULL`), // TODO
+			},
+			{
+				name:  "NULLIF_Equal",
+				sql:   `SELECT NULLIF(0, 0) as result`,
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{nil},
+				},
+			},
+			{
+				name:  "NULLIF_NotEqual",
+				sql:   `SELECT NULLIF(1, 0) as result`,
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1)},
+				},
+			},
+			{
+				name:  "NULLIF_NotEqual2",
+				sql:   `SELECT NULLIF(0, 1) as result`,
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{int64(0)},
+				},
+			},
+			{
+				name: "NULLIF_NotMatchSignature_Int_String",
+				sql:  `SELECT NULLIF(1, "a") as result`,
+				code: codes.InvalidArgument,
+				msg:  regexp.MustCompile(`^arguments does not match for NULLIF`), // TODO
+			},
 		},
 	}
 
