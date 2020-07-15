@@ -422,6 +422,44 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 	},
 	"PENDING_COMMIT_TIMESTAMP": getCustomFunctionForCurrentTime(),
 	"___CURRENT_TIMESTAMP":     getCustomFunctionForCurrentTime(),
+	"IFNULL": {
+		Func:  nil,
+		NArgs: 2,
+		ArgTypes: func(vts []ValueType) bool {
+			if len(vts) == 0 {
+				return false
+			}
+			vt := vts[0]
+			for i := range vts {
+				if !compareValueType(vt, vts[i]) {
+					return false
+				}
+			}
+			return true
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return vts[0]
+		},
+	},
+	"NULLIF": {
+		Func:  nil,
+		NArgs: 2,
+		ArgTypes: func(vts []ValueType) bool {
+			if len(vts) == 0 {
+				return false
+			}
+			vt := vts[0]
+			for i := range vts {
+				if !compareValueType(vt, vts[i]) {
+					return false
+				}
+			}
+			return true
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return vts[0]
+		},
+	},
 }
 
 func sqlite3FnSign(x int64) int64 {
