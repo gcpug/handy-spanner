@@ -223,8 +223,9 @@ func (s *server) GetOperation(ctx context.Context, req *lropb.GetOperationReques
 
 	any, _ := ptypes.MarshalAny(&empty.Empty{})
 	op := &lropb.Operation{
-		Name: "TODO:xxx",
-		Done: true,
+		Name:     "TODO:xxx",
+		Metadata: any,
+		Done:     true,
 		Result: &lropb.Operation_Response{
 			Response: any,
 		},
@@ -247,8 +248,9 @@ func (s *server) WaitOperation(ctx context.Context, req *lropb.WaitOperationRequ
 	}
 	any, _ := ptypes.MarshalAny(&empty.Empty{})
 	op := &lropb.Operation{
-		Name: "TODO:xxx",
-		Done: true,
+		Name:     "TODO:xxx",
+		Metadata: any,
+		Done:     true,
 		Result: &lropb.Operation_Response{
 			Response: any,
 		},
