@@ -116,8 +116,9 @@ func (s *server) CreateDatabase(ctx context.Context, req *adminv1pb.CreateDataba
 		State: adminv1pb.Database_READY,
 	})
 	op := &lropb.Operation{
-		Name: fmt.Sprintf("%s/operations/_auto_%d", databaseName, time.Now().UnixNano()/1000),
-		Done: true,
+		Name:     fmt.Sprintf("%s/operations/_auto_%d", databaseName, time.Now().UnixNano()/1000),
+		Metadata: resp,
+		Done:     true,
 		Result: &lropb.Operation_Response{
 			Response: resp,
 		},
