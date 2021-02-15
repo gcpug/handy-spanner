@@ -348,6 +348,11 @@ func (s *server) getOrCreateDatabase(name string) (*database, error) {
 		var err error
 		db, err = s.createDatabase(name)
 		if err != nil {
+			st, ok := status.FromError(err)
+			if ok && st.Code() == codes.AlreadyExists {
+				return s.getOrCreateDatabase(name)
+			}
+
 			return nil, err
 		}
 	}
@@ -909,62 +914,62 @@ func createQueryStats(stats queryStats) *structpb.Struct {
 	elapsedTime := time.Since(stats.ReceivedAt)
 	return &structpb.Struct{
 		Fields: map[string]*structpb.Value{
-			"cpu_time": &structpb.Value{
+			"cpu_time": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: toMillisecondString(elapsedTime),
 				},
 			},
-			"remote_server_calls": &structpb.Value{
+			"remote_server_calls": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: "0/0",
 				},
 			},
-			"bytes_returned": &structpb.Value{
+			"bytes_returned": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: "8",
 				},
 			},
-			"query_text": &structpb.Value{
+			"query_text": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: stats.QueryText,
 				},
 			},
-			"query_plan_creation_time": &structpb.Value{
+			"query_plan_creation_time": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: "0 msecs",
 				},
 			},
-			"runtime_creation_time": &structpb.Value{
+			"runtime_creation_time": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: "0 msecs",
 				},
 			},
-			"deleted_rows_scanned": &structpb.Value{
+			"deleted_rows_scanned": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: "0",
 				},
 			},
-			"optimizer_version": &structpb.Value{
+			"optimizer_version": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: "2",
 				},
 			},
-			"elapsed_time": &structpb.Value{
+			"elapsed_time": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: toMillisecondString(elapsedTime),
 				},
 			},
-			"rows_returned": &structpb.Value{
+			"rows_returned": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: fmt.Sprintf("%d", stats.RowCount),
 				},
 			},
-			"filesystem_delay_seconds": &structpb.Value{
+			"filesystem_delay_seconds": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: "0 msecs",
 				},
 			},
-			"rows_scanned": &structpb.Value{
+			"rows_scanned": {
 				Kind: &structpb.Value_StringValue{
 					StringValue: "0",
 				},
