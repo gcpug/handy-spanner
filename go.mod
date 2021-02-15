@@ -1,6 +1,6 @@
 module github.com/gcpug/handy-spanner
 
-go 1.13
+go 1.15
 
 require (
 	cloud.google.com/go v0.56.0
