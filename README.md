@@ -26,7 +26,7 @@ go install github.com/mattn/go-sqlite3
 or
 
 ```
-docker run --rm -it -p 9999:9999 handy-spanner
+docker run --rm -it -p 9999:9999 ginco/handy-spanner
 ```
 
 It runs a hand-spanner server as a process. It serves spanner gRPC server by port 9999 by default.
