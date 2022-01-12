@@ -2856,7 +2856,7 @@ func TestMutationError(t *testing.T) {
 			},
 			code: codes.FailedPrecondition,
 			// msg:  regexp.MustCompile(`New value exceeds the maximum size limit for this column in this database: FullTypes.PKey, size: 1000, limit: 32.`),
-			msg:     regexp.MustCompile(`CHECK constraint failed: FullTypes`),
+			msg:     regexp.MustCompile("CHECK constraint failed: LENGTH\\(`PKey`\\) <= 32"),
 			details: []interface{}{},
 		},
 	}
