@@ -3419,6 +3419,14 @@ func TestQuery(t *testing.T) {
 				code: codes.InvalidArgument,
 				msg:  regexp.MustCompile(`^arguments does not match for NULLIF`), // TODO
 			},
+			{
+				name:  "Function_Mod",
+				sql:   `SELECT MOD(21, 2) as result`,
+				names: []string{"result"},
+				expected: [][]interface{}{
+					[]interface{}{int64(1)},
+				},
+			},
 		},
 	}
 
