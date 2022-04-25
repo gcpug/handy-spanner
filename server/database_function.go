@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgryski/go-farm"
 	sqlite "github.com/mattn/go-sqlite3"
 )
 
@@ -460,6 +461,20 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 			return vts[0]
 		},
 	},
+	"FARM_FINGERPRINT": {
+		Func:  sqlite3FnFarmFingerprint,
+		NArgs: 1,
+		ArgTypes: func(vts []ValueType) bool {
+			return vts[0].Code == TCString
+		},
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCInt64}
+		},
+	},
+}
+
+func sqlite3FnFarmFingerprint(s string) int64 {
+	return int64(farm.Fingerprint64([]byte(s)))
 }
 
 func sqlite3FnSign(x int64) int64 {
