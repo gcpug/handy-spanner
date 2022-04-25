@@ -471,6 +471,21 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 			return ValueType{Code: TCInt64}
 		},
 	},
+	"MOD": {
+		Func:  sqlite3FnMod,
+		NArgs: 2,
+		ArgTypes: exactMatchArgumentTypes(
+			ValueType{Code: TCInt64},
+			ValueType{Code: TCInt64},
+		),
+		ReturnType: func(vts []ValueType) ValueType {
+			return ValueType{Code: TCInt64}
+		},
+	},
+}
+
+func sqlite3FnMod(a, b int64) int64 {
+	return a % b
 }
 
 func sqlite3FnFarmFingerprint(s string) int64 {
