@@ -1156,6 +1156,9 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 				s += " NOT NULL"
 			}
 		}
+		if col.ast != nil && col.ast.GeneratedExpr != nil {
+			s += fmt.Sprintf(" %s", col.ast.GeneratedExpr.SQL())
+		}
 		if col.valueType.Code == TCString && col.isSized && !col.isMax {
 			s += fmt.Sprintf(" CHECK(LENGTH(%s) <= %d)", QuoteString(col.Name()), col.size)
 		}
