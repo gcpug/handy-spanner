@@ -1181,3 +1181,7 @@ func (s *server) ListBackupOperations(ctx context.Context, req *adminv1pb.ListBa
 func (s *server) CopyBackup(ctx context.Context, req *adminv1pb.CopyBackupRequest) (*lropb.Operation, error) {
 	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: CopyBackup")
 }
+
+func (s *server) ListDatabaseRoles(ctx context.Context, req *adminv1pb.ListDatabaseRolesRequest) (*adminv1pb.ListDatabaseRolesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ListDatabaseRoles")
+}
