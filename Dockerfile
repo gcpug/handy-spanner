@@ -1,4 +1,4 @@
-FROM golang:1.15.8-alpine3.13 AS builder
+FROM golang:1.17.12-alpine3.16 AS builder
 
 RUN set -eux \
 	&& apk --no-cache add \
@@ -13,7 +13,7 @@ WORKDIR /go/src/handy-spanner
 
 RUN make build
 
-FROM alpine:3.13.1
+FROM alpine:3.16.1
 
 COPY --from=builder /go/src/handy-spanner/handy-spanner /usr/local/bin/handy-spanner
 
