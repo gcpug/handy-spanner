@@ -68,7 +68,7 @@ func (t *Table) NonNullableAndNonGeneratedColumnsExist(columns []string) (bool, 
 		usedColumns[name] = struct{}{}
 	}
 
-	var noExsitNonNullableColumns []string
+	var noExistNonNullableColumns []string
 	for _, c := range t.columns {
 		if c.nullable {
 			continue
@@ -79,12 +79,12 @@ func (t *Table) NonNullableAndNonGeneratedColumnsExist(columns []string) (bool, 
 
 		n := c.Name()
 		if _, ok := usedColumns[n]; !ok {
-			noExsitNonNullableColumns = append(noExsitNonNullableColumns, n)
+			noExistNonNullableColumns = append(noExistNonNullableColumns, n)
 		}
 	}
 
-	if len(noExsitNonNullableColumns) > 0 {
-		return true, noExsitNonNullableColumns
+	if len(noExistNonNullableColumns) > 0 {
+		return true, noExistNonNullableColumns
 	}
 
 	return false, nil
