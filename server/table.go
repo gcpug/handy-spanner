@@ -60,9 +60,9 @@ func (t *Table) TableViewWithAlias(alias string) *TableView {
 	return createTableViewFromTable(t, alias)
 }
 
-// NonNullableColumnsExist checks non nullable columns exist in the spciefied columns.
-// It returns true and the columns if non nullable columns exist.
-func (t *Table) NonNullableColumnsExist(columns []string) (bool, []string) {
+// NonNullableAndNonGeneratedColumnsExist checks non nullable columns exist in the spciefied columns.
+// It returns true and the columns if non nullable and non generated columns exist.
+func (t *Table) NonNullableAndNonGeneratedColumnsExist(columns []string) (bool, []string) {
 	usedColumns := make(map[string]struct{}, len(columns))
 	for _, name := range columns {
 		usedColumns[name] = struct{}{}
@@ -71,6 +71,9 @@ func (t *Table) NonNullableColumnsExist(columns []string) (bool, []string) {
 	var noExsitNonNullableColumns []string
 	for _, c := range t.columns {
 		if c.nullable {
+			continue
+		}
+		if c.ast != nil && c.ast.GeneratedExpr != nil {
 			continue
 		}
 

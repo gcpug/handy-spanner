@@ -762,7 +762,7 @@ func (d *database) write(ctx context.Context, tx *transaction, tbl string, cols 
 
 	// Check not nullable columns are specified for Insert/Replace
 	if nonNullCheck {
-		if exist, nonNullables := table.NonNullableColumnsExist(cols); exist {
+		if exist, nonNullables := table.NonNullableAndNonGeneratedColumnsExist(cols); exist {
 			columns := strings.Join(nonNullables, ", ")
 			return status.Errorf(codes.FailedPrecondition,
 				"A new row in table %s does not specify a non-null value for these NOT NULL columns: %s",

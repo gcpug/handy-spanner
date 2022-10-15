@@ -480,7 +480,7 @@ func (b *QueryBuilder) buildInsert(up *ast.Insert) (string, []interface{}, error
 	}
 
 	// Check not nullable columns
-	if exist, nonNullables := t.NonNullableColumnsExist(columns); exist {
+	if exist, nonNullables := t.NonNullableAndNonGeneratedColumnsExist(columns); exist {
 		columns := strings.Join(nonNullables, ", ")
 		return "", nil, status.Errorf(codes.FailedPrecondition,
 			"A new row in table %s does not specify a non-null value for these NOT NULL columns: %s",
