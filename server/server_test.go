@@ -24,8 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/protobuf/ptypes"
-	structpb "github.com/golang/protobuf/ptypes/struct"
 	cmp "github.com/google/go-cmp/cmp"
 	uuidpkg "github.com/google/uuid"
 	lropb "google.golang.org/genproto/googleapis/longrunning"
@@ -35,7 +33,10 @@ import (
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 var (
@@ -3435,7 +3436,7 @@ CREATE TABLE Ids (
 			t.Fatal("the operation has not finished yet")
 		}
 		var db adminv1pb.Database
-		if err := ptypes.UnmarshalAny(op.GetResponse(), &db); err != nil {
+		if err := anypb.UnmarshalTo(op.GetResponse(), &db, proto.UnmarshalOptions{DiscardUnknown: true}); err != nil {
 			t.Fatalf("failed to unmarshal response: %s", err)
 		}
 		if got, expect := db.GetName(), fmt.Sprintf("%s/databases/%s", parent, databaseID); got != expect {

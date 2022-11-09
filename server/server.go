@@ -24,10 +24,6 @@ import (
 	"github.com/MakeNowJust/memefish/pkg/ast"
 	"github.com/MakeNowJust/memefish/pkg/parser"
 	"github.com/MakeNowJust/memefish/pkg/token"
-	"github.com/golang/protobuf/ptypes"
-	"github.com/golang/protobuf/ptypes/empty"
-	emptypb "github.com/golang/protobuf/ptypes/empty"
-	structpb "github.com/golang/protobuf/ptypes/struct"
 	iamv1pb "google.golang.org/genproto/googleapis/iam/v1"
 	lropb "google.golang.org/genproto/googleapis/longrunning"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
@@ -35,6 +31,10 @@ import (
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type FakeSpannerServer interface {
@@ -111,7 +111,7 @@ func (s *server) CreateDatabase(ctx context.Context, req *adminv1pb.CreateDataba
 	}
 
 	// TODO: save operation
-	resp, _ := ptypes.MarshalAny(&adminv1pb.Database{
+	resp, _ := anypb.New(&adminv1pb.Database{
 		Name:  databaseName,
 		State: adminv1pb.Database_READY,
 	})
@@ -184,11 +184,11 @@ func (s *server) UpdateDatabaseDdl(ctx context.Context, req *adminv1pb.UpdateDat
 }
 
 // DropDatabase implements adminv1pb.DatabaseAdminServer.
-func (s *server) DropDatabase(ctx context.Context, req *adminv1pb.DropDatabaseRequest) (*empty.Empty, error) {
+func (s *server) DropDatabase(ctx context.Context, req *adminv1pb.DropDatabaseRequest) (*emptypb.Empty, error) {
 	if err := s.dropDatabase(req.GetDatabase()); err != nil {
 		return nil, err
 	}
-	return &empty.Empty{}, nil
+	return &emptypb.Empty{}, nil
 }
 
 // Returns the schema of a Cloud Spanner database as a list of formatted
@@ -221,7 +221,7 @@ func (s *server) GetOperation(ctx context.Context, req *lropb.GetOperationReques
 		return nil, status.Errorf(codes.NotFound, "Operation not found: %s", name)
 	}
 
-	any, _ := ptypes.MarshalAny(&empty.Empty{})
+	any, _ := anypb.New(&emptypb.Empty{})
 	op := &lropb.Operation{
 		Name:     "TODO:xxx",
 		Metadata: any,
@@ -233,12 +233,12 @@ func (s *server) GetOperation(ctx context.Context, req *lropb.GetOperationReques
 	return op, nil
 }
 
-func (s *server) DeleteOperation(ctx context.Context, req *lropb.DeleteOperationRequest) (*empty.Empty, error) {
-	return &empty.Empty{}, nil
+func (s *server) DeleteOperation(ctx context.Context, req *lropb.DeleteOperationRequest) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
 }
 
-func (s *server) CancelOperation(ctx context.Context, req *lropb.CancelOperationRequest) (*empty.Empty, error) {
-	return &empty.Empty{}, nil
+func (s *server) CancelOperation(ctx context.Context, req *lropb.CancelOperationRequest) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
 }
 
 func (s *server) WaitOperation(ctx context.Context, req *lropb.WaitOperationRequest) (*lropb.Operation, error) {
@@ -246,7 +246,7 @@ func (s *server) WaitOperation(ctx context.Context, req *lropb.WaitOperationRequ
 	if req.Name != name {
 		return nil, status.Errorf(codes.NotFound, "Operation not found: %s", name)
 	}
-	any, _ := ptypes.MarshalAny(&empty.Empty{})
+	any, _ := anypb.New(&emptypb.Empty{})
 	op := &lropb.Operation{
 		Name:     "TODO:xxx",
 		Metadata: any,
@@ -1096,7 +1096,7 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 
 	// TODO: more accurate time
 	commitTime := time.Now()
-	commitTimeProto, _ := ptypes.TimestampProto(commitTime)
+	commitTimeProto := timestamppb.New(commitTime)
 
 	return &spannerpb.CommitResponse{
 		CommitTimestamp: commitTimeProto,
@@ -1158,7 +1158,7 @@ func (s *server) UpdateBackup(ctx context.Context, req *adminv1pb.UpdateBackupRe
 	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: UpdateBackup")
 }
 
-func (s *server) DeleteBackup(ctx context.Context, req *adminv1pb.DeleteBackupRequest) (*empty.Empty, error) {
+func (s *server) DeleteBackup(ctx context.Context, req *adminv1pb.DeleteBackupRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: DeleteBackup")
 }
 

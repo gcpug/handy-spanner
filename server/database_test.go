@@ -26,12 +26,12 @@ import (
 	"github.com/MakeNowJust/memefish/pkg/ast"
 	"github.com/MakeNowJust/memefish/pkg/parser"
 	"github.com/MakeNowJust/memefish/pkg/token"
-	structpb "github.com/golang/protobuf/ptypes/struct"
 	cmp "github.com/google/go-cmp/cmp"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 var (
