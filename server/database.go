@@ -1159,6 +1159,14 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 		if col.ast != nil && col.ast.GeneratedExpr != nil {
 			s += fmt.Sprintf(" %s", col.ast.GeneratedExpr.SQL())
 		}
+		if col.ast != nil && col.ast.DefaultExpr != nil {
+			if _, ok := col.ast.DefaultExpr.Expr.(*ast.ArrayLiteral); ok {
+				// TODO: support array literal for default expression
+				s += ` DEFAULT "[]"`
+			} else {
+				s += fmt.Sprintf(" DEFAULT %s", col.ast.DefaultExpr.Expr.SQL())
+			}
+		}
 		if col.valueType.Code == TCString && col.isSized && !col.isMax {
 			s += fmt.Sprintf(" CHECK(LENGTH(%s) <= %d)", QuoteString(col.Name()), col.size)
 		}
