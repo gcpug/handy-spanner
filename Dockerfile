@@ -1,4 +1,4 @@
-FROM golang:1.17.12-alpine3.16 AS builder
+FROM golang:1.18-alpine3.16 AS builder
 
 RUN set -eux \
 	&& apk --no-cache add \

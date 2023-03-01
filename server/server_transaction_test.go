@@ -22,10 +22,10 @@ import (
 	"testing"
 	"time"
 
-	structpb "github.com/golang/protobuf/ptypes/struct"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestReadAndWriteTransaction_Aborted(t *testing.T) {

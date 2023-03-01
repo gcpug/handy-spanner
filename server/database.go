@@ -26,11 +26,11 @@ import (
 	"time"
 
 	"github.com/MakeNowJust/memefish/pkg/ast"
-	structpb "github.com/golang/protobuf/ptypes/struct"
 	uuidpkg "github.com/google/uuid"
 	sqlite "github.com/mattn/go-sqlite3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 type Database interface {
