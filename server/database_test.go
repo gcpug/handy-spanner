@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable}
+	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable, schemaGeneratedValues, schemaDefaultValues}
 	schemaSimple = `CREATE TABLE Simple (
   Id INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
@@ -139,6 +139,27 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
 		"`JOIN` INT64 NOT NULL, " +
 		") PRIMARY KEY(`ALL`); \n" +
 		"CREATE INDEX `ALL` ON `From`(`ALL`);"
+
+	schemaGeneratedValues = `CREATE TABLE GeneratedValues (
+		Id INT64 NOT NULL,
+		Value STRING(32) NOT NULL,
+		N INT64 NOT NULL AS (1) STORED,
+		N2 INT64 NOT NULL AS (1+1) STORED,
+		N3 INT64 NOT NULL AS (N2+1) STORED,
+		X STRING(32) NOT NULL AS ("Value") STORED,
+		X2 STRING(32) NOT NULL AS (CONCAT("Value", "Y")) STORED,
+		) PRIMARY KEY(Id);
+`
+
+	schemaDefaultValues = `CREATE TABLE DefaultValues (
+		Id INT64 NOT NULL,
+		Value STRING(32) NOT NULL,
+		N INT64 NOT NULL DEFAULT (1),
+		X STRING(32) NOT NULL DEFAULT ("x"),
+		Y ARRAY<INT64> NOT NULL DEFAULT (ARRAY<INT64>[10, 20]),
+		) PRIMARY KEY(Id);
+`
+
 	compositePrimaryKeysKeys = []string{
 		"Id", "PKey1", "PKey2", "Error", "X", "Y", "Z",
 	}
@@ -577,6 +598,12 @@ func TestApplyDDL(t *testing.T) {
 		{
 			ddl: schemaFullTypes,
 		},
+		{
+			ddl: schemaGeneratedValues,
+		},
+		{
+			ddl: schemaDefaultValues,
+		},
 	}
 
 	for _, tt := range table {
@@ -624,6 +651,9 @@ func TestRead(t *testing.T) {
 		`INSERT INTO CompositePrimaryKeys VALUES(5, "ccc", 4, 0, "x2", "y5", "z")`,
 
 		"INSERT INTO `From` VALUES(1, 1, 1)",
+
+		`INSERT INTO GeneratedValues (Id, Value) VALUES(1, "xxx")`,
+		`INSERT INTO DefaultValues (Id, Value) VALUES(1, "xxx")`,
 	} {
 		if _, err := db.db.ExecContext(ctx, query); err != nil {
 			t.Fatalf("Insert failed: %v", err)
@@ -1120,6 +1150,24 @@ func TestRead(t *testing.T) {
 			limit: 100,
 			expected: [][]interface{}{
 				[]interface{}{int64(1)},
+			},
+		},
+		"GeneratedValues_Full": {
+			tbl:   "GeneratedValues",
+			cols:  []string{"Id", "Value", "N", "N2", "N3", "X", "X2"},
+			ks:    &KeySet{All: true},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), "xxx", int64(1), int64(2), int64(3), "xxx", "xxxY"},
+			},
+		},
+		"DefaultValues_Full": {
+			tbl:   "DefaultValues",
+			cols:  []string{"Id", "Value", "N", "X", "Y"},
+			ks:    &KeySet{All: true},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(1), "xxx", int64(1), "x", []*int64{}},
 			},
 		},
 	}
@@ -3735,8 +3783,10 @@ func TestInformationSchema(t *testing.T) {
 			expected: [][]interface{}{
 				[]interface{}{"", "", "ArrayTypes", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "CompositePrimaryKeys", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "DefaultValues", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "From", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "FullTypes", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "GeneratedValues", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "Interleaved", "ParentTable", nil, "COMMITTED"},
 				[]interface{}{"", "", "InterleavedCascade", "ParentTableCascade", "CASCADE", "COMMITTED"},
 				[]interface{}{"", "", "InterleavedNoAction", "ParentTableNoAction", "NO ACTION", "COMMITTED"},
@@ -3862,6 +3912,11 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "CompositePrimaryKeys", "X", int64(5), nil, nil, "NO", "STRING(32)"},
 				{"", "", "CompositePrimaryKeys", "Y", int64(6), nil, nil, "NO", "STRING(32)"},
 				{"", "", "CompositePrimaryKeys", "Z", int64(7), nil, nil, "NO", "STRING(32)"},
+				{"", "", "DefaultValues", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "DefaultValues", "Value", int64(2), nil, nil, "NO", "STRING(32)"},
+				{"", "", "DefaultValues", "N", int64(3), nil, nil, "NO", "INT64"},
+				{"", "", "DefaultValues", "X", int64(4), nil, nil, "NO", "STRING(32)"},
+				{"", "", "DefaultValues", "Y", int64(5), nil, nil, "NO", "ARRAY<INT64>"},
 				{"", "", "From", "ALL", int64(1), nil, nil, "NO", "INT64"},
 				{"", "", "From", "CAST", int64(2), nil, nil, "NO", "INT64"},
 				{"", "", "From", "JOIN", int64(3), nil, nil, "NO", "INT64"},
@@ -3880,6 +3935,13 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "FullTypes", "FTFloatNull", int64(13), nil, nil, "YES", "FLOAT64"},
 				{"", "", "FullTypes", "FTDate", int64(14), nil, nil, "NO", "DATE"},
 				{"", "", "FullTypes", "FTDateNull", int64(15), nil, nil, "YES", "DATE"},
+				{"", "", "GeneratedValues", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "GeneratedValues", "Value", int64(2), nil, nil, "NO", "STRING(32)"},
+				{"", "", "GeneratedValues", "N", int64(3), nil, nil, "NO", "INT64"},
+				{"", "", "GeneratedValues", "N2", int64(4), nil, nil, "NO", "INT64"},
+				{"", "", "GeneratedValues", "N3", int64(5), nil, nil, "NO", "INT64"},
+				{"", "", "GeneratedValues", "X", int64(6), nil, nil, "NO", "STRING(32)"},
+				{"", "", "GeneratedValues", "X2", int64(7), nil, nil, "NO", "STRING(32)"},
 				{"", "", "Interleaved", "InterleavedId", int64(1), nil, nil, "NO", "INT64"},
 				{"", "", "Interleaved", "Id", int64(2), nil, nil, "NO", "INT64"},
 				{"", "", "Interleaved", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
@@ -3936,8 +3998,10 @@ func TestInformationSchema(t *testing.T) {
 			expected: [][]interface{}{
 				{"", "", "ArrayTypes", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "DefaultValues", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "From", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "GeneratedValues", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "InterleavedCascade", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "InterleavedNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
@@ -4029,6 +4093,7 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "CompositePrimaryKeys", "CompositePrimaryKeysByXY", "INDEX", "Y", int64(2), "DESC", "NO", "STRING(32)"},
 				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "PKey1", int64(1), "ASC", "NO", "STRING(32)"},
 				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "PKey2", int64(2), "DESC", "NO", "INT64"},
+				{"", "", "DefaultValues", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "From", "ALL", "INDEX", "ALL", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "From", "PRIMARY_KEY", "PRIMARY_KEY", "ALL", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "FullTypes", "FullTypesByFTString", "INDEX", "FTString", int64(1), "ASC", "NO", "STRING(32)"},
@@ -4038,6 +4103,7 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "FTTimestamp", int64(2), "ASC", "NO", "TIMESTAMP"},
 				{"", "", "FullTypes", "FullTypesByTimestamp", "INDEX", "FTTimestamp", int64(1), "ASC", "NO", "TIMESTAMP"},
 				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "PKey", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "GeneratedValues", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "Interleaved", "InterleavedKey", "INDEX", "Id", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "Interleaved", "InterleavedKey", "INDEX", "Value", int64(2), "ASC", "NO", "STRING(MAX)"},
 				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
