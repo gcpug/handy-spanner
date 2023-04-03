@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MakeNowJust/memefish/pkg/ast"
-	"github.com/MakeNowJust/memefish/pkg/parser"
-	"github.com/MakeNowJust/memefish/pkg/token"
+	"github.com/cloudspannerecosystem/memefish/pkg/ast"
+	"github.com/cloudspannerecosystem/memefish/pkg/parser"
+	"github.com/cloudspannerecosystem/memefish/pkg/token"
 	cmp "github.com/google/go-cmp/cmp"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
