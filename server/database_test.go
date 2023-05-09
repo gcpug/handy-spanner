@@ -157,6 +157,9 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
 		N INT64 NOT NULL DEFAULT (1),
 		X STRING(32) NOT NULL DEFAULT ("x"),
 		Y ARRAY<INT64> NOT NULL DEFAULT (ARRAY<INT64>[10, 20]),
+		T1 TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP()),
+		T2 TIMESTAMP NOT NULL DEFAULT (current_timestamp()),
+		Date TIMESTAMP NOT NULL DEFAULT (CURRENT_DATE()),
 		) PRIMARY KEY(Id);
 `
 
@@ -3917,6 +3920,9 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "DefaultValues", "N", int64(3), nil, nil, "NO", "INT64"},
 				{"", "", "DefaultValues", "X", int64(4), nil, nil, "NO", "STRING(32)"},
 				{"", "", "DefaultValues", "Y", int64(5), nil, nil, "NO", "ARRAY<INT64>"},
+				{"", "", "DefaultValues", "T1", int64(6), nil, nil, "NO", "TIMESTAMP"},
+				{"", "", "DefaultValues", "T2", int64(7), nil, nil, "NO", "TIMESTAMP"},
+				{"", "", "DefaultValues", "Date", int64(8), nil, nil, "NO", "TIMESTAMP"},
 				{"", "", "From", "ALL", int64(1), nil, nil, "NO", "INT64"},
 				{"", "", "From", "CAST", int64(2), nil, nil, "NO", "INT64"},
 				{"", "", "From", "JOIN", int64(3), nil, nil, "NO", "INT64"},

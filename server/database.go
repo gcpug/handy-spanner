@@ -1164,7 +1164,20 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 				// TODO: support array literal for default expression
 				s += ` DEFAULT "[]"`
 			} else {
-				s += fmt.Sprintf(" DEFAULT %s", col.ast.DefaultExpr.Expr.SQL())
+				defSQL := col.ast.DefaultExpr.Expr.SQL()
+
+				// workaround: convert default expression for sqlite
+				switch exp := col.ast.DefaultExpr.Expr.(type) {
+				case *ast.CallExpr:
+					switch strings.ToUpper(exp.Func.Name) {
+					case "CURRENT_TIMESTAMP":
+						defSQL = "CURRENT_TIMESTAMP"
+					case "CURRENT_DATE":
+						defSQL = "CURRENT_DATE"
+					}
+				}
+
+				s += fmt.Sprintf(" DEFAULT %s", defSQL)
 			}
 		}
 		if col.valueType.Code == TCString && col.isSized && !col.isMax {
