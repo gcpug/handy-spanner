@@ -633,40 +633,30 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 	switch stmt := stmt.(type) {
 	case *ast.QueryStatement:
 		iter, err = session.database.Query(ctx, tx, stmt, params)
-		if err != nil {
-			if !tx.Available() {
-				return checkAvailability()
-			}
-			return err
-		}
 		stats = queryStats{
 			Mode:       req.QueryMode,
 			ReceivedAt: receivedAt,
 			QueryText:  req.Sql,
 		}
 	case ast.DML:
-		result, err := s.executeParsedDML(ctx, session, tx, stmt, req.GetParams(), req.GetParamTypes())
-		if err != nil {
-			if !tx.Available() {
-				return checkAvailability()
-			}
-			return err
-		}
-
-		if txCreated {
-			result.Metadata = &spannerpb.ResultSetMetadata{
-				Transaction: tx.Proto(),
-			}
-		}
-
+		var result *spannerpb.ResultSet
+		result, err = s.executeParsedDML(ctx, session, tx, stmt, req.GetParams(), req.GetParamTypes())
 		stats = queryStats{
 			Mode:       req.QueryMode,
 			ReceivedAt: receivedAt,
 			QueryText:  req.Sql,
+			RowCount:   result.GetStats().GetRowCountExact(),
 		}
 		iter = emptyRowIterator{}
 	default:
 		return status.Errorf(codes.InvalidArgument, "Unknown query: %q", req.Sql)
+	}
+
+	if err != nil {
+		if !tx.Available() {
+			return checkAvailability()
+		}
+		return err
 	}
 
 	if err := sendResult(stream, tx, iter, txCreated, stats); err != nil {
@@ -924,7 +914,9 @@ func sendResult(stream spannerpb.Spanner_StreamingReadServer, tx *transaction, i
 		return err
 	}
 
-	qs.RowCount = rowCount
+	if qs.RowCount == 0 {
+		qs.RowCount = rowCount
+	}
 	stats := &spannerpb.ResultSetStats{
 		QueryStats: createQueryStats(qs),
 	}
