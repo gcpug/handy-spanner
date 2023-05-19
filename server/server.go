@@ -628,25 +628,20 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 		params[key] = v
 	}
 
+	stats := queryStats{
+		Mode:       req.QueryMode,
+		ReceivedAt: receivedAt,
+		QueryText:  req.Sql,
+	}
+
 	var iter RowIterator
-	var stats queryStats
 	switch stmt := stmt.(type) {
 	case *ast.QueryStatement:
 		iter, err = session.database.Query(ctx, tx, stmt, params)
-		stats = queryStats{
-			Mode:       req.QueryMode,
-			ReceivedAt: receivedAt,
-			QueryText:  req.Sql,
-		}
 	case ast.DML:
 		var result *spannerpb.ResultSet
 		result, err = s.executeParsedDML(ctx, session, tx, stmt, req.GetParams(), req.GetParamTypes())
-		stats = queryStats{
-			Mode:       req.QueryMode,
-			ReceivedAt: receivedAt,
-			QueryText:  req.Sql,
-			RowCount:   result.GetStats().GetRowCountExact(),
-		}
+		stats.RowCount = result.GetStats().GetRowCountExact()
 		iter = emptyRowIterator{}
 	default:
 		return status.Errorf(codes.InvalidArgument, "Unknown query: %q", req.Sql)
