@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable, schemaGeneratedValues, schemaDefaultValues}
+	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable, schemaGeneratedValues, schemaGeneratedColumn, schemaDefaultValues}
 	schemaSimple = `CREATE TABLE Simple (
   Id INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
@@ -139,6 +139,11 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
 		"`JOIN` INT64 NOT NULL, " +
 		") PRIMARY KEY(`ALL`); \n" +
 		"CREATE INDEX `ALL` ON `From`(`ALL`);"
+	schemaGeneratedColumn = `CREATE TABLE GeneratedColumn (
+  Id INT64 NOT NULL,
+	Value STRING(MAX) NOT NULL AS (CAST(Id AS STRING)) STORED,
+) PRIMARY KEY(Id);
+`
 
 	schemaGeneratedValues = `CREATE TABLE GeneratedValues (
 		Id INT64 NOT NULL,
@@ -1696,6 +1701,18 @@ func TestInsertAndReplace(t *testing.T) {
 			limit: 100,
 			expected: [][]interface{}{
 				[]interface{}{int64(2), int64(2), int64(2)},
+			},
+		},
+		"GeneratedColumn": {
+			tbl:   "GeneratedColumn",
+			wcols: []string{"Id"},
+			values: []*structpb.Value{
+				makeStringValue("100"),
+			},
+			cols:  []string{"Id", "Value"},
+			limit: 100,
+			expected: [][]interface{}{
+				[]interface{}{int64(100), "100"},
 			},
 		},
 	}
@@ -3789,6 +3806,7 @@ func TestInformationSchema(t *testing.T) {
 				[]interface{}{"", "", "DefaultValues", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "From", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "FullTypes", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "GeneratedColumn", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "GeneratedValues", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "Interleaved", "ParentTable", nil, "COMMITTED"},
 				[]interface{}{"", "", "InterleavedCascade", "ParentTableCascade", "CASCADE", "COMMITTED"},
@@ -3941,6 +3959,8 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "FullTypes", "FTFloatNull", int64(13), nil, nil, "YES", "FLOAT64"},
 				{"", "", "FullTypes", "FTDate", int64(14), nil, nil, "NO", "DATE"},
 				{"", "", "FullTypes", "FTDateNull", int64(15), nil, nil, "YES", "DATE"},
+				{"", "", "GeneratedColumn", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "GeneratedColumn", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
 				{"", "", "GeneratedValues", "Id", int64(1), nil, nil, "NO", "INT64"},
 				{"", "", "GeneratedValues", "Value", int64(2), nil, nil, "NO", "STRING(32)"},
 				{"", "", "GeneratedValues", "N", int64(3), nil, nil, "NO", "INT64"},
@@ -4007,6 +4027,7 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "DefaultValues", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "From", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "GeneratedColumn", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "GeneratedValues", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "Interleaved", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "InterleavedCascade", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
@@ -4109,6 +4130,7 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "FullTypes", "FullTypesByIntTimestamp", "INDEX", "FTTimestamp", int64(2), "ASC", "NO", "TIMESTAMP"},
 				{"", "", "FullTypes", "FullTypesByTimestamp", "INDEX", "FTTimestamp", int64(1), "ASC", "NO", "TIMESTAMP"},
 				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "PKey", int64(1), "ASC", "NO", "STRING(32)"},
+				{"", "", "GeneratedColumn", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "GeneratedValues", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "Interleaved", "InterleavedKey", "INDEX", "Id", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "Interleaved", "InterleavedKey", "INDEX", "Value", int64(2), "ASC", "NO", "STRING(MAX)"},
