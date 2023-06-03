@@ -22,13 +22,13 @@ import (
 	"time"
 
 	"database/sql"
-	"github.com/MakeNowJust/memefish/pkg/ast"
-	structpb "github.com/golang/protobuf/ptypes/struct"
+	"github.com/cloudspannerecosystem/memefish/pkg/ast"
 	cmp "github.com/google/go-cmp/cmp"
 	uuidpkg "github.com/google/uuid"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestCompareValueType(t *testing.T) {

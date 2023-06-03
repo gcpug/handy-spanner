@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/MakeNowJust/memefish/pkg/ast"
+	"github.com/cloudspannerecosystem/memefish/pkg/ast"
 )
 
 type Table struct {

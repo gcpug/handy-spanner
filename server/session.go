@@ -20,11 +20,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/ptypes"
 	uuidpkg "github.com/google/uuid"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func validateSessionName(sessionName string) bool {
@@ -68,8 +68,8 @@ func (s *session) Name() string {
 }
 
 func (s *session) Proto() *spannerpb.Session {
-	ctime, _ := ptypes.TimestampProto(s.createdAt)
-	last, _ := ptypes.TimestampProto(s.lastUse)
+	ctime := timestamppb.New(s.createdAt)
+	last := timestamppb.New(s.lastUse)
 	return &spannerpb.Session{
 		Name:                   s.name,
 		CreateTime:             ctime,

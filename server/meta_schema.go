@@ -15,7 +15,7 @@
 package server
 
 import (
-	"github.com/MakeNowJust/memefish/pkg/ast"
+	"github.com/cloudspannerecosystem/memefish/pkg/ast"
 )
 
 var metaTablesMap = map[string]string{

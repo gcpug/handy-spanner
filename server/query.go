@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MakeNowJust/memefish/pkg/ast"
+	"github.com/cloudspannerecosystem/memefish/pkg/ast"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

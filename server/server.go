@@ -21,20 +21,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MakeNowJust/memefish/pkg/ast"
-	"github.com/MakeNowJust/memefish/pkg/parser"
-	"github.com/MakeNowJust/memefish/pkg/token"
-	"github.com/golang/protobuf/ptypes"
-	"github.com/golang/protobuf/ptypes/empty"
-	emptypb "github.com/golang/protobuf/ptypes/empty"
-	structpb "github.com/golang/protobuf/ptypes/struct"
-	iamv1pb "google.golang.org/genproto/googleapis/iam/v1"
-	lropb "google.golang.org/genproto/googleapis/longrunning"
+	iamv1pb "cloud.google.com/go/iam/apiv1/iampb"
+	lropb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	adminv1pb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
+	spannerpb "cloud.google.com/go/spanner/apiv1/spannerpb"
+	"github.com/cloudspannerecosystem/memefish/pkg/ast"
+	"github.com/cloudspannerecosystem/memefish/pkg/parser"
+	"github.com/cloudspannerecosystem/memefish/pkg/token"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
-	adminv1pb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
-	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type FakeSpannerServer interface {
@@ -111,7 +111,7 @@ func (s *server) CreateDatabase(ctx context.Context, req *adminv1pb.CreateDataba
 	}
 
 	// TODO: save operation
-	resp, _ := ptypes.MarshalAny(&adminv1pb.Database{
+	resp, _ := anypb.New(&adminv1pb.Database{
 		Name:  databaseName,
 		State: adminv1pb.Database_READY,
 	})
@@ -183,12 +183,16 @@ func (s *server) UpdateDatabaseDdl(ctx context.Context, req *adminv1pb.UpdateDat
 	return op, nil
 }
 
+func (s *server) UpdateDatabase(context.Context, *adminv1pb.UpdateDatabaseRequest) (*lropb.Operation, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: UpdateDatabase")
+}
+
 // DropDatabase implements adminv1pb.DatabaseAdminServer.
-func (s *server) DropDatabase(ctx context.Context, req *adminv1pb.DropDatabaseRequest) (*empty.Empty, error) {
+func (s *server) DropDatabase(ctx context.Context, req *adminv1pb.DropDatabaseRequest) (*emptypb.Empty, error) {
 	if err := s.dropDatabase(req.GetDatabase()); err != nil {
 		return nil, err
 	}
-	return &empty.Empty{}, nil
+	return &emptypb.Empty{}, nil
 }
 
 // Returns the schema of a Cloud Spanner database as a list of formatted
@@ -221,7 +225,7 @@ func (s *server) GetOperation(ctx context.Context, req *lropb.GetOperationReques
 		return nil, status.Errorf(codes.NotFound, "Operation not found: %s", name)
 	}
 
-	any, _ := ptypes.MarshalAny(&empty.Empty{})
+	any, _ := anypb.New(&emptypb.Empty{})
 	op := &lropb.Operation{
 		Name:     "TODO:xxx",
 		Metadata: any,
@@ -233,12 +237,12 @@ func (s *server) GetOperation(ctx context.Context, req *lropb.GetOperationReques
 	return op, nil
 }
 
-func (s *server) DeleteOperation(ctx context.Context, req *lropb.DeleteOperationRequest) (*empty.Empty, error) {
-	return &empty.Empty{}, nil
+func (s *server) DeleteOperation(ctx context.Context, req *lropb.DeleteOperationRequest) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
 }
 
-func (s *server) CancelOperation(ctx context.Context, req *lropb.CancelOperationRequest) (*empty.Empty, error) {
-	return &empty.Empty{}, nil
+func (s *server) CancelOperation(ctx context.Context, req *lropb.CancelOperationRequest) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
 }
 
 func (s *server) WaitOperation(ctx context.Context, req *lropb.WaitOperationRequest) (*lropb.Operation, error) {
@@ -246,7 +250,7 @@ func (s *server) WaitOperation(ctx context.Context, req *lropb.WaitOperationRequ
 	if req.Name != name {
 		return nil, status.Errorf(codes.NotFound, "Operation not found: %s", name)
 	}
-	any, _ := ptypes.MarshalAny(&empty.Empty{})
+	any, _ := anypb.New(&emptypb.Empty{})
 	op := &lropb.Operation{
 		Name:     "TODO:xxx",
 		Metadata: any,
@@ -513,6 +517,12 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 		return status.Errorf(codes.Unknown, "unknown status")
 	}
 
+	rollbackCreatedTx := func() {
+		if txCreated {
+			tx.Done(TransactionAborted)
+		}
+	}
+
 	if !tx.Available() {
 		return nil, checkAvailability()
 	}
@@ -532,6 +542,7 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 		ParamTypes: req.GetParamTypes(),
 	})
 	if err != nil {
+		rollbackCreatedTx()
 		if !tx.Available() {
 			return nil, checkAvailability()
 		}
@@ -572,6 +583,12 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 			return status.Errorf(codes.Aborted, "transaction aborted")
 		}
 		return status.Errorf(codes.Unknown, "unknown status")
+	}
+
+	rollbackCreatedTx := func() {
+		if txCreated {
+			tx.Done(TransactionAborted)
+		}
 	}
 
 	if !tx.Available() {
@@ -620,6 +637,7 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 
 	iter, err := session.database.Query(ctx, tx, stmt, params)
 	if err != nil {
+		rollbackCreatedTx()
 		if !tx.Available() {
 			return checkAvailability()
 		}
@@ -692,6 +710,7 @@ func (s *server) ExecuteBatchDml(ctx context.Context, req *spannerpb.ExecuteBatc
 	for i, stmt := range req.Statements {
 		result, err := s.executeDML(ctx, session, tx, stmt)
 		if err != nil {
+			// TODO: confirm to require rollback transaction in partial success
 			if !tx.Available() {
 				return nil, checkAvailability()
 			}
@@ -792,6 +811,12 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 		return status.Errorf(codes.Unknown, "unknown status")
 	}
 
+	rollbackCreatedTx := func() {
+		if txCreated {
+			tx.Done(TransactionAborted)
+		}
+	}
+
 	if !tx.Available() {
 		return checkAvailability()
 	}
@@ -806,6 +831,7 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 
 	iter, err := session.database.Read(ctx, tx, req.Table, req.Index, req.Columns, makeKeySet(req.KeySet), req.Limit)
 	if err != nil {
+		rollbackCreatedTx()
 		if !tx.Available() {
 			return checkAvailability()
 		}
@@ -1096,7 +1122,7 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 
 	// TODO: more accurate time
 	commitTime := time.Now()
-	commitTimeProto, _ := ptypes.TimestampProto(commitTime)
+	commitTimeProto := timestamppb.New(commitTime)
 
 	return &spannerpb.CommitResponse{
 		CommitTimestamp: commitTimeProto,
@@ -1158,7 +1184,7 @@ func (s *server) UpdateBackup(ctx context.Context, req *adminv1pb.UpdateBackupRe
 	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: UpdateBackup")
 }
 
-func (s *server) DeleteBackup(ctx context.Context, req *adminv1pb.DeleteBackupRequest) (*empty.Empty, error) {
+func (s *server) DeleteBackup(ctx context.Context, req *adminv1pb.DeleteBackupRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: DeleteBackup")
 }
 

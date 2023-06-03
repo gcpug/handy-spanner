@@ -25,12 +25,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/MakeNowJust/memefish/pkg/ast"
-	structpb "github.com/golang/protobuf/ptypes/struct"
+	"github.com/cloudspannerecosystem/memefish/pkg/ast"
 	uuidpkg "github.com/google/uuid"
 	sqlite "github.com/mattn/go-sqlite3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 type Database interface {
@@ -1158,6 +1158,27 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 		}
 		if col.ast != nil && col.ast.GeneratedExpr != nil {
 			s += fmt.Sprintf(" %s", col.ast.GeneratedExpr.SQL())
+		}
+		if col.ast != nil && col.ast.DefaultExpr != nil {
+			if _, ok := col.ast.DefaultExpr.Expr.(*ast.ArrayLiteral); ok {
+				// TODO: support array literal for default expression
+				s += ` DEFAULT "[]"`
+			} else {
+				defSQL := col.ast.DefaultExpr.Expr.SQL()
+
+				// workaround: convert default expression for sqlite
+				switch exp := col.ast.DefaultExpr.Expr.(type) {
+				case *ast.CallExpr:
+					switch strings.ToUpper(exp.Func.Name) {
+					case "CURRENT_TIMESTAMP":
+						defSQL = "CURRENT_TIMESTAMP"
+					case "CURRENT_DATE":
+						defSQL = "CURRENT_DATE"
+					}
+				}
+
+				s += fmt.Sprintf(" DEFAULT %s", defSQL)
+			}
 		}
 		if col.valueType.Code == TCString && col.isSized && !col.isMax {
 			s += fmt.Sprintf(" CHECK(LENGTH(%s) <= %d)", QuoteString(col.Name()), col.size)
