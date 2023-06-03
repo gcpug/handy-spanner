@@ -183,6 +183,10 @@ func (s *server) UpdateDatabaseDdl(ctx context.Context, req *adminv1pb.UpdateDat
 	return op, nil
 }
 
+func (s *server) UpdateDatabase(context.Context, *adminv1pb.UpdateDatabaseRequest) (*lropb.Operation, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: UpdateDatabase")
+}
+
 // DropDatabase implements adminv1pb.DatabaseAdminServer.
 func (s *server) DropDatabase(ctx context.Context, req *adminv1pb.DropDatabaseRequest) (*emptypb.Empty, error) {
 	if err := s.dropDatabase(req.GetDatabase()); err != nil {
@@ -513,6 +517,12 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 		return status.Errorf(codes.Unknown, "unknown status")
 	}
 
+	rollbackCreatedTx := func() {
+		if txCreated {
+			tx.Done(TransactionAborted)
+		}
+	}
+
 	if !tx.Available() {
 		return nil, checkAvailability()
 	}
@@ -532,6 +542,7 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 		ParamTypes: req.GetParamTypes(),
 	})
 	if err != nil {
+		rollbackCreatedTx()
 		if !tx.Available() {
 			return nil, checkAvailability()
 		}
@@ -572,6 +583,12 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 			return status.Errorf(codes.Aborted, "transaction aborted")
 		}
 		return status.Errorf(codes.Unknown, "unknown status")
+	}
+
+	rollbackCreatedTx := func() {
+		if txCreated {
+			tx.Done(TransactionAborted)
+		}
 	}
 
 	if !tx.Available() {
@@ -620,6 +637,7 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 
 	iter, err := session.database.Query(ctx, tx, stmt, params)
 	if err != nil {
+		rollbackCreatedTx()
 		if !tx.Available() {
 			return checkAvailability()
 		}
@@ -692,6 +710,7 @@ func (s *server) ExecuteBatchDml(ctx context.Context, req *spannerpb.ExecuteBatc
 	for i, stmt := range req.Statements {
 		result, err := s.executeDML(ctx, session, tx, stmt)
 		if err != nil {
+			// TODO: confirm to require rollback transaction in partial success
 			if !tx.Available() {
 				return nil, checkAvailability()
 			}
@@ -792,6 +811,12 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 		return status.Errorf(codes.Unknown, "unknown status")
 	}
 
+	rollbackCreatedTx := func() {
+		if txCreated {
+			tx.Done(TransactionAborted)
+		}
+	}
+
 	if !tx.Available() {
 		return checkAvailability()
 	}
@@ -806,6 +831,7 @@ func (s *server) StreamingRead(req *spannerpb.ReadRequest, stream spannerpb.Span
 
 	iter, err := session.database.Read(ctx, tx, req.Table, req.Index, req.Columns, makeKeySet(req.KeySet), req.Limit)
 	if err != nil {
+		rollbackCreatedTx()
 		if !tx.Available() {
 			return checkAvailability()
 		}
