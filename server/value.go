@@ -228,6 +228,7 @@ const (
 	TCBytes
 	TCArray
 	TCStruct
+	TCJson
 )
 
 type ArrayValue interface {
