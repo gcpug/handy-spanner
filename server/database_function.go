@@ -483,7 +483,8 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 		},
 	},
 	"GENERATE_ARRAY": {
-		Func: sqlite3FnGenerateArray,
+		Func:  sqlite3FnGenerateArray,
+		NArgs: 2,
 		ArgTypes: func(vts []ValueType) bool {
 			if vts[0].Code == TCInt64 && vts[1].Code == TCInt64 {
 				if len(vts) == 3 {
