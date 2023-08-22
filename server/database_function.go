@@ -499,10 +499,10 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 	},
 }
 
-func sqlite3FnGenerateArray(a, b, c int64) []int64 {
-	res := make([]int64, 0, c)
+func sqlite3FnGenerateArray(a, b, c int64) []byte {
+	res := make([]byte, 0, c)
 	for i := a; i < b; i += c {
-		res = append(res, i)
+		res = append(res, byte(i))
 	}
 	return res
 }
