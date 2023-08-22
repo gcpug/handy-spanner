@@ -3427,6 +3427,20 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(1)},
 				},
 			},
+			{
+				name: "Function_GENERATE_ARRAY",
+				sql:  `SELECT x FROM UNNEST(GENERATE_ARRAY(1, 3)) AS x`,
+				expected: [][]interface{}{
+					[]interface{}{int64(1), int64(2), int64(3)},
+				},
+			},
+			{
+				name: "Function_GENERATE_ARRAY2",
+				sql:  `SELECT x FROM UNNEST(GENERATE_ARRAY(1, 3, 2)) AS x`,
+				expected: [][]interface{}{
+					[]interface{}{int64(1), int64(3)},
+				},
+			},
 		},
 	}
 
