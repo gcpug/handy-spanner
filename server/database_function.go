@@ -484,8 +484,11 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 	},
 	"GENERATE_ARRAY": {
 		Func:  sqlite3FnGenerateArray,
-		NArgs: 2,
+		NArgs: -2,
 		ArgTypes: func(vts []ValueType) bool {
+			if len(vts) < 2 || len(vts) > 3 {
+				return false
+			}
 			if vts[0].Code == TCInt64 && vts[1].Code == TCInt64 {
 				if len(vts) == 3 {
 					return vts[2].Code == TCInt64
@@ -495,14 +498,22 @@ var customFunctions map[string]CustomFunction = map[string]CustomFunction{
 			return false
 		},
 		ReturnType: func(vts []ValueType) ValueType {
-			return ValueType{Code: TCArray}
+			return ValueType{
+				Code:      TCArray,
+				ArrayType: &ValueType{Code: TCInt64},
+			}
 		},
 	},
 }
 
-func sqlite3FnGenerateArray(a, b, c int64) []byte {
-	res := make([]byte, 0, c)
-	for i := a; i < b; i += c {
+func sqlite3FnGenerateArray(xs ...int64) []byte {
+	step := int64(1)
+	if len(xs) == 3 {
+		step = xs[2]
+	}
+	a, b := xs[0], xs[1]
+	res := make([]byte, 0, b-a)
+	for i := a; i <= b; i += step {
 		res = append(res, byte(i))
 	}
 	return res
