@@ -3429,14 +3429,14 @@ func TestQuery(t *testing.T) {
 			},
 			{
 				name: "Function_GENERATE_ARRAY",
-				sql:  `SELECT x FROM UNNEST(GENERATE_ARRAY(1, 3)) AS x`,
+				sql:  `SELECT GENERATE_ARRAY(1, 3)`,
 				expected: [][]interface{}{
 					[]interface{}{int64(1), int64(2), int64(3)},
 				},
 			},
 			{
 				name: "Function_GENERATE_ARRAY2",
-				sql:  `SELECT x FROM UNNEST(GENERATE_ARRAY(1, 3, 2)) AS x`,
+				sql:  `SELECT GENERATE_ARRAY(1, 3, 2)`,
 				expected: [][]interface{}{
 					[]interface{}{int64(1), int64(3)},
 				},
