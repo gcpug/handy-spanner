@@ -268,6 +268,8 @@ func newColumn(def *ast.ColumnDef) *Column {
 		dbdt = DBDTText
 	case TCArray:
 		dbdt = DBDTJson
+	case TCJson:
+		dbdt = DBDTJson
 	}
 
 	var allowCommitTimestamp bool
@@ -307,6 +309,8 @@ func astTypeToTypeCode(astTypeName ast.ScalarTypeName) TypeCode {
 		return TCDate
 	case ast.TimestampTypeName:
 		return TCTimestamp
+	case ast.ScalarTypeName("JSON"):
+		return TCJson
 	default:
 		panic("unknown type")
 	}
