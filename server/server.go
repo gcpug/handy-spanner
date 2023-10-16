@@ -1211,3 +1211,7 @@ func (s *server) CopyBackup(ctx context.Context, req *adminv1pb.CopyBackupReques
 func (s *server) ListDatabaseRoles(ctx context.Context, req *adminv1pb.ListDatabaseRolesRequest) (*adminv1pb.ListDatabaseRolesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ListDatabaseRoles")
 }
+
+func (*server) BatchWrite(*spannerpb.BatchWriteRequest, spannerpb.Spanner_BatchWriteServer) error {
+	return status.Errorf(codes.Unimplemented, "not implemented yet: BatchWrite")
+}
