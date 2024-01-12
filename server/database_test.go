@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudspannerecosystem/memefish/pkg/ast"
-	"github.com/cloudspannerecosystem/memefish/pkg/parser"
-	"github.com/cloudspannerecosystem/memefish/pkg/token"
+	"github.com/cloudspannerecosystem/memefish"
+	"github.com/cloudspannerecosystem/memefish/ast"
+	"github.com/cloudspannerecosystem/memefish/token"
 	cmp "github.com/google/go-cmp/cmp"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -578,8 +578,8 @@ func parseDDL(t *testing.T, s string) []ast.DDL {
 		if stmt == "" {
 			continue
 		}
-		ddl, err := (&parser.Parser{
-			Lexer: &parser.Lexer{
+		ddl, err := (&memefish.Parser{
+			Lexer: &memefish.Lexer{
 				File: &token.File{FilePath: "", Buffer: stmt},
 			},
 		}).ParseDDL()
@@ -3239,8 +3239,8 @@ func TestExecute(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			stmt, err := (&parser.Parser{
-				Lexer: &parser.Lexer{
+			stmt, err := (&memefish.Parser{
+				Lexer: &memefish.Lexer{
 					File: &token.File{FilePath: "", Buffer: tt.sql},
 				},
 			}).ParseDML()
@@ -4182,8 +4182,8 @@ func TestInformationSchema(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ses := newSession(db, "foo")
 			testRunInTransaction(t, ses, func(tx *transaction) {
-				stmt, err := (&parser.Parser{
-					Lexer: &parser.Lexer{
+				stmt, err := (&memefish.Parser{
+					Lexer: &memefish.Lexer{
 						File: &token.File{FilePath: "", Buffer: tc.sql},
 					},
 				}).ParseQuery()

@@ -25,9 +25,9 @@ import (
 	lropb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	adminv1pb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 	spannerpb "cloud.google.com/go/spanner/apiv1/spannerpb"
-	"github.com/cloudspannerecosystem/memefish/pkg/ast"
-	"github.com/cloudspannerecosystem/memefish/pkg/parser"
-	"github.com/cloudspannerecosystem/memefish/pkg/token"
+	"github.com/cloudspannerecosystem/memefish"
+	"github.com/cloudspannerecosystem/memefish/ast"
+	"github.com/cloudspannerecosystem/memefish/token"
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -74,8 +74,8 @@ func (s *server) ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL
 
 // CreateDatabase implements adminv1pb.DatabaseAdminServer.
 func (s *server) CreateDatabase(ctx context.Context, req *adminv1pb.CreateDatabaseRequest) (*lropb.Operation, error) {
-	ddl, err := (&parser.Parser{
-		Lexer: &parser.Lexer{
+	ddl, err := (&memefish.Parser{
+		Lexer: &memefish.Lexer{
 			File: &token.File{FilePath: "", Buffer: req.GetCreateStatement()},
 		},
 	}).ParseDDL()
@@ -89,8 +89,8 @@ func (s *server) CreateDatabase(ctx context.Context, req *adminv1pb.CreateDataba
 
 	var stmts []ast.DDL
 	for _, s := range req.GetExtraStatements() {
-		stmt, err := (&parser.Parser{
-			Lexer: &parser.Lexer{
+		stmt, err := (&memefish.Parser{
+			Lexer: &memefish.Lexer{
 				File: &token.File{FilePath: "", Buffer: s},
 			},
 		}).ParseDDL()
@@ -162,8 +162,8 @@ func (s *server) ListDatabases(ctx context.Context, req *adminv1pb.ListDatabases
 func (s *server) UpdateDatabaseDdl(ctx context.Context, req *adminv1pb.UpdateDatabaseDdlRequest) (*lropb.Operation, error) {
 	var stmts []ast.DDL
 	for _, s := range req.Statements {
-		stmt, err := (&parser.Parser{
-			Lexer: &parser.Lexer{
+		stmt, err := (&memefish.Parser{
+			Lexer: &memefish.Lexer{
 				File: &token.File{FilePath: "", Buffer: s},
 			},
 		}).ParseDDL()
@@ -607,8 +607,8 @@ func (s *server) ExecuteStreamingSql(req *spannerpb.ExecuteSqlRequest, stream sp
 		return status.Error(codes.InvalidArgument, "Invalid ExecuteStreamingSql request.")
 	}
 
-	stmt, err := (&parser.Parser{
-		Lexer: &parser.Lexer{
+	stmt, err := (&memefish.Parser{
+		Lexer: &memefish.Lexer{
 			File: &token.File{FilePath: "", Buffer: req.Sql},
 		},
 	}).ParseQuery()
@@ -738,8 +738,8 @@ func (s *server) ExecuteBatchDml(ctx context.Context, req *spannerpb.ExecuteBatc
 }
 
 func (s *server) executeDML(ctx context.Context, session *session, tx *transaction, stmt *spannerpb.ExecuteBatchDmlRequest_Statement) (*spannerpb.ResultSet, error) {
-	dml, err := (&parser.Parser{
-		Lexer: &parser.Lexer{
+	dml, err := (&memefish.Parser{
+		Lexer: &memefish.Lexer{
 			File: &token.File{FilePath: "", Buffer: stmt.Sql},
 		},
 	}).ParseDML()

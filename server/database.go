@@ -25,7 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cloudspannerecosystem/memefish/pkg/ast"
+	"github.com/cloudspannerecosystem/memefish/ast"
 	uuidpkg "github.com/google/uuid"
 	sqlite "github.com/mattn/go-sqlite3"
 	"google.golang.org/grpc/codes"

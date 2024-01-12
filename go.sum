@@ -22,6 +22,8 @@ github.com/cespare/xxhash/v2 v2.2.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XL
 github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
 github.com/cloudspannerecosystem/memefish v0.0.0-20230403015737-24c8a514b9e7 h1:DK2bE+VunkY4DrCWzn8TNcfwXlfCVCRCt08NFiFRg70=
 github.com/cloudspannerecosystem/memefish v0.0.0-20230403015737-24c8a514b9e7/go.mod h1:nfEJK986tmIKMHs6i62pQecA5F6N0N67NsofayZEVKo=
+github.com/cloudspannerecosystem/memefish v0.0.0-20231128072053-0a1141e8eb65 h1:Rg9tANZcL6gdZlY1W5TeWMD4pIQN63qkAhS+HhjhbPA=
+github.com/cloudspannerecosystem/memefish v0.0.0-20231128072053-0a1141e8eb65/go.mod h1:Q40NmYZbmaw9ay7p94ng9NNBuX1N+4OK3cSjN4q5tPM=
 github.com/cncf/udpa/go v0.0.0-20191209042840-269d4d468f6f/go.mod h1:M8M6+tZqaGXZJjfX53e64911xZQV5JYwmTeXPW+k8Sc=
 github.com/cncf/udpa/go v0.0.0-20220112060539-c52dc94e7fbe h1:QQ3GSy+MqSHxm/d8nCtnAiZdYFd45cYZPs8vOOIYKfk=
 github.com/cncf/udpa/go v0.0.0-20220112060539-c52dc94e7fbe/go.mod h1:6pvJx4me5XPnfI9Z40ddWsdw2W/uZgQLFXToKeRcDiI=
