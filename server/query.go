@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudspannerecosystem/memefish/pkg/ast"
+	"github.com/cloudspannerecosystem/memefish/ast"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -1734,12 +1734,26 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		var args []interface{}
 		var ss []string
 		var vts []ValueType
-		for i := range e.Args {
-			ex, err := b.buildExpr(e.Args[i].Expr)
+		for _, arg := range e.Args {
+			var expr ast.Expr
+			switch arg := arg.(type) {
+			case *ast.ExprArg:
+				expr = arg.Expr
+			case *ast.IntervalArg:
+				msg := `Unsupported query shape: IntervalArg in function call is not supported yet.`
+				return NullExpr, newExprUnimplementedErrorf(expr, msg)
+			case *ast.SequenceArg:
+				msg := `Unsupported query shape: SequenceArg in function call is not supported yet.`
+				return NullExpr, newExprUnimplementedErrorf(expr, msg)
+			default:
+				msg := `Invalid query shape: unknown argument type was detected.`
+				return NullExpr, newExprErrorf(expr, true, msg)
+			}
+
+			ex, err := b.buildExpr(expr)
 			if err != nil {
 				return NullExpr, wrapExprError(err, expr, "Args")
 			}
-
 			args = append(args, ex.Args...)
 			ss = append(ss, ex.Raw)
 			vts = append(vts, ex.ValueType)

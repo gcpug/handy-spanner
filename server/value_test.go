@@ -22,7 +22,8 @@ import (
 	"time"
 
 	"database/sql"
-	"github.com/cloudspannerecosystem/memefish/pkg/ast"
+
+	"github.com/cloudspannerecosystem/memefish/ast"
 	cmp "github.com/google/go-cmp/cmp"
 	uuidpkg "github.com/google/uuid"
 	spannerpb "google.golang.org/genproto/googleapis/spanner/v1"

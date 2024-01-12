@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudspannerecosystem/memefish/pkg/parser"
-	"github.com/cloudspannerecosystem/memefish/pkg/token"
+	"github.com/cloudspannerecosystem/memefish"
+	"github.com/cloudspannerecosystem/memefish/token"
 	cmp "github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -3439,8 +3439,8 @@ func TestQuery(t *testing.T) {
 					tc := tc
 					ses := newSession(db, "foo")
 					testRunInTransaction(t, ses, func(tx *transaction) {
-						stmt, err := (&parser.Parser{
-							Lexer: &parser.Lexer{
+						stmt, err := (&memefish.Parser{
+							Lexer: &memefish.Lexer{
 								File: &token.File{FilePath: "", Buffer: tc.sql},
 							},
 						}).ParseQuery()
@@ -3564,8 +3564,8 @@ func TestQuery_ArbitraryAssertion(t *testing.T) {
 			tc := tc
 			ses := newSession(db, "foo")
 			testRunInTransaction(t, ses, func(tx *transaction) {
-				stmt, err := (&parser.Parser{
-					Lexer: &parser.Lexer{
+				stmt, err := (&memefish.Parser{
+					Lexer: &memefish.Lexer{
 						File: &token.File{FilePath: "", Buffer: tc.sql},
 					},
 				}).ParseQuery()

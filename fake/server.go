@@ -24,9 +24,9 @@ import (
 	lropb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	adminv1pb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 	spannerpb "cloud.google.com/go/spanner/apiv1/spannerpb"
-	"github.com/cloudspannerecosystem/memefish/pkg/ast"
-	"github.com/cloudspannerecosystem/memefish/pkg/parser"
-	"github.com/cloudspannerecosystem/memefish/pkg/token"
+	"github.com/cloudspannerecosystem/memefish"
+	"github.com/cloudspannerecosystem/memefish/ast"
+	"github.com/cloudspannerecosystem/memefish/token"
 	"github.com/gcpug/handy-spanner/server"
 	"google.golang.org/grpc"
 	channelzsvc "google.golang.org/grpc/channelz/service"
@@ -113,8 +113,8 @@ func (s *Server) ParseAndApplyDDL(ctx context.Context, databaseName string, r io
 		return err
 	}
 
-	ddl, err := (&parser.Parser{
-		Lexer: &parser.Lexer{
+	ddl, err := (&memefish.Parser{
+		Lexer: &memefish.Lexer{
 			File: &token.File{FilePath: "", Buffer: string(b)},
 		},
 	}).ParseDDLs()
