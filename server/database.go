@@ -1128,6 +1128,14 @@ func (d *database) Rollback(tx *transaction) error {
 	return nil
 }
 
+func joinIdentNames(idents []*ast.Ident) string {
+	names := make([]string, 0, len(idents))
+	for _, ident := range idents {
+		names = append(names, ident.Name)
+	}
+	return strings.Join(QuoteStringSlice(names), ",")
+}
+
 func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) error {
 	if _, ok := db.tables[stmt.Name.Name]; ok {
 		return fmt.Errorf("duplicated table: %v", stmt.Name.Name)
@@ -1187,8 +1195,8 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 	}
 	columnDefsQuery := strings.Join(columnDefs, ",\n")
 	primaryKeysQuery := strings.Join(QuoteStringSlice(t.primaryKey.IndexColumnNames()), ", ")
-	var foreignKeyConstraint string
 
+	constraints := ""
 	if stmt.Cluster != nil {
 		parentTableName := stmt.Cluster.TableName.Name
 		parentStmt, ok := db.tables[parentTableName]
@@ -1198,10 +1206,26 @@ func (db *database) CreateTable(ctx context.Context, stmt *ast.CreateTable) erro
 
 		columns := strings.Join(QuoteStringSlice(parentStmt.primaryKey.IndexColumnNames()), ",")
 
-		foreignKeyConstraint = fmt.Sprintf(",\n FOREIGN KEY(%s) REFERENCES %s(%s) %s", columns, QuoteString(parentTableName), columns, stmt.Cluster.OnDelete)
+		constraints += fmt.Sprintf(",\n FOREIGN KEY(%s) REFERENCES %s(%s) %s", columns, QuoteString(parentTableName), columns, stmt.Cluster.OnDelete)
 	}
 
-	query := fmt.Sprintf("CREATE TABLE %s (\n%s,\n  PRIMARY KEY (%s)%s\n)", QuoteString(t.Name), columnDefsQuery, primaryKeysQuery, foreignKeyConstraint)
+	for _, cnst := range stmt.TableConstraints {
+		switch cnst := cnst.Constraint.(type) {
+		case *ast.ForeignKey:
+			columns := joinIdentNames(cnst.Columns)
+			refColumns := joinIdentNames(cnst.ReferenceColumns)
+			constraints += fmt.Sprintf(
+				",\n FOREIGN KEY(%s) REFERENCES %s(%s) %s",
+				columns, QuoteString(cnst.ReferenceTable.Name), refColumns, cnst.OnDelete,
+			)
+		case *ast.Check:
+			// TODO: implement, currently just it is ignored.
+			// following kind code is needed for this.
+			// constraints += fmt.Sprintf(",\n CHECK(%s)", QueryBuilder{}.buildExpr(cnst.Expr).Raw)
+		}
+	}
+
+	query := fmt.Sprintf("CREATE TABLE %s (\n%s,\n  PRIMARY KEY (%s)%s\n)", QuoteString(t.Name), columnDefsQuery, primaryKeysQuery, constraints)
 	if _, err := db.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("failed to create table for %s: %v", t.Name, err)
 	}
@@ -1244,6 +1268,29 @@ func (db *database) registerInformationSchemaTables(ctx context.Context, stmt *a
 			onDeleteAction = `"CASCADE"`
 		case ast.OnDeleteNoAction:
 			onDeleteAction = `"NO ACTION"`
+		}
+	}
+
+	for _, tcnst := range stmt.TableConstraints {
+		switch cnst := tcnst.Constraint.(type) {
+		case *ast.ForeignKey:
+			var onDeleteAction string
+			switch cnst.OnDelete {
+			case ast.OnDeleteCascade:
+				onDeleteAction = `"CASCADE"`
+			default:
+				onDeleteAction = `"NO ACTION"`
+			}
+
+			query := fmt.Sprintf(
+				`INSERT INTO __INFORMATION_SCHEMA__REFERENTIAL_CONSTRAINTS VALUES("", "", %q, "", "", %q, "SIMPLE", "NO ACTION", %s, "COMMITTED")`,
+				tcnst.Name.Name, cnst.ReferenceTable.Name, onDeleteAction,
+			)
+			if _, err := db.db.ExecContext(ctx, query); err != nil {
+				return fmt.Errorf("failed to insert into INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS for table %s: %v", tableName, err)
+			}
+		case *ast.Check:
+			// TODO: implement
 		}
 	}
 
