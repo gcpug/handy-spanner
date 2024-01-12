@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable, schemaGeneratedValues, schemaGeneratedColumn, schemaDefaultValues}
+	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaForeignCascade, schemaForeignNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable, schemaGeneratedValues, schemaGeneratedColumn, schemaDefaultValues}
 	schemaSimple = `CREATE TABLE Simple (
   Id INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
@@ -78,6 +78,33 @@ CREATE TABLE InterleavedNoAction (
 ) PRIMARY KEY(Id, InterleavedId),
 INTERLEAVE IN PARENT ParentTableNoAction ON DELETE NO ACTION;
 `
+
+	schemaForeignCascade = `CREATE TABLE ForeignParentCascade (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+
+CREATE TABLE ForeignChildCascade (
+  Id INT64 NOT NULL,
+  ForeignId INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+  CONSTRAINT FK_Cascade FOREIGN KEY (ForeignId) REFERENCES ForeignParentCascade (Id) ON DELETE CASCADE,
+) PRIMARY KEY(Id, ForeignId);
+`
+
+	schemaForeignNoAction = `CREATE TABLE ForeignParentNoAction (
+  Id INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+) PRIMARY KEY(Id);
+
+CREATE TABLE ForeignChildNoAction (
+  Id INT64 NOT NULL,
+  ForeignId INT64 NOT NULL,
+  Value STRING(MAX) NOT NULL,
+  CONSTRAINT FK_NoAction FOREIGN KEY (ForeignId) REFERENCES ForeignParentNoAction (Id),
+) PRIMARY KEY(Id, ForeignId);
+`
+
 	schemaCompositePrimaryKeys = `CREATE TABLE CompositePrimaryKeys (
   Id INT64 NOT NULL,
   PKey1 STRING(32) NOT NULL,
@@ -3476,7 +3503,7 @@ func TestInterleaveInsert(t *testing.T) {
 
 			if tt.parent != nil {
 				testRunInTransaction(t, ses, func(tx *transaction) {
-					testInsertInterleaveHelper(t, ctx, db, tx, tt.parent.tbl, tt.parent.cols, tt.parent.wcols, tt.parent.values, tt.parent.limit, tt.parent.expected)
+					testInsertHelper(t, ctx, db, tx, tt.parent.tbl, tt.parent.cols, tt.parent.wcols, tt.parent.values, tt.parent.limit, tt.parent.expected)
 				})
 			}
 
@@ -3493,13 +3520,13 @@ func TestInterleaveInsert(t *testing.T) {
 			}
 
 			testRunInTransaction(t, ses, func(tx *transaction) {
-				testInsertInterleaveHelper(t, ctx, db, tx, tt.child.tbl, tt.child.cols, tt.child.wcols, tt.child.values, tt.child.limit, tt.child.expected)
+				testInsertHelper(t, ctx, db, tx, tt.child.tbl, tt.child.cols, tt.child.wcols, tt.child.values, tt.child.limit, tt.child.expected)
 			})
 		})
 	}
 }
 
-func testInsertInterleaveHelper(
+func testInsertHelper(
 	t *testing.T,
 	ctx context.Context,
 	db *database,
@@ -3511,6 +3538,8 @@ func testInsertInterleaveHelper(
 	limit int64,
 	expected [][]interface{},
 ) {
+	t.Helper()
+
 	listValues := []*structpb.ListValue{
 		{Values: values},
 	}
@@ -3784,7 +3813,7 @@ func TestInformationSchema(t *testing.T) {
 				[]interface{}{"", "INFORMATION_SCHEMA", "INDEXES", nil, nil, nil},
 				[]interface{}{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", nil, nil, nil},
 				// []interface{}{"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", nil, nil, nil},
-				// []interface{}{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", nil, nil, nil},
+				[]interface{}{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", nil, nil, nil},
 				[]interface{}{"", "INFORMATION_SCHEMA", "SCHEMATA", nil, nil, nil},
 				// []interface{}{"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", nil, nil, nil},
 				[]interface{}{"", "INFORMATION_SCHEMA", "TABLES", nil, nil, nil},
@@ -3804,6 +3833,10 @@ func TestInformationSchema(t *testing.T) {
 				[]interface{}{"", "", "ArrayTypes", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "CompositePrimaryKeys", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "DefaultValues", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ForeignChildCascade", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ForeignChildNoAction", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ForeignParentCascade", nil, nil, "COMMITTED"},
+				[]interface{}{"", "", "ForeignParentNoAction", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "From", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "FullTypes", nil, nil, "COMMITTED"},
 				[]interface{}{"", "", "GeneratedColumn", nil, nil, "COMMITTED"},
@@ -3882,16 +3915,16 @@ func TestInformationSchema(t *testing.T) {
 				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "COLUMN_NAME", int64(7), nil, nil, "NO", "STRING(MAX)"},
 				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "ORDINAL_POSITION", int64(8), nil, nil, "NO", "INT64"},
 				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "POSITION_IN_UNIQUE_CONSTRAINT", int64(9), nil, nil, "YES", "INT64"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_CATALOG", int64(4), nil, nil, "YES", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_SCHEMA", int64(5), nil, nil, "YES", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_NAME", int64(6), nil, nil, "YES", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "MATCH_OPTION", int64(7), nil, nil, "NO", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UPDATE_RULE", int64(8), nil, nil, "NO", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "DELETE_RULE", int64(9), nil, nil, "NO", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "SPANNER_STATE", int64(10), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_CATALOG", int64(1), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_SCHEMA", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_NAME", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_CATALOG", int64(4), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_SCHEMA", int64(5), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_NAME", int64(6), nil, nil, "YES", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "MATCH_OPTION", int64(7), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UPDATE_RULE", int64(8), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "DELETE_RULE", int64(9), nil, nil, "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "SPANNER_STATE", int64(10), nil, nil, "NO", "STRING(MAX)"},
 				{"", "INFORMATION_SCHEMA", "SCHEMATA", "CATALOG_NAME", int64(1), nil, nil, "NO", "STRING(MAX)"},
 				{"", "INFORMATION_SCHEMA", "SCHEMATA", "SCHEMA_NAME", int64(2), nil, nil, "NO", "STRING(MAX)"},
 				{"", "INFORMATION_SCHEMA", "SCHEMATA", "EFFECTIVE_TIMESTAMP", int64(3), nil, nil, "YES", "INT64"},
@@ -3941,6 +3974,16 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "DefaultValues", "T1", int64(6), nil, nil, "NO", "TIMESTAMP"},
 				{"", "", "DefaultValues", "T2", int64(7), nil, nil, "NO", "TIMESTAMP"},
 				{"", "", "DefaultValues", "Date", int64(8), nil, nil, "NO", "TIMESTAMP"},
+				{"", "", "ForeignChildCascade", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ForeignChildCascade", "ForeignId", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "ForeignChildCascade", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ForeignChildNoAction", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ForeignChildNoAction", "ForeignId", int64(2), nil, nil, "NO", "INT64"},
+				{"", "", "ForeignChildNoAction", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ForeignParentCascade", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ForeignParentCascade", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ForeignParentNoAction", "Id", int64(1), nil, nil, "NO", "INT64"},
+				{"", "", "ForeignParentNoAction", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
 				{"", "", "From", "ALL", int64(1), nil, nil, "NO", "INT64"},
 				{"", "", "From", "CAST", int64(2), nil, nil, "NO", "INT64"},
 				{"", "", "From", "JOIN", int64(3), nil, nil, "NO", "INT64"},
@@ -4011,7 +4054,7 @@ func TestInformationSchema(t *testing.T) {
 				{"", "INFORMATION_SCHEMA", "INDEXES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "INFORMATION_SCHEMA", "INDEX_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
@@ -4025,6 +4068,10 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "ArrayTypes", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "DefaultValues", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ForeignChildCascade", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ForeignChildNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ForeignParentCascade", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
+				{"", "", "ForeignParentNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "From", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "FullTypes", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
 				{"", "", "GeneratedColumn", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, nil, false},
@@ -4094,9 +4141,9 @@ func TestInformationSchema(t *testing.T) {
 				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
 				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
 				// {"", "INFORMATION_SCHEMA", "KEY_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", int64(4), "ASC", "NO", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
-				// {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", int64(2), "ASC", "NO", "STRING(MAX)"},
+				{"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", int64(3), "ASC", "NO", "STRING(MAX)"},
 				{"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "CATALOG_NAME", int64(1), "ASC", "NO", "STRING(MAX)"},
 				{"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "SCHEMA_NAME", int64(2), "ASC", "NO", "STRING(MAX)"},
 				// {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", int64(1), "ASC", "NO", "STRING(MAX)"},
@@ -4121,6 +4168,12 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "PKey1", int64(1), "ASC", "NO", "STRING(32)"},
 				{"", "", "CompositePrimaryKeys", "PRIMARY_KEY", "PRIMARY_KEY", "PKey2", int64(2), "DESC", "NO", "INT64"},
 				{"", "", "DefaultValues", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ForeignChildCascade", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ForeignChildCascade", "PRIMARY_KEY", "PRIMARY_KEY", "ForeignId", int64(2), "ASC", "NO", "INT64"},
+				{"", "", "ForeignChildNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ForeignChildNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "ForeignId", int64(2), "ASC", "NO", "INT64"},
+				{"", "", "ForeignParentCascade", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
+				{"", "", "ForeignParentNoAction", "PRIMARY_KEY", "PRIMARY_KEY", "Id", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "From", "ALL", "INDEX", "ALL", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "From", "PRIMARY_KEY", "PRIMARY_KEY", "ALL", int64(1), "ASC", "NO", "INT64"},
 				{"", "", "FullTypes", "FullTypesByFTString", "INDEX", "FTString", int64(1), "ASC", "NO", "STRING(32)"},
@@ -4174,6 +4227,14 @@ func TestInformationSchema(t *testing.T) {
 			sql:  `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS LEFT JOIN INFORMATION_SCHEMA.INDEXES USING(TABLE_NAME) WHERE INDEX_COLUMNS.TABLE_NAME = "Simple"`,
 			expected: [][]interface{}{
 				[]interface{}{"Id"},
+			},
+		},
+		{
+			name: "ReferentialConstraints",
+			sql:  `SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_NAME, UNIQUE_CONSTRAINT_CATALOG, UNIQUE_CONSTRAINT_SCHEMA, UNIQUE_CONSTRAINT_NAME, MATCH_OPTION, UPDATE_RULE, DELETE_RULE, SPANNER_STATE FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`,
+			expected: [][]interface{}{
+				{"", "", "FK_Cascade", "", "", "ForeignParentCascade", "SIMPLE", "NO ACTION", "CASCADE", "COMMITTED"},
+				{"", "", "FK_NoAction", "", "", "ForeignParentNoAction", "SIMPLE", "NO ACTION", "NO ACTION", "COMMITTED"},
 			},
 		},
 	}
@@ -4237,6 +4298,314 @@ func TestInformationSchema(t *testing.T) {
 					if !tc.msg.MatchString(st.Message()) {
 						t.Errorf("unexpected error message: \n %q\n expected:\n %q", st.Message(), tc.msg)
 					}
+				}
+			})
+		})
+	}
+}
+
+func TestInsertUnderForeignConstraint(t *testing.T) {
+	type tableConfig struct {
+		tbl      string
+		wcols    []string
+		values   []*structpb.Value
+		cols     []string
+		limit    int64
+		expected [][]interface{}
+	}
+
+	table := map[string]struct {
+		parent       *tableConfig
+		child        *tableConfig
+		expectsError bool
+	}{
+		"InsertWithoutMaster": {
+			child: &tableConfig{
+				tbl:   "ForeignChildNoAction",
+				wcols: []string{"Id", "ForeignId", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("200"),
+					makeStringValue("yyy"),
+				},
+				cols:     []string{"Id", "ForeignId", "Value"},
+				limit:    100,
+				expected: nil,
+			},
+			expectsError: true,
+		},
+		"InsertWithParent": {
+			parent: &tableConfig{
+				tbl:   "ForeignParentNoAction",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("200"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					{int64(200), "xxx"},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "ForeignChildNoAction",
+				wcols: []string{"Id", "ForeignId", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("200"),
+					makeStringValue("yyy"),
+				},
+				cols:  []string{"Id", "ForeignId", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					{int64(100), int64(200), "yyy"},
+				},
+			},
+			expectsError: false,
+		},
+
+		"InsertWithoutMaster(Cascade)": {
+			child: &tableConfig{
+				tbl:   "ForeignChildCascade",
+				wcols: []string{"Id", "ForeignId", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("200"),
+					makeStringValue("yyy"),
+				},
+				cols:     []string{"Id", "ForeignId", "Value"},
+				limit:    100,
+				expected: nil,
+			},
+			expectsError: true,
+		},
+		"InsertWithParent(Cascade)": {
+			parent: &tableConfig{
+				tbl:   "ForeignParentCascade",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("200"),
+					makeStringValue("xxx"),
+				},
+				cols:  []string{"Id", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					{int64(200), "xxx"},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "ForeignChildCascade",
+				wcols: []string{"Id", "ForeignId", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("200"),
+					makeStringValue("yyy"),
+				},
+				cols:  []string{"Id", "ForeignId", "Value"},
+				limit: 100,
+				expected: [][]interface{}{
+					{int64(100), int64(200), "yyy"},
+				},
+			},
+			expectsError: false,
+		},
+	}
+
+	for name, tt := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			db := newDatabase()
+			ses := newSession(db, "foo")
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			if tt.parent != nil {
+				testRunInTransaction(t, ses, func(tx *transaction) {
+					testInsertHelper(t, ctx, db, tx, tt.parent.tbl, tt.parent.cols, tt.parent.wcols, tt.parent.values, tt.parent.limit, tt.parent.expected)
+				})
+			}
+
+			if tt.expectsError {
+				listValues := []*structpb.ListValue{
+					{Values: tt.child.values},
+				}
+				testRunInTransaction(t, ses, func(tx *transaction) {
+					if err := db.Insert(ctx, tx, tt.child.tbl, tt.child.wcols, listValues); err == nil {
+						t.Fatalf("Insert succeeded even though it should fail: %v", err)
+					}
+				})
+				return
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				testInsertHelper(t, ctx, db, tx, tt.child.tbl, tt.child.cols, tt.child.wcols, tt.child.values, tt.child.limit, tt.child.expected)
+			})
+		})
+	}
+}
+
+func TestDeleteUnderForeignConstraint(t *testing.T) {
+	type tableConfig struct {
+		tbl    string
+		wcols  []string
+		values []*structpb.Value
+		cols   []string
+		ks     *KeySet
+	}
+
+	table := map[string]struct {
+		child              *tableConfig
+		parent             *tableConfig
+		expectsDeleteError bool
+	}{
+		"DeleteNoAction": {
+			parent: &tableConfig{
+				tbl:   "ForeignParentNoAction",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("200"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(makeStringValue("200")),
+					},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "ForeignChildNoAction",
+				wcols: []string{"Id", "ForeignId", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("200"),
+					makeStringValue("yyy"),
+				},
+				cols: []string{"Id", "ForeignId", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(
+							makeStringValue("100"),
+							makeStringValue("200"),
+						),
+					},
+				},
+			},
+			expectsDeleteError: true,
+		},
+		"DeleteCascade": {
+			parent: &tableConfig{
+				tbl:   "ForeignParentCascade",
+				wcols: []string{"Id", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("200"),
+					makeStringValue("xxx"),
+				},
+				cols: []string{"Id", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(makeStringValue("200")),
+					},
+				},
+			},
+			child: &tableConfig{
+				tbl:   "ForeignChildCascade",
+				wcols: []string{"Id", "ForeignId", "Value"},
+				values: []*structpb.Value{
+					makeStringValue("100"),
+					makeStringValue("200"),
+					makeStringValue("yyy"),
+				},
+				cols: []string{"Id", "ForeignId", "Value"},
+				ks: &KeySet{
+					Keys: []*structpb.ListValue{
+						makeListValue(
+							makeStringValue("100"),
+							makeStringValue("200"),
+						),
+					},
+				},
+			},
+			expectsDeleteError: false,
+		},
+	}
+
+	for name, tt := range table {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			db := newDatabase()
+			ses := newSession(db, "foo")
+			for _, s := range allSchema {
+				ddls := parseDDL(t, s)
+				for _, ddl := range ddls {
+					db.ApplyDDL(ctx, ddl)
+				}
+			}
+
+			// Insert data
+
+			parentListValues := []*structpb.ListValue{
+				{Values: tt.parent.values},
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Insert(ctx, tx, tt.parent.tbl, tt.parent.wcols, parentListValues); err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			})
+
+			listValues := []*structpb.ListValue{
+				{Values: tt.child.values},
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Insert(ctx, tx, tt.child.tbl, tt.child.wcols, listValues); err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			})
+
+			// Delete parent entry
+
+			if tt.expectsDeleteError {
+				testRunInTransaction(t, ses, func(tx *transaction) {
+					if err := db.Delete(ctx, tx, tt.parent.tbl, tt.parent.ks); err == nil {
+						t.Fatalf("Delete parent succeeded even though it should fail: %v", err)
+					}
+				})
+				return
+			}
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				if err := db.Delete(ctx, tx, tt.parent.tbl, tt.parent.ks); err != nil {
+					t.Fatalf("Delete parent failed: %v", err)
+				}
+			})
+
+			// Try to read child entry
+
+			testRunInTransaction(t, ses, func(tx *transaction) {
+				it, err := db.Read(ctx, tx, tt.child.tbl, "", tt.child.cols, tt.child.ks, 1)
+				if err != nil {
+					t.Fatalf("Read failed: %v", err)
+				}
+
+				var rows [][]interface{}
+				err = it.Do(func(row []interface{}) error {
+					rows = append(rows, row)
+					return nil
+				})
+
+				if err != nil {
+					t.Fatalf("unexpected error in iteration: %v", err)
+				}
+
+				if rows != nil {
+					t.Fatalf("Child did not get deleted with parent")
 				}
 			})
 		})

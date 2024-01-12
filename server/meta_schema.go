@@ -19,21 +19,23 @@ import (
 )
 
 var metaTablesMap = map[string]string{
-	"INFORMATION_SCHEMA.SCHEMATA":       "__INFORMATION_SCHEMA__SCHEMATA",
-	"INFORMATION_SCHEMA.TABLES":         "__INFORMATION_SCHEMA__TABLES",
-	"INFORMATION_SCHEMA.COLUMNS":        "__INFORMATION_SCHEMA__COLUMNS",
-	"INFORMATION_SCHEMA.INDEXES":        "__INFORMATION_SCHEMA__INDEXES",
-	"INFORMATION_SCHEMA.INDEX_COLUMNS":  "__INFORMATION_SCHEMA__INDEX_COLUMNS",
-	"INFORMATION_SCHEMA.COLUMN_OPTIONS": "__INFORMATION_SCHEMA__COLUMN_OPTIONS",
+	"INFORMATION_SCHEMA.SCHEMATA":                "__INFORMATION_SCHEMA__SCHEMATA",
+	"INFORMATION_SCHEMA.TABLES":                  "__INFORMATION_SCHEMA__TABLES",
+	"INFORMATION_SCHEMA.COLUMNS":                 "__INFORMATION_SCHEMA__COLUMNS",
+	"INFORMATION_SCHEMA.INDEXES":                 "__INFORMATION_SCHEMA__INDEXES",
+	"INFORMATION_SCHEMA.INDEX_COLUMNS":           "__INFORMATION_SCHEMA__INDEX_COLUMNS",
+	"INFORMATION_SCHEMA.COLUMN_OPTIONS":          "__INFORMATION_SCHEMA__COLUMN_OPTIONS",
+	"INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS": "__INFORMATION_SCHEMA__REFERENTIAL_CONSTRAINTS",
 }
 
 var metaTablesReverseMap = map[string][]string{
-	"__INFORMATION_SCHEMA__SCHEMATA":       []string{"INFORMATION_SCHEMA", "SCHEMATA"},
-	"__INFORMATION_SCHEMA__TABLES":         []string{"INFORMATION_SCHEMA", "TABLES"},
-	"__INFORMATION_SCHEMA__COLUMNS":        []string{"INFORMATION_SCHEMA", "COLUMNS"},
-	"__INFORMATION_SCHEMA__INDEXES":        []string{"INFORMATION_SCHEMA", "INDEXES"},
-	"__INFORMATION_SCHEMA__INDEX_COLUMNS":  []string{"INFORMATION_SCHEMA", "INDEX_COLUMNS"},
-	"__INFORMATION_SCHEMA__COLUMN_OPTIONS": []string{"INFORMATION_SCHEMA", "COLUMN_OPTIONS"},
+	"__INFORMATION_SCHEMA__SCHEMATA":                {"INFORMATION_SCHEMA", "SCHEMATA"},
+	"__INFORMATION_SCHEMA__TABLES":                  {"INFORMATION_SCHEMA", "TABLES"},
+	"__INFORMATION_SCHEMA__COLUMNS":                 {"INFORMATION_SCHEMA", "COLUMNS"},
+	"__INFORMATION_SCHEMA__INDEXES":                 {"INFORMATION_SCHEMA", "INDEXES"},
+	"__INFORMATION_SCHEMA__INDEX_COLUMNS":           {"INFORMATION_SCHEMA", "INDEX_COLUMNS"},
+	"__INFORMATION_SCHEMA__COLUMN_OPTIONS":          {"INFORMATION_SCHEMA", "COLUMN_OPTIONS"},
+	"__INFORMATION_SCHEMA__REFERENTIAL_CONSTRAINTS": {"INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS"},
 }
 
 var metaTables = []*ast.CreateTable{
@@ -402,6 +404,76 @@ var metaTables = []*ast.CreateTable{
 			},
 			{
 				Name: &ast.Ident{Name: "OPTION_NAME"},
+				Dir:  ast.DirectionAsc,
+			},
+		},
+	},
+
+	{
+		Name: &ast.Ident{Name: "__INFORMATION_SCHEMA__REFERENTIAL_CONSTRAINTS"},
+		Columns: []*ast.ColumnDef{
+			{
+				Name:    &ast.Ident{Name: "CONSTRAINT_CATALOG"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: true,
+			},
+			{
+				Name:    &ast.Ident{Name: "CONSTRAINT_SCHEMA"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: true,
+			},
+			{
+				Name:    &ast.Ident{Name: "CONSTRAINT_NAME"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: true,
+			},
+			{
+				Name:    &ast.Ident{Name: "UNIQUE_CONSTRAINT_CATALOG"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: false,
+			},
+			{
+				Name:    &ast.Ident{Name: "UNIQUE_CONSTRAINT_SCHEMA"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: false,
+			},
+			{
+				Name:    &ast.Ident{Name: "UNIQUE_CONSTRAINT_NAME"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: false,
+			},
+			{
+				Name:    &ast.Ident{Name: "MATCH_OPTION"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: true,
+			},
+			{
+				Name:    &ast.Ident{Name: "UPDATE_RULE"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: true,
+			},
+			{
+				Name:    &ast.Ident{Name: "DELETE_RULE"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: true,
+			},
+			{
+				Name:    &ast.Ident{Name: "SPANNER_STATE"},
+				Type:    &ast.SizedSchemaType{Name: ast.StringTypeName, Max: true},
+				NotNull: true,
+			},
+		},
+		PrimaryKeys: []*ast.IndexKey{
+			{
+				Name: &ast.Ident{Name: "CONSTRAINT_CATALOG"},
+				Dir:  ast.DirectionAsc,
+			},
+			{
+				Name: &ast.Ident{Name: "CONSTRAINT_SCHEMA"},
+				Dir:  ast.DirectionAsc,
+			},
+			{
+				Name: &ast.Ident{Name: "CONSTRAINT_NAME"},
 				Dir:  ast.DirectionAsc,
 			},
 		},
