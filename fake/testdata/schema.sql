@@ -50,3 +50,6 @@ CREATE TABLE ArrayTypes (
   ArrayFloat ARRAY<FLOAT64>,
   ArrayDate ARRAY<DATE>,
 ) PRIMARY KEY(Id);
+
+CREATE CHANGE STREAM EverythingStream
+  FOR ALL;
