@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaForeignCascade, schemaForeignNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable, schemaGeneratedValues, schemaGeneratedColumn, schemaDefaultValues}
+	allSchema    = []string{schemaSimple, schemaInterleaved, schemaInterleavedCascade, schemaInterleavedNoAction, schemaForeignCascade, schemaForeignNoAction, schemaCompositePrimaryKeys, schemaFullTypes, schemaArrayTypes, schemaJoinA, schemaJoinB, schemaFromTable, schemaGeneratedValues, schemaGeneratedColumn, schemaDefaultValues, schemaChangeStream}
 	schemaSimple = `CREATE TABLE Simple (
   Id INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
@@ -195,6 +195,9 @@ CREATE INDEX FullTypesByTimestamp ON FullTypes(FTTimestamp);
 		) PRIMARY KEY(Id);
 `
 
+	schemaChangeStream = `CREATE CHANGE STREAM EverythingStream
+  FOR ALL;
+`
 	compositePrimaryKeysKeys = []string{
 		"Id", "PKey1", "PKey2", "Error", "X", "Y", "Z",
 	}
@@ -638,6 +641,9 @@ func TestApplyDDL(t *testing.T) {
 		},
 		{
 			ddl: schemaDefaultValues,
+		},
+		{
+			ddl: schemaChangeStream,
 		},
 	}
 

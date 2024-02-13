@@ -541,6 +541,9 @@ func (d *database) ApplyDDL(ctx context.Context, ddl ast.DDL) error {
 	case *ast.AlterTable:
 		return status.Errorf(codes.Unimplemented, "Alter Table is not supported yet")
 
+	case *ast.CreateChangeStream:
+		// skip CreateChangeStream
+		return nil
 	default:
 		return status.Errorf(codes.Unknown, "unknown DDL statement: %v", val)
 	}
