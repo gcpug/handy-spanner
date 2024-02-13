@@ -159,7 +159,7 @@ You can also operate databases or instances as Cloud Spanner supports. Please al
 * Replace
    * wrong behavior on conflict
 * [Change Stream Schema](https://cloud.google.com/spanner/docs/change-streams)
-   * only can parse in [Database operations](#Database operations) with `schema` flag.
+   * only can parse in [Database operations](#Database-operations) with `schema` flag.
 
 ## Implementation
 
