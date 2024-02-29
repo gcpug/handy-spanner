@@ -298,12 +298,19 @@ func (a *ArrayValueDecoder) Scan(src interface{}) error {
 		return nil
 	}
 
-	v, ok := src.(string)
-	if !ok {
+	switch v := src.(type) {
+	case string:
+		return a.UnmarshalJSON([]byte(v))
+	case []uint8:
+		res := make([]int64, len(v))
+		for i, _ := range v {
+			res[i] = int64(v[i])
+		}
+		a.Values = res
+	default:
 		return fmt.Errorf("unexpected type %T for %T", src, a)
 	}
-
-	return a.UnmarshalJSON([]byte(v))
+	return nil
 }
 
 func (a *ArrayValueDecoder) UnmarshalJSON(b []byte) error {
