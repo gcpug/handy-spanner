@@ -520,7 +520,7 @@ func (it *rows) next() ([]interface{}, bool) {
 			values[i] = reflect.New(reflect.TypeOf(sql.NullInt64{}))
 		case TCFloat64:
 			values[i] = reflect.New(reflect.TypeOf(sql.NullFloat64{}))
-		case TCTimestamp, TCDate, TCString:
+		case TCTimestamp, TCDate, TCString, TCJson:
 			values[i] = reflect.New(reflect.TypeOf(sql.NullString{}))
 		case TCBytes:
 			values[i] = reflect.New(reflect.TypeOf(&[]byte{}))
@@ -669,6 +669,8 @@ func makeSpannerTypeFromValueType(typ ValueType) *spannerpb.Type {
 		code = spannerpb.TypeCode_ARRAY
 	case TCStruct:
 		code = spannerpb.TypeCode_STRUCT
+	case TCJson:
+		code = spannerpb.TypeCode_JSON
 	}
 
 	st := &spannerpb.Type{Code: code}
@@ -759,6 +761,10 @@ func makeValueTypeFromSpannerType(typ *spannerpb.Type) (ValueType, error) {
 				FieldNames: names,
 				FieldTypes: types,
 			},
+		}, nil
+	case spannerpb.TypeCode_JSON:
+		return ValueType{
+			Code: TCJson,
 		}, nil
 	}
 
@@ -1027,7 +1033,7 @@ func makeDataFromSpannerValue(key string, v *structpb.Value, typ ValueType) (int
 			return s, nil
 		}
 
-	case TCString:
+	case TCString, TCJson:
 		switch vv := v.Kind.(type) {
 		case *structpb.Value_StringValue:
 			return vv.StringValue, nil
