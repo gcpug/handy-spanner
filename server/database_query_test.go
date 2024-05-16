@@ -3427,6 +3427,20 @@ func TestQuery(t *testing.T) {
 					[]interface{}{int64(1)},
 				},
 			},
+			{
+				name: "Function_GENERATE_ARRAY",
+				sql:  `SELECT GENERATE_ARRAY(1, 3)`,
+				expected: [][]interface{}{
+					{[]int64{1, 2, 3}},
+				},
+			},
+			{
+				name: "Function_GENERATE_ARRAY2",
+				sql:  `SELECT GENERATE_ARRAY(1, 10, 2)`,
+				expected: [][]interface{}{
+					{[]int64{1, 3, 5, 7, 9}},
+				},
+			},
 		},
 	}
 
