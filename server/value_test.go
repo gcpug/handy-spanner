@@ -299,6 +299,13 @@ func TestDatabaseEncDec(t *testing.T) {
 			},
 			expected: makeTestArray(TCBytes, []byte("xyz"), []byte("xxx")),
 		},
+		"JSON": {
+			value: makeStringValue(`{"a": 1, "b": 2}`),
+			typ: ValueType{
+				Code: TCJson,
+			},
+			expected: `{"a": 1, "b": 2}`,
+		},
 	}
 
 	uuid := uuidpkg.New().String()
@@ -720,6 +727,18 @@ func TestMakeValueFromSpannerValue(t *testing.T) {
 					ArrayType: &ValueType{
 						Code: TCBytes,
 					},
+				},
+			},
+		},
+		"JSON": {
+			value: makeStringValue(`{"a": 1, "b": 2}`),
+			typ: &spannerpb.Type{
+				Code: spannerpb.TypeCode_JSON,
+			},
+			expected: Value{
+				Data: `{"a": 1, "b": 2}`,
+				Type: ValueType{
+					Code: TCJson,
 				},
 			},
 		},
