@@ -1274,20 +1274,25 @@ func (db *database) registerInformationSchemaTables(ctx context.Context, stmt *a
 		}
 	}
 
-	for _, tcnst := range stmt.TableConstraints {
+	for i, tcnst := range stmt.TableConstraints {
 		switch cnst := tcnst.Constraint.(type) {
 		case *ast.ForeignKey:
 			var onDeleteAction string
+			var constraintName string
 			switch cnst.OnDelete {
 			case ast.OnDeleteCascade:
 				onDeleteAction = `"CASCADE"`
 			default:
 				onDeleteAction = `"NO ACTION"`
 			}
-
+			if tcnst.Name != nil {
+				constraintName = tcnst.Name.Name
+			} else {
+				constraintName = fmt.Sprintf("FK_%s_%s_%d", tableName, cnst.ReferenceTable.Name, i)
+			}
 			query := fmt.Sprintf(
 				`INSERT INTO __INFORMATION_SCHEMA__REFERENTIAL_CONSTRAINTS VALUES("", "", %q, "", "", %q, "SIMPLE", "NO ACTION", %s, "COMMITTED")`,
-				tcnst.Name.Name, cnst.ReferenceTable.Name, onDeleteAction,
+				constraintName, cnst.ReferenceTable.Name, onDeleteAction,
 			)
 			if _, err := db.db.ExecContext(ctx, query); err != nil {
 				return fmt.Errorf("failed to insert into INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS for table %s: %v", tableName, err)
