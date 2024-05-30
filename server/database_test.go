@@ -87,8 +87,10 @@ INTERLEAVE IN PARENT ParentTableNoAction ON DELETE NO ACTION;
 CREATE TABLE ForeignChildCascade (
   Id INT64 NOT NULL,
   ForeignId INT64 NOT NULL,
+  ForeignSecondId INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
   CONSTRAINT FK_Cascade FOREIGN KEY (ForeignId) REFERENCES ForeignParentCascade (Id) ON DELETE CASCADE,
+  FOREIGN KEY (ForeignSecondId) REFERENCES ForeignParentCascade (Id) ON DELETE CASCADE,
 ) PRIMARY KEY(Id, ForeignId);
 `
 
@@ -100,8 +102,10 @@ CREATE TABLE ForeignChildCascade (
 CREATE TABLE ForeignChildNoAction (
   Id INT64 NOT NULL,
   ForeignId INT64 NOT NULL,
+  ForeignSecondId INT64 NOT NULL,
   Value STRING(MAX) NOT NULL,
   CONSTRAINT FK_NoAction FOREIGN KEY (ForeignId) REFERENCES ForeignParentNoAction (Id),
+  FOREIGN KEY (ForeignSecondId) REFERENCES ForeignParentNoAction (Id),
 ) PRIMARY KEY(Id, ForeignId);
 `
 
@@ -3982,10 +3986,12 @@ func TestInformationSchema(t *testing.T) {
 				{"", "", "DefaultValues", "Date", int64(8), nil, nil, "NO", "TIMESTAMP"},
 				{"", "", "ForeignChildCascade", "Id", int64(1), nil, nil, "NO", "INT64"},
 				{"", "", "ForeignChildCascade", "ForeignId", int64(2), nil, nil, "NO", "INT64"},
-				{"", "", "ForeignChildCascade", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ForeignChildCascade", "ForeignSecondId", int64(3), nil, nil, "NO", "INT64"},
+				{"", "", "ForeignChildCascade", "Value", int64(4), nil, nil, "NO", "STRING(MAX)"},
 				{"", "", "ForeignChildNoAction", "Id", int64(1), nil, nil, "NO", "INT64"},
 				{"", "", "ForeignChildNoAction", "ForeignId", int64(2), nil, nil, "NO", "INT64"},
-				{"", "", "ForeignChildNoAction", "Value", int64(3), nil, nil, "NO", "STRING(MAX)"},
+				{"", "", "ForeignChildNoAction", "ForeignSecondId", int64(3), nil, nil, "NO", "INT64"},
+				{"", "", "ForeignChildNoAction", "Value", int64(4), nil, nil, "NO", "STRING(MAX)"},
 				{"", "", "ForeignParentCascade", "Id", int64(1), nil, nil, "NO", "INT64"},
 				{"", "", "ForeignParentCascade", "Value", int64(2), nil, nil, "NO", "STRING(MAX)"},
 				{"", "", "ForeignParentNoAction", "Id", int64(1), nil, nil, "NO", "INT64"},
@@ -4240,7 +4246,9 @@ func TestInformationSchema(t *testing.T) {
 			sql:  `SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_NAME, UNIQUE_CONSTRAINT_CATALOG, UNIQUE_CONSTRAINT_SCHEMA, UNIQUE_CONSTRAINT_NAME, MATCH_OPTION, UPDATE_RULE, DELETE_RULE, SPANNER_STATE FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`,
 			expected: [][]interface{}{
 				{"", "", "FK_Cascade", "", "", "ForeignParentCascade", "SIMPLE", "NO ACTION", "CASCADE", "COMMITTED"},
+				{"", "", "FK_ForeignChildCascade_ForeignParentCascade_1", "", "", "ForeignParentCascade", "SIMPLE", "NO ACTION", "CASCADE", "COMMITTED"},
 				{"", "", "FK_NoAction", "", "", "ForeignParentNoAction", "SIMPLE", "NO ACTION", "NO ACTION", "COMMITTED"},
+				{"", "", "FK_ForeignChildNoAction_ForeignParentNoAction_1", "", "", "ForeignParentNoAction", "SIMPLE", "NO ACTION", "NO ACTION", "COMMITTED"},
 			},
 		},
 	}
@@ -4328,13 +4336,14 @@ func TestInsertUnderForeignConstraint(t *testing.T) {
 		"InsertWithoutMaster": {
 			child: &tableConfig{
 				tbl:   "ForeignChildNoAction",
-				wcols: []string{"Id", "ForeignId", "Value"},
+				wcols: []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				values: []*structpb.Value{
 					makeStringValue("100"),
 					makeStringValue("200"),
+					makeStringValue("200"),
 					makeStringValue("yyy"),
 				},
-				cols:     []string{"Id", "ForeignId", "Value"},
+				cols:     []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				limit:    100,
 				expected: nil,
 			},
@@ -4356,16 +4365,17 @@ func TestInsertUnderForeignConstraint(t *testing.T) {
 			},
 			child: &tableConfig{
 				tbl:   "ForeignChildNoAction",
-				wcols: []string{"Id", "ForeignId", "Value"},
+				wcols: []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				values: []*structpb.Value{
 					makeStringValue("100"),
 					makeStringValue("200"),
+					makeStringValue("200"),
 					makeStringValue("yyy"),
 				},
-				cols:  []string{"Id", "ForeignId", "Value"},
+				cols:  []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				limit: 100,
 				expected: [][]interface{}{
-					{int64(100), int64(200), "yyy"},
+					{int64(100), int64(200), int64(200), "yyy"},
 				},
 			},
 			expectsError: false,
@@ -4374,13 +4384,14 @@ func TestInsertUnderForeignConstraint(t *testing.T) {
 		"InsertWithoutMaster(Cascade)": {
 			child: &tableConfig{
 				tbl:   "ForeignChildCascade",
-				wcols: []string{"Id", "ForeignId", "Value"},
+				wcols: []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				values: []*structpb.Value{
 					makeStringValue("100"),
 					makeStringValue("200"),
+					makeStringValue("200"),
 					makeStringValue("yyy"),
 				},
-				cols:     []string{"Id", "ForeignId", "Value"},
+				cols:     []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				limit:    100,
 				expected: nil,
 			},
@@ -4402,16 +4413,17 @@ func TestInsertUnderForeignConstraint(t *testing.T) {
 			},
 			child: &tableConfig{
 				tbl:   "ForeignChildCascade",
-				wcols: []string{"Id", "ForeignId", "Value"},
+				wcols: []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				values: []*structpb.Value{
 					makeStringValue("100"),
 					makeStringValue("200"),
+					makeStringValue("200"),
 					makeStringValue("yyy"),
 				},
-				cols:  []string{"Id", "ForeignId", "Value"},
+				cols:  []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				limit: 100,
 				expected: [][]interface{}{
-					{int64(100), int64(200), "yyy"},
+					{int64(100), int64(200), int64(200), "yyy"},
 				},
 			},
 			expectsError: false,
@@ -4486,13 +4498,14 @@ func TestDeleteUnderForeignConstraint(t *testing.T) {
 			},
 			child: &tableConfig{
 				tbl:   "ForeignChildNoAction",
-				wcols: []string{"Id", "ForeignId", "Value"},
+				wcols: []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				values: []*structpb.Value{
 					makeStringValue("100"),
 					makeStringValue("200"),
+					makeStringValue("200"),
 					makeStringValue("yyy"),
 				},
-				cols: []string{"Id", "ForeignId", "Value"},
+				cols: []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				ks: &KeySet{
 					Keys: []*structpb.ListValue{
 						makeListValue(
@@ -4521,13 +4534,14 @@ func TestDeleteUnderForeignConstraint(t *testing.T) {
 			},
 			child: &tableConfig{
 				tbl:   "ForeignChildCascade",
-				wcols: []string{"Id", "ForeignId", "Value"},
+				wcols: []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				values: []*structpb.Value{
 					makeStringValue("100"),
 					makeStringValue("200"),
+					makeStringValue("200"),
 					makeStringValue("yyy"),
 				},
-				cols: []string{"Id", "ForeignId", "Value"},
+				cols: []string{"Id", "ForeignId", "ForeignSecondId", "Value"},
 				ks: &KeySet{
 					Keys: []*structpb.ListValue{
 						makeListValue(
