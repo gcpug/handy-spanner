@@ -1215,3 +1215,23 @@ func (s *server) ListDatabaseRoles(ctx context.Context, req *adminv1pb.ListDatab
 func (*server) BatchWrite(*spannerpb.BatchWriteRequest, spannerpb.Spanner_BatchWriteServer) error {
 	return status.Errorf(codes.Unimplemented, "not implemented yet: BatchWrite")
 }
+
+func (s *server) CreateBackupSchedule(ctx context.Context, req *adminv1pb.CreateBackupScheduleRequest) (*adminv1pb.BackupSchedule, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: CreateBackupSchedule")
+}
+
+func (s *server) GetBackupSchedule(ctx context.Context, req *adminv1pb.GetBackupScheduleRequest) (*adminv1pb.BackupSchedule, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: GetBackupSchedule")
+}
+
+func (s *server) UpdateBackupSchedule(ctx context.Context, req *adminv1pb.UpdateBackupScheduleRequest) (*adminv1pb.BackupSchedule, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: UpdateBackupSchedule")
+}
+
+func (s *server) DeleteBackupSchedule(ctx context.Context, req *adminv1pb.DeleteBackupScheduleRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: DeleteBackupSchedule")
+}
+
+func (s *server) ListBackupSchedules(ctx context.Context, req *adminv1pb.ListBackupSchedulesRequest) (*adminv1pb.ListBackupSchedulesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: ListBackupSchedules")
+}
