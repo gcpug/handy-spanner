@@ -1,5 +1,16 @@
 # An emulator for Cloud Spanner
 
+![Status: Maintenance](https://img.shields.io/badge/status-maintenance-yellow.svg)
+
+## ⚠️ Maintenance Mode
+
+> **Note:**
+> Active development of `handy-spanner` has ended due to the release of the [official Google Cloud Spanner Emulator](https://cloud.google.com/spanner/docs/emulator).
+>
+> This project is currently in **maintenance mode**. No new features will be added. We will only perform essential maintenance, such as updating dependencies.
+
+---
+
 ## Install
 
 ```
