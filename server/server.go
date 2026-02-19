@@ -63,6 +63,11 @@ type server struct {
 	sessions  map[string]*session
 }
 
+func (s *server) InternalUpdateGraphOperation(ctx context.Context, req *adminv1pb.InternalUpdateGraphOperationRequest) (*adminv1pb.InternalUpdateGraphOperationResponse, error) {
+	// Fixes compatibility issue
+	return nil, status.Errorf(codes.Unimplemented, "not implemented yet: InternalUpdateGraphOperation")
+}
+
 func (s *server) ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL) error {
 	db, err := s.getOrCreateDatabase(databaseName)
 	if err != nil {
