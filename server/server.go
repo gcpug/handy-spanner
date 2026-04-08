@@ -63,7 +63,7 @@ type server struct {
 	sessions  map[string]*session
 
 	// Embed the unimplemented Server structs to avoid having to update the server 
-	// implementation whenever there is an addition to any of the the three interfaces.
+	// implementation whenever there is an addition to any of the three interfaces.
 	spannerpb.UnimplementedSpannerServer
 	adminv1pb.UnimplementedDatabaseAdminServer
 	lropb.UnimplementedOperationsServer
