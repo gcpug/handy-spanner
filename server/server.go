@@ -61,6 +61,12 @@ type server struct {
 
 	sessionMu sync.RWMutex
 	sessions  map[string]*session
+
+	// Embed the unimplemented Server structs to avoid having to update the server 
+	// implementation whenever there is an addition to any of the the three interfaces.
+	spannerpb.UnimplementedSpannerServer
+	adminv1pb.UnimplementedDatabaseAdminServer
+	lropb.UnimplementedOperationsServer
 }
 
 func (s *server) ApplyDDL(ctx context.Context, databaseName string, stmt ast.DDL) error {
