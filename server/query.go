@@ -2180,9 +2180,16 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		}, nil
 
 	case *ast.FloatLiteral:
+		// Parse in Go and bind as a placeholder because SQLite's own parsing of
+		// float literals is not correctly rounded on some platforms (e.g. arm64).
+		f, err := strconv.ParseFloat(e.Value, 64)
+		if err != nil {
+			return NullExpr, newExprErrorf(expr, false, "unexpected format %q as float64: %v", e.Value, err)
+		}
 		return Expr{
 			ValueType: ValueType{Code: TCFloat64},
-			Raw:       e.Value,
+			Raw:       "?",
+			Args:      []interface{}{f},
 		}, nil
 
 	case *ast.IntLiteral:
