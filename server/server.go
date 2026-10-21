@@ -508,7 +508,7 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 	if tx.SingleUse() {
 		tx.Done(TransactionRollbacked)
 		msg := "DML statements may not be performed in single-use transactions, to avoid replay."
-		return nil, status.Errorf(codes.InvalidArgument, msg)
+		return nil, status.Errorf(codes.InvalidArgument, "%s", msg)
 	}
 
 	checkAvailability := func() error {
@@ -535,7 +535,7 @@ func (s *server) ExecuteSql(ctx context.Context, req *spannerpb.ExecuteSqlReques
 
 	if !tx.ReadWrite() {
 		msg := "DML statements can only be performed in a read-write transaction."
-		return nil, status.Errorf(codes.FailedPrecondition, msg)
+		return nil, status.Errorf(codes.FailedPrecondition, "%s", msg)
 	}
 
 	if req.Sql == "" {
@@ -682,7 +682,7 @@ func (s *server) ExecuteBatchDml(ctx context.Context, req *spannerpb.ExecuteBatc
 	if tx.SingleUse() {
 		tx.Done(TransactionRollbacked)
 		msg := "DML statements may not be performed in single-use transactions, to avoid replay."
-		return nil, status.Errorf(codes.InvalidArgument, msg)
+		return nil, status.Errorf(codes.InvalidArgument, "%s", msg)
 	}
 
 	checkAvailability := func() error {
@@ -703,12 +703,12 @@ func (s *server) ExecuteBatchDml(ctx context.Context, req *spannerpb.ExecuteBatc
 
 	if !tx.ReadWrite() {
 		msg := "DML statements can only be performed in a read-write transaction."
-		return nil, status.Errorf(codes.FailedPrecondition, msg)
+		return nil, status.Errorf(codes.FailedPrecondition, "%s", msg)
 	}
 
 	if len(req.Statements) == 0 {
 		msg := "No statements in batch DML request."
-		return nil, status.Errorf(codes.InvalidArgument, msg)
+		return nil, status.Errorf(codes.InvalidArgument, "%s", msg)
 	}
 
 	var resultSets []*spannerpb.ResultSet
@@ -1063,7 +1063,7 @@ func (s *server) Commit(ctx context.Context, req *spannerpb.CommitRequest) (*spa
 		} else {
 			msg = "Cannot commit a read-only transaction."
 		}
-		return nil, status.Errorf(codes.FailedPrecondition, msg)
+		return nil, status.Errorf(codes.FailedPrecondition, "%s", msg)
 	}
 
 	err = func() error {

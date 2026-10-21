@@ -830,7 +830,7 @@ func (b *QueryBuilder) buildJoinedView(src *ast.Join) (*TableView, string, []int
 
 		if len(usingColumns) == 0 {
 			msg := "hanndy-spanner: Full Outer Join with ON condition is not supported yet."
-			return nil, "", nil, status.Errorf(codes.Unknown, msg)
+			return nil, "", nil, status.Errorf(codes.Unknown, "%s", msg)
 		}
 
 		var leftUsingColumns []string
@@ -1800,10 +1800,10 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 				expr = arg.Expr
 			case *ast.SequenceArg:
 				msg := `Unsupported query shape: SequenceArg in function call is not supported yet.`
-				return NullExpr, newExprUnimplementedErrorf(expr, msg)
+				return NullExpr, newExprUnimplementedErrorf(expr, "%s", msg)
 			default:
 				msg := `Invalid query shape: unknown argument type was detected.`
-				return NullExpr, newExprErrorf(expr, true, msg)
+				return NullExpr, newExprErrorf(expr, true, "%s", msg)
 			}
 
 			ex, err := b.buildExpr(expr)
@@ -1859,7 +1859,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 		case TCTimestamp:
 			if e.AtTimeZone == nil {
 				msg := fmt.Sprintf("handy-spanner: please specify timezone explicitly. Use %q for default timezone", defaultTimeZone)
-				return NullExpr, newExprErrorf(expr, true, msg)
+				return NullExpr, newExprErrorf(expr, true, "%s", msg)
 			}
 
 			tz, err := b.buildExpr(e.AtTimeZone.Expr)
@@ -2049,7 +2049,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 
 		vt, err := decideArrayElementsValueType(vts...)
 		if err != nil {
-			return NullExpr, newExprErrorf(expr, true, err.Error())
+			return NullExpr, newExprErrorf(expr, true, "%s", err.Error())
 		}
 
 		if vt.Code == TCArray {
@@ -2098,7 +2098,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 
 			if ex.ValueType.Code == TCStruct {
 				msg := `Unsupported query shape: A struct value cannot be returned as a column value. Rewrite the query to flatten the struct fields in the result.`
-				return NullExpr, newExprUnimplementedErrorf(expr, msg)
+				return NullExpr, newExprUnimplementedErrorf(expr, "%s", msg)
 			}
 
 			// For tuple syntax, field names are empty and types are inferred from values
@@ -2143,7 +2143,7 @@ func (b *QueryBuilder) buildExpr(expr ast.Expr) (Expr, error) {
 
 			if ex.ValueType.Code == TCStruct {
 				msg := `Unsupported query shape: A struct value cannot be returned as a column value. Rewrite the query to flatten the struct fields in the result.`
-				return NullExpr, newExprUnimplementedErrorf(expr, msg)
+				return NullExpr, newExprUnimplementedErrorf(expr, "%s", msg)
 			}
 
 			if !compareValueType(ex.ValueType, *vt.StructType.FieldTypes[i]) {
